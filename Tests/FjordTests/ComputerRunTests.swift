@@ -152,26 +152,6 @@ import Testing
         #expect(await guest.callLog().isEmpty)
     }
 
-    @Test func disabledAutomaticCheckpointsStopBeforeGuestWork() async throws {
-        let engine = MockEngineClient()
-        let guest = MockGuestClient(accounts: [target: account()])
-        let settings = settings()
-        let thing = InboxFixture.pr(42)
-        let id = UUID()
-        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .qualified,
-                                                 checkpointRetentionCount: 0, secretAssignment: true, githubRepository: true)
-
-        do {
-            _ = try await coordinator.run(record(id: id, settings: settings, thing: thing), settings: settings, thing: thing) { _ in true }
-            Issue.record("the run ignored automatic checkpoint retention being off")
-        } catch {
-            #expect(error as? ComputerRunFailure == .noAutomaticCheckpoints)
-        }
-
-        #expect(await guest.callLog().isEmpty)
-        #expect(engine.checkpointListCallCount == 0)
-    }
-
     @Test func stoppedComputerFinishesItsStartJobBeforeGuestPreparation() async throws {
         var inventory = MockEngineClient.demoInventory
         let linuxIndex = try #require(inventory.linux.computers.firstIndex(where: { $0.id == computerID }))
@@ -238,7 +218,7 @@ import Testing
             checkpointRetentionCount: 3, secretAssignment: true, githubRepository: true,
             shouldContinue: {
                 authorizationChecks += 1
-                return authorizationChecks < 3
+                return authorizationChecks < 5
             })
         var saved: [ComputerRunRecord] = []
 
@@ -252,7 +232,7 @@ import Testing
             #expect((error as? ComputerRunFailure)?.errorDescription?.contains("Triage rule") == true)
         }
 
-        #expect(authorizationChecks == 3)
+        #expect(authorizationChecks == 5)
         #expect(saved.last?.phase == .failed)
         #expect(saved.last?.checkpointID != nil)
         #expect(await guest.execStartRecords().isEmpty)
@@ -327,6 +307,372 @@ import Testing
 
         #expect(engine.acknowledgedJobs.isEmpty)
         #expect(await guest.callLog().isEmpty)
+    }
+
+    @Test func cancellationFinishingAfterRunCompletionKeepsTheTerminalRecord() async throws {
+        let engine = MockEngineClient()
+        engine.suspendNextCancelRequest = true
+        let store = Store(engineClient: engine)
+        store.persists = false
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        let id = UUID()
+        var initial = try record(id: id, settings: settings, thing: thing)
+        initial.phase = .running
+        initial.execJobID = "guest-job-racing-cancel"
+        store.actionLedger.computerRuns[id] = initial
+
+        let cancellation = Task { await store.cancelComputerRun(id) }
+        await engine.waitForSuspendedCancelRequest()
+
+        var completed = initial
+        completed.phase = .result
+        completed.summary = "The run completed while cancellation was in flight."
+        completed.exitCode = 0
+        completed.updatedAt = Date().addingTimeInterval(10)
+        #expect(await store.saveComputerRun(completed))
+
+        engine.resumeSuspendedCancelRequest()
+        await cancellation.value
+
+        let saved = try #require(store.actionLedger.computerRuns[id])
+        #expect(saved.phase == .result)
+        #expect(saved.summary == completed.summary)
+        #expect(saved.exitCode == 0)
+    }
+
+    @Test func acknowledgementFinishingAfterNewerRunStatePreservesTheNewState() async throws {
+        let engine = MockEngineClient()
+        engine.suspendNextJobAcknowledge = true
+        let store = Store(engineClient: engine)
+        store.persists = false
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        let id = UUID()
+        var terminal = try record(id: id, settings: settings, thing: thing)
+        terminal.phase = .result
+        terminal.execJobID = "guest-job-racing-ack"
+        terminal.summary = "Initial summary"
+        terminal.exitCode = 0
+        store.actionLedger.computerRuns[id] = terminal
+
+        let acknowledgement = Task { await store.acknowledgeComputerRun(id) }
+        await engine.waitForSuspendedJobAcknowledge()
+
+        var newer = terminal
+        newer.summary = "The finalized summary saved during acknowledgement."
+        newer.localVideoPath = "/tmp/finalized-proof.mp4"
+        newer.updatedAt = Date().addingTimeInterval(10)
+        #expect(await store.saveComputerRun(newer))
+
+        engine.resumeSuspendedJobAcknowledge()
+        await acknowledgement.value
+
+        let saved = try #require(store.actionLedger.computerRuns[id])
+        #expect(saved.phase == .result)
+        #expect(saved.summary == newer.summary)
+        #expect(saved.localVideoPath == newer.localVideoPath)
+        #expect(saved.execAcknowledged == true)
+    }
+
+    @Test func savingAStaleTerminalRunKeepsTheNewerSummaryAndProofPath() async throws {
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        let id = UUID()
+        var newer = try record(id: id, settings: settings, thing: thing)
+        newer.phase = .result
+        newer.summary = "The newer confirmed summary."
+        newer.localVideoPath = "/tmp/newer-proof.mp4"
+        newer.updatedAt = Date().addingTimeInterval(10)
+        store.actionLedger.computerRuns[id] = newer
+
+        var stale = newer
+        stale.summary = "A stale summary from an earlier write."
+        stale.localVideoPath = "/tmp/stale-proof.mp4"
+        stale.updatedAt = Date()
+        #expect(await store.saveComputerRun(stale))
+
+        let saved = try #require(store.actionLedger.computerRuns[id])
+        #expect(saved.phase == .result)
+        #expect(saved.summary == newer.summary)
+        #expect(saved.localVideoPath == newer.localVideoPath)
+    }
+
+    @Test func cancelBeforeClaudeAdmissionPersistsIntentAndCancelsCheckpointJob() async throws {
+        let engine = MockEngineClient()
+        let store = Store(engineClient: engine)
+        store.persists = false
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        let id = UUID()
+        var preparing = try record(id: id, settings: settings, thing: thing)
+        preparing.phase = .checkpointing
+        preparing.checkpointJobID = "checkpoint-job-before-claude"
+        store.actionLedger.computerRuns[id] = preparing
+
+        await store.cancelComputerRun(id)
+
+        #expect(store.actionLedger.computerRuns[id]?.cancellationRequested == true)
+        #expect(engine.cancelRequests == ["checkpoint-job-before-claude"])
+    }
+
+    @Test func cancellationDuringCheckpointingPreventsClaudeAdmission() async throws {
+        let engine = try await qualifiedEngine()
+        let guest = MockGuestClient(accounts: [target: account()])
+        await guest.setExecResult(GuestExecResult(exitCode: 1, stdout: Data(), stderr: Data()),
+            argv: ["git", "-C", "/workspace/one", "rev-parse", "--is-inside-work-tree"])
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        let id = UUID()
+        let initial = try record(id: id, settings: settings, thing: thing)
+        let store = Store(engineClient: engine)
+        store.persists = false
+        store.actionLedger.computerRuns[id] = initial
+        var cancellationSent = false
+        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .qualified,
+            checkpointRetentionCount: 3, secretAssignment: true, githubRepository: true,
+            shouldContinue: { store.actionLedger.computerRuns[id]?.cancellationRequested != true })
+
+        do {
+            _ = try await coordinator.run(initial, settings: settings, thing: thing) { update in
+                let saved = await store.saveComputerRun(update)
+                if update.checkpointJobID != nil && !cancellationSent {
+                    cancellationSent = true
+                    await store.cancelComputerRun(id)
+                }
+                return saved
+            }
+            Issue.record("cancellation during checkpointing still admitted Claude")
+        } catch {
+            #expect((error as? ComputerRunFailure)?.errorDescription?.contains("cancellation") == true
+                || (error as? ComputerRunFailure)?.errorDescription?.contains("rule or its trigger changed") == true)
+        }
+
+        #expect(cancellationSent)
+        #expect(store.actionLedger.computerRuns[id]?.cancellationRequested == true)
+        #expect(await guest.execStartRecords().isEmpty)
+    }
+
+    @Test func overlappingRollbackRequestsSubmitOnlyOneRestore() async throws {
+        var inventory = MockEngineClient.demoInventory
+        let linuxIndex = try #require(inventory.linux.computers.firstIndex(where: { $0.id == computerID }))
+        let checkpointID = "checkpoint-before-run"
+        inventory.linux.computers[linuxIndex].checkpoints = [ComputerCheckpoint(
+            createdAt: "2026-10-01T00:00:00Z", id: checkpointID, kind: .manual, name: "Before run",
+            reason: .manual, scope: .full)]
+        let engine = MockEngineClient(inventory: inventory)
+        engine.suspendNextCheckpointRestore = true
+        let guest = MockGuestClient(accounts: [target: account()])
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        var completed = try record(id: UUID(), settings: settings, thing: thing)
+        completed.phase = .result
+        completed.checkpointID = checkpointID
+        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .qualified)
+        var saved = completed
+
+        let first = Task {
+            try await coordinator.rollback(completed) { update in
+                saved = update
+                return true
+            }
+        }
+        await engine.waitForSuspendedCheckpointRestore()
+        let pending = saved
+
+        await #expect(throws: ComputerRunFailure.job("A rollback is already pending or complete.")) {
+            try await coordinator.rollback(pending) { update in
+                saved = update
+                return true
+            }
+        }
+        #expect(engine.checkpointRestoreRequests.count == 1)
+
+        engine.resumeSuspendedCheckpointRestore()
+        _ = try await first.value
+    }
+
+    @Test func confirmedRollbackRejectionCanBeRetried() async throws {
+        let engine = MockEngineClient()
+        let guest = MockGuestClient(accounts: [target: account()])
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        var completed = try record(id: UUID(), settings: settings, thing: thing)
+        completed.phase = .result
+        completed.checkpointID = "checkpoint-added-before-retry"
+        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .qualified)
+        var saved = completed
+
+        await #expect(throws: EngineClientError.notFound("This checkpoint no longer exists.")) {
+            try await coordinator.rollback(completed) { update in
+                saved = update
+                return true
+            }
+        }
+        #expect(saved.rollbackOperationID == nil)
+        #expect(!((saved.rollbackError ?? "").isEmpty))
+
+        var inventory = MockEngineClient.demoInventory
+        let linuxIndex = try #require(inventory.linux.computers.firstIndex(where: { $0.id == computerID }))
+        inventory.linux.computers[linuxIndex].checkpoints = [ComputerCheckpoint(
+            createdAt: "2026-10-01T00:00:00Z", id: "checkpoint-added-before-retry", kind: .manual,
+            name: "Before run", reason: .manual, scope: .full)]
+        engine.replaceInventory(inventory)
+
+        let restored = try await coordinator.rollback(saved) { update in
+            saved = update
+            return true
+        }
+
+        #expect(engine.checkpointRestoreRequests.count == 2)
+        #expect(restored.rolledBackAt != nil)
+        #expect(restored.rollbackError == nil)
+    }
+
+    @Test func loadingAnActiveComputerRunReservesItsTarget() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-run-recovery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let ownerID = "owner-\(UUID().uuidString)"
+        var placement = settings(recordProof: false)
+        placement.deviceID = ownerID
+        let id = UUID()
+        let initial = try record(id: id, settings: placement, thing: InboxFixture.pr(42))
+        var active = initial
+        active.phase = .running
+        active.execJobID = "guest-job-retained-after-restart"
+        var ledger = ActionLedger()
+        ledger.computerRuns[id] = active
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let stateFile = folder.appendingPathComponent("state.json")
+        try Data("{}".utf8).write(to: stateFile)
+        try encoder.encode(ledger).write(to: folder.appendingPathComponent("actions.json"))
+        let store = Store(engineClient: MockEngineClient())
+        store.stateFile = stateFile
+        store.persists = true
+
+        store.loadActions()
+
+        #expect(ComputerRunCoordinator.isActive(on: GuestReference(deviceId: ownerID, computerId: computerID)))
+    }
+
+    @Test func loadingAPendingRollbackReservesItsTargetAgainstAnotherRestore() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-rollback-recovery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let ownerID = "owner-rollback-\(UUID().uuidString)"
+        var placement = settings(recordProof: false)
+        placement.deviceID = ownerID
+        let thing = InboxFixture.pr(42)
+        var pending = try record(id: UUID(), settings: placement, thing: thing)
+        pending.phase = .result
+        pending.checkpointID = "checkpoint-restore-pending"
+        pending.rollbackOperationID = UUID()
+        var ledger = ActionLedger()
+        ledger.computerRuns[pending.id] = pending
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let stateFile = folder.appendingPathComponent("state.json")
+        try Data("{}".utf8).write(to: stateFile)
+        try encoder.encode(ledger).write(to: folder.appendingPathComponent("actions.json"))
+        let engine = MockEngineClient()
+        let store = Store(engineClient: engine)
+        store.stateFile = stateFile
+        store.persists = true
+
+        store.loadActions()
+
+        let target = GuestReference(deviceId: ownerID, computerId: computerID)
+        #expect(ComputerRunCoordinator.isActive(on: target))
+        var anotherRun = try record(id: UUID(), settings: placement, thing: thing)
+        anotherRun.phase = .result
+        anotherRun.checkpointID = "checkpoint-restore-pending"
+        let coordinator = ComputerRunCoordinator(engine: engine, guest: MockGuestClient(), authorization: .qualified)
+        await #expect(throws: ComputerRunFailure.job("Another Triage operation is active on linux-1.")) {
+            try await coordinator.rollback(anotherRun) { _ in true }
+        }
+        #expect(engine.checkpointRestoreRequests.isEmpty)
+    }
+
+    @Test func missingStructuredClaudeResultCannotBecomeSuccess() async throws {
+        let engine = MockEngineClient()
+        let guest = MockGuestClient(accounts: [target: account()])
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        var running = try record(id: UUID(), settings: settings, thing: thing)
+        running.phase = .running
+        running.execJobID = "guest-job-no-structured-result"
+        await guest.setExecJobResult(.init(state: .exited, exitCode: 0, stdout: Data(), stderr: Data(), nextSequence: 0),
+                                     jobId: running.execJobID!)
+        var saved: [ComputerRunRecord] = []
+        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .blocked("closed"))
+
+        do {
+            _ = try await coordinator.reattach(running) { updated in
+                saved.append(updated)
+                return true
+            }
+            Issue.record("exit code zero was accepted without Claude's structured result")
+        } catch {
+            #expect((error as? ComputerRunFailure)?.errorDescription?.contains("structured final result") == true)
+        }
+
+        #expect(saved.last?.phase == .failed)
+        #expect(saved.last?.summary == nil)
+    }
+
+    @Test func identicalGuestJobIDsAreRetrievedWithTheirPersistedOwners() async throws {
+        let owners = [
+            GuestReference(deviceId: "owner-run-record-a", computerId: computerID),
+            GuestReference(deviceId: "owner-run-record-b", computerId: computerID),
+        ]
+        let thing = InboxFixture.pr(42)
+        let guest = MockGuestClient(accounts: Dictionary(uniqueKeysWithValues: owners.map { ($0, account()) }))
+        await guest.setExecJobResult(.init(state: .exited, exitCode: 0,
+            stdout: Data(#"{"type":"result","result":"Done","is_error":false}"#.utf8),
+            stderr: Data(), nextSequence: 1), jobId: "same-job-id-on-two-owners")
+        let coordinator = ComputerRunCoordinator(engine: MockEngineClient(), guest: guest,
+                                                 authorization: .blocked("closed"))
+
+        for owner in owners {
+            var placement = settings(recordProof: false)
+            placement.deviceID = owner.deviceId
+            var running = try record(id: UUID(), settings: placement, thing: thing)
+            running.phase = .running
+            running.execJobID = "same-job-id-on-two-owners"
+            _ = try await coordinator.reattach(running) { _ in true }
+        }
+
+        let requests = await guest.execGetRequests()
+        #expect(requests.map(\.computer) == owners)
+        #expect(requests.map(\.jobId) == ["same-job-id-on-two-owners", "same-job-id-on-two-owners"])
+    }
+
+    @Test func zeroAutomaticCheckpointRetentionRunsWithoutCreatingCheckpoint() async throws {
+        let engine = try await qualifiedEngine()
+        let guest = MockGuestClient(accounts: [target: account()])
+        await guest.setExecResult(GuestExecResult(exitCode: 1, stdout: Data(), stderr: Data()),
+            argv: ["git", "-C", "/workspace/one", "rev-parse", "--is-inside-work-tree"])
+        await guest.setExecJobResult(.init(state: .exited, exitCode: 0,
+            stdout: Data(#"{"type":"result","result":"Finished with checkpoints disabled.","is_error":false}"#.utf8),
+            stderr: Data(), nextSequence: 1), jobId: "guest-job-1")
+        let settings = settings(recordProof: false)
+        let thing = InboxFixture.pr(42)
+        let initial = try record(id: UUID(), settings: settings, thing: thing)
+        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .qualified,
+            checkpointRetentionCount: 0, secretAssignment: true, githubRepository: true)
+
+        let result = try await coordinator.run(initial, settings: settings, thing: thing) { _ in true }
+
+        #expect(result.phase == .result)
+        #expect(result.checkpointID == nil)
+        #expect(result.detail.contains("Automatic checkpoints off"))
+        #expect(engine.checkpointListCallCount == 0)
+        #expect(engine.checkpointRestoreRequests.isEmpty)
+        #expect(await guest.execStartRecords().count == 1)
     }
 
     @Test func proofRetrievalFailureDoesNotEraseSuccessfulTaskResult() async throws {

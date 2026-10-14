@@ -37,6 +37,12 @@ struct GuestExecStartRequest: Equatable, Sendable {
     var retainOutputBytes: Int = 64 * 1024
 }
 
+struct GuestExecGetRequest: Equatable, Sendable {
+    var computer: GuestReference
+    var jobId: String
+    var sinceSequence: UInt64
+}
+
 enum GuestExecJobState: Equatable, Sendable { case running, exited, cancelled, lost }
 
 struct GuestExecJobResult: Equatable, Sendable {
@@ -140,7 +146,7 @@ protocol GuestClient: Sendable {
     func sshAliasRemove(computer: GuestReference) async throws
     func exec(_ request: GuestExecRequest) async throws -> GuestExecResult
     func execStart(_ request: GuestExecStartRequest) async throws -> String
-    func execGet(jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult
+    func execGet(computer: GuestReference, jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult
 }
 
 /// Deterministic guest filesystem and call recorder for Router feature tests and window shots.
@@ -167,6 +173,7 @@ actor MockGuestClient: GuestClient {
     private var recordedRemovals: [(GuestReference, [String])] = []
     private var recordedExecs: [GuestExecRequest] = []
     private var recordedExecStarts: [GuestExecStartRequest] = []
+    private var recordedExecGets: [GuestExecGetRequest] = []
     private var nextAliasRemovalFailure: GuestClientFailure?
     private var operationLog: [String] = []
     private var execResults: [String: GuestExecResult] = [:]
@@ -333,7 +340,8 @@ actor MockGuestClient: GuestClient {
         return "guest-job-\(nextExecJobID)"
     }
 
-    func execGet(jobId: String, sinceSequence: UInt64) throws -> GuestExecJobResult {
+    func execGet(computer: GuestReference, jobId: String, sinceSequence: UInt64) throws -> GuestExecJobResult {
+        recordedExecGets.append(GuestExecGetRequest(computer: computer, jobId: jobId, sinceSequence: sinceSequence))
         _ = sinceSequence
         return execJobResults[jobId] ?? GuestExecJobResult(state: .exited, exitCode: 0,
                                                             stdout: Data(), stderr: Data(), nextSequence: 0)
@@ -377,6 +385,7 @@ actor MockGuestClient: GuestClient {
     func removalRecords() -> [(GuestReference, [String])] { recordedRemovals }
     func execRecords() -> [GuestExecRequest] { recordedExecs }
     func execStartRecords() -> [GuestExecStartRequest] { recordedExecStarts }
+    func execGetRequests() -> [GuestExecGetRequest] { recordedExecGets }
     func callLog() -> [String] { operationLog }
     func filesSnapshot(for computer: GuestReference) -> [String: Data] {
         let prefix = computer.key + ":"

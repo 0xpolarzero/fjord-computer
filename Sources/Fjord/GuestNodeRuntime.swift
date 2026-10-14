@@ -64,7 +64,7 @@ enum GuestNodeRuntime {
         var stderr = Data()
         let deadline = Date().addingTimeInterval(360)
         while Date() < deadline, !Task.isCancelled {
-            let result = try await client.execGet(jobId: jobId, sinceSequence: sequence)
+            let result = try await client.execGet(computer: computer, jobId: jobId, sinceSequence: sequence)
             sequence = max(sequence, result.nextSequence)
             if stdout.count < outputLimit { stdout.append(result.stdout.prefix(outputLimit - stdout.count)) }
             if stderr.count < outputLimit { stderr.append(result.stderr.prefix(outputLimit - stderr.count)) }

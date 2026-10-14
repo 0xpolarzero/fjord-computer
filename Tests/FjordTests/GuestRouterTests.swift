@@ -118,8 +118,8 @@ private struct AccountPausingGuestClient: GuestClient {
     func sshAliasRemove(computer: GuestReference) async throws { try await base.sshAliasRemove(computer: computer) }
     func exec(_ request: GuestExecRequest) async throws -> GuestExecResult { try await base.exec(request) }
     func execStart(_ request: GuestExecStartRequest) async throws -> String { try await base.execStart(request) }
-    func execGet(jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult {
-        try await base.execGet(jobId: jobId, sinceSequence: sinceSequence)
+    func execGet(computer: GuestReference, jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult {
+        try await base.execGet(computer: computer, jobId: jobId, sinceSequence: sinceSequence)
     }
 }
 

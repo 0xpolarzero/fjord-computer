@@ -1388,7 +1388,21 @@ extension Store {
         }
         if keepingAside || !lost.isEmpty { actionsDisk.keepAside(data) }
         // Ordinary running actions are not retried after quit. A computer run keeps its durable Engine-owned record so
-        // launch can reattach without submitting another exec; an uncertain admission also stays visible and untouched.
+        // launch can reattach without submitting another exec. A pending rollback reserves the same target and its saved
+        // job id is polled without submitting another restore.
+        var computerRunsToResume: [UUID] = []
+        var rollbacksToResume: [UUID] = []
+        for (id, computerRun) in ledger.computerRuns {
+            let target = GuestReference(deviceId: computerRun.deviceID, computerId: computerRun.computerID)
+            if computerRun.phase.isEngineOwnedActive || computerRun.phase == .unconfirmed {
+                ComputerRunCoordinator.reserveRestoredTarget(target)
+                computerRunsToResume.append(id)
+            }
+            if computerRun.rollbackOperationID != nil && computerRun.rolledBackAt == nil {
+                ComputerRunCoordinator.reserveRestoredTarget(target)
+                if computerRun.rollbackJobID != nil { rollbacksToResume.append(id) }
+            }
+        }
         for (key, run) in ledger.runs where run.state == .running {
             if let id = run.computerRunID, let computerRun = ledger.computerRuns[id],
                computerRun.phase.isEngineOwnedActive || computerRun.phase == .unconfirmed { continue }
@@ -1398,6 +1412,12 @@ extension Store {
             ledger.runs[key] = r
         }
         actionLedger = ledger
+        for id in computerRunsToResume {
+            Task { @MainActor [weak self] in await self?.resumeComputerRun(id) }
+        }
+        for id in rollbacksToResume {
+            Task { @MainActor [weak self] in await self?.resumeComputerRunRollback(id) }
+        }
     }
 
 
@@ -1563,6 +1583,11 @@ final class StoreActionPerformer: ActionPerformer {
             authorization: .blocked(ComputerRunGate.productionBlocker),
             shouldContinue: { [weak targetStore] in
                 targetStore?.computerRunIsCurrent(record, settings: settings) ?? false
+            }, cancellationRequested: { [weak targetStore] in
+                targetStore?.actionLedger.computerRuns[record.id]?.cancellationRequested == true
+            }, progressWriter: { [weak targetStore] source, detail, updatedAt in
+                guard let targetStore else { return false }
+                return await targetStore.saveComputerRunProgress(source, detail: detail, updatedAt: updatedAt)
             })
         return try await coordinator.run(record, settings: settings, thing: thing) { [weak targetStore] updated in
             guard let targetStore else { return false }

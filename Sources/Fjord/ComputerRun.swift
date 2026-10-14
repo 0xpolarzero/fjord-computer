@@ -136,8 +136,12 @@ struct ComputerRunRecord: Codable, Hashable, Identifiable, Sendable {
     var detail = ""
     /// Stable client-side workflow identity. The current generated checkpoints.create schema has no idempotency field.
     var checkpointOperationID: UUID
+    var startJobID: String? = nil
     var checkpointJobID: String?
     var checkpointID: String?
+    var automaticCheckpointSkipped: Bool? = nil
+    /// User cancellation requested before the guest Claude job was admitted.
+    var cancellationRequested: Bool? = nil
     /// Stable client-side workflow identity. The current generated guest.exec.start schema has no idempotency field.
     var execOperationID: UUID
     var execJobID: String?
@@ -192,7 +196,7 @@ struct ComputerRunRecord: Codable, Hashable, Identifiable, Sendable {
 enum ComputerRunFailure: LocalizedError, Equatable {
     case invalidPlacement
     case gateClosed(String)
-    case noAutomaticCheckpoints
+    case cancellationRequested
     case computerUnavailable(String)
     case workspace(String)
     case job(String)
@@ -203,9 +207,9 @@ enum ComputerRunFailure: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidPlacement: "Choose a computer, an absolute workspace root, and a non-empty prompt."
+        case .cancellationRequested: "Cancellation was requested before the guest job was admitted."
         case .gateClosed(let reason), .computerUnavailable(let reason), .workspace(let reason), .job(let reason),
              .proof(let reason), .unconfirmed(let reason), .result(let reason): reason
-        case .noAutomaticCheckpoints: "Automatic checkpoints are off for this computer. The run was not started."
         }
     }
 }
@@ -277,6 +281,7 @@ struct ComputerRunParsedResult: Equatable {
     var summary: String?
     var isError: Bool
     var pullRequestURL: URL?
+    var hasFinalResult: Bool
 }
 
 enum ComputerRunResultParser {
@@ -284,15 +289,21 @@ enum ComputerRunResultParser {
         let text = String(decoding: data, as: UTF8.self)
         var summary: String?
         var isError = false
+        var hasFinalResult = false
         for line in text.split(whereSeparator: \.isNewline) {
             guard let row = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  row["type"] as? String == "result" else { continue }
-            summary = row["result"] as? String
-            isError = row["is_error"] as? Bool ?? false
+                  row["type"] as? String == "result",
+                  let result = row["result"] as? String,
+                  let resultIsError = row["is_error"] as? Bool else { continue }
+            let clean = UntrustedText.clean(result, limit: 1_200)
+            guard !clean.isEmpty else { continue }
+            summary = clean
+            isError = resultIsError
+            hasFinalResult = true
         }
         let pr = pullRequest(in: summary ?? "", repo: repo)
-        let clean = summary.map { UntrustedText.clean($0, limit: 1_200) }
-        return ComputerRunParsedResult(summary: clean?.isEmpty == true ? nil : clean, isError: isError, pullRequestURL: pr)
+        return ComputerRunParsedResult(summary: summary, isError: isError, pullRequestURL: pr,
+                                       hasFinalResult: hasFinalResult)
     }
 
     private static func pullRequest(in text: String, repo: String) -> URL? {
@@ -344,6 +355,7 @@ final class ComputerRunCoordinator {
     enum Authorization { case qualified, blocked(String) }
 
     private static var activeComputers = Set<String>()
+    private static var restoredComputers = Set<String>()
     private let engine: any EngineClient
     private let guest: any GuestClient
     private let authorization: Authorization
@@ -352,16 +364,27 @@ final class ComputerRunCoordinator {
     private let githubRepositoryOverride: Bool?
     private let linuxDesktopStatusOverride: SiloWireDesktopStatus?
     private let shouldContinue: @MainActor () -> Bool
+    private let cancellationRequested: @MainActor () -> Bool
+    private let progressWriter: @MainActor (ComputerRunRecord, String, Date) async -> Bool
     private let artifacts: LocalComputerRunArtifactStore
 
     static func isActive(on target: GuestReference) -> Bool {
-        activeComputers.contains(target.key)
+        activeComputers.contains(target.key) || restoredComputers.contains(target.key)
+    }
+
+    static func isExecuting(on target: GuestReference) -> Bool { activeComputers.contains(target.key) }
+
+    static func reserveRestoredTarget(_ target: GuestReference) {
+        guard !activeComputers.contains(target.key) else { return }
+        restoredComputers.insert(target.key)
     }
 
     init(engine: any EngineClient, guest: any GuestClient, authorization: Authorization,
          checkpointRetentionCount: UInt64? = nil, secretAssignment: Bool? = nil, githubRepository: Bool? = nil,
          linuxDesktopStatus: SiloWireDesktopStatus? = nil,
          shouldContinue: @escaping @MainActor () -> Bool = { true },
+         cancellationRequested: @escaping @MainActor () -> Bool = { false },
+         progressWriter: @escaping @MainActor (ComputerRunRecord, String, Date) async -> Bool = { _, _, _ in true },
          artifacts: LocalComputerRunArtifactStore? = nil) {
         self.engine = engine
         self.guest = guest
@@ -371,6 +394,8 @@ final class ComputerRunCoordinator {
         githubRepositoryOverride = githubRepository
         linuxDesktopStatusOverride = linuxDesktopStatus
         self.shouldContinue = shouldContinue
+        self.cancellationRequested = cancellationRequested
+        self.progressWriter = progressWriter
         self.artifacts = artifacts ?? LocalComputerRunArtifactStore()
     }
 
@@ -378,7 +403,7 @@ final class ComputerRunCoordinator {
              persist: @escaping @MainActor (ComputerRunRecord) async -> Bool) async throws -> ComputerRunRecord {
         var record = initial
         let key = GuestReference(deviceId: record.deviceID, computerId: record.computerID).key
-        guard Self.activeComputers.insert(key).inserted else {
+        guard !Self.restoredComputers.contains(key), Self.activeComputers.insert(key).inserted else {
             throw ComputerRunFailure.job("Another Triage run is already active on \(record.computerName).")
         }
         defer { Self.activeComputers.remove(key) }
@@ -391,7 +416,6 @@ final class ComputerRunCoordinator {
             }
             try settings.validate()
             let retention = try await automaticCheckpointRetention()
-            guard retention > 0 else { throw ComputerRunFailure.noAutomaticCheckpoints }
             try await requireAuthSecret(target: settings.target)
             guard let repo = InboxActions.trustedRepo(thing.repo), repo == thing.repo else {
                 throw ComputerRunFailure.workspace("The GitHub repository name is invalid.")
@@ -404,7 +428,7 @@ final class ComputerRunCoordinator {
             }
             try requireCurrentAction()
             var lifecycleSubscription: String?
-            let progressSink = ComputerRunProgressSink(record: record, persist: persist)
+            let progressSink = ComputerRunProgressSink(record: record, persist: progressWriter)
             do {
                 lifecycleSubscription = try await engine.eventsSubscribe(events: ["operations.job.progress", "operations.job.finished",
                                                                                    "guest.exec.output", "guest.exec.exited"]) { delivery in
@@ -428,7 +452,14 @@ final class ComputerRunCoordinator {
                 } catch {
                     throw ComputerRunFailure.computerUnavailable(error.localizedDescription)
                 }
+                record.startJobID = job.jobId
+                progressSink.record = record
+                guard await persist(record) else {
+                    throw ComputerRunFailure.unconfirmed("Silo accepted the start job, but Fjord couldn't save its job id.")
+                }
+                try await cancelIfRequested(record, jobID: job.jobId)
                 _ = try await requireSuccessfulJob(job.jobId, deviceID: record.deviceID)
+                try requireCurrentAction()
             }
 
             let account: GuestAccount
@@ -446,40 +477,49 @@ final class ComputerRunCoordinator {
                 throw ComputerRunFailure.invalidPlacement
             }
             try await transition(&record, .preparingWorkspace, "Cloning or fetching \(repo)", persist: persist)
+            try requireCurrentAction()
             try await prepareWorkspace(repo: repo, path: repoPath, root: settings.workspaceRoot, branch: record.branch,
                                        computer: settings.target)
+            try requireCurrentAction()
 
-            let checkpointName = ComputerRunCheckpointLabel.make(task: record.taskTitle)
-            let before = try await engine.checkpointsList(computerId: record.computerID, deviceId: record.deviceID)
-            let beforeIDs = Set(before.map(\.id))
-            record.checkpointOperationID = UUID()
-            try await transition(&record, .checkpointing, "Saving \(checkpointName)", persist: persist)
-            try requireCurrentAction()
-            let checkpointJob: ComputerJob
-            do {
-                checkpointJob = try await engine.checkpointsCreate(CheckpointCreateRequest(
-                    computerId: record.computerID, deviceId: record.deviceID, kind: .automatic, name: checkpointName))
-            } catch {
-                record.phase = .unconfirmed
-                record.detail = "Checkpoint acceptance is uncertain; the task was not started. \(error.localizedDescription)"
-                _ = await persist(record)
-                throw ComputerRunFailure.unconfirmed(record.detail)
+            if retention > 0 {
+                let checkpointName = ComputerRunCheckpointLabel.make(task: record.taskTitle)
+                let before = try await engine.checkpointsList(computerId: record.computerID, deviceId: record.deviceID)
+                let beforeIDs = Set(before.map(\.id))
+                record.checkpointOperationID = UUID()
+                try await transition(&record, .checkpointing, "Saving \(checkpointName)", persist: persist)
+                try requireCurrentAction()
+                let checkpointJob: ComputerJob
+                do {
+                    checkpointJob = try await engine.checkpointsCreate(CheckpointCreateRequest(
+                        computerId: record.computerID, deviceId: record.deviceID, kind: .automatic, name: checkpointName))
+                } catch {
+                    record.phase = .unconfirmed
+                    record.detail = "Checkpoint acceptance is uncertain; the task was not started. \(error.localizedDescription)"
+                    _ = await persist(record)
+                    throw ComputerRunFailure.unconfirmed(record.detail)
+                }
+                record.checkpointJobID = checkpointJob.jobId
+                progressSink.record = record
+                guard await persist(record) else { throw ComputerRunFailure.job("Fjord couldn't save the checkpoint job id; the task was not started.") }
+                try await cancelIfRequested(record, jobID: checkpointJob.jobId)
+                let checkpointSnapshot = try await requireSuccessfulJob(checkpointJob.jobId, deviceID: record.deviceID)
+                record.checkpointID = Self.checkpointID(from: checkpointSnapshot.outcome?.result)
+                if record.checkpointID == nil {
+                    let after = try await engine.checkpointsList(computerId: record.computerID, deviceId: record.deviceID)
+                    record.checkpointID = after.first { !beforeIDs.contains($0.id) && $0.name == checkpointName }?.id
+                }
+                guard record.checkpointID != nil else {
+                    throw ComputerRunFailure.unconfirmed("The checkpoint job finished, but Silo did not return its checkpoint id. The task was not started.")
+                }
+                guard await persist(record) else { throw ComputerRunFailure.job("Fjord couldn't save the checkpoint id; the task was not started.") }
+                progressSink.record = record
+                try requireCurrentAction()
+            } else {
+                record.automaticCheckpointSkipped = true
+                try await transition(&record, .checkpointing, "Automatic checkpoints off", persist: persist)
+                try requireCurrentAction()
             }
-            record.checkpointJobID = checkpointJob.jobId
-            progressSink.record = record
-            guard await persist(record) else { throw ComputerRunFailure.job("Fjord couldn't save the checkpoint job id; the task was not started.") }
-            let checkpointSnapshot = try await requireSuccessfulJob(checkpointJob.jobId, deviceID: record.deviceID)
-            record.checkpointID = Self.checkpointID(from: checkpointSnapshot.outcome?.result)
-            if record.checkpointID == nil {
-                let after = try await engine.checkpointsList(computerId: record.computerID, deviceId: record.deviceID)
-                record.checkpointID = after.first { !beforeIDs.contains($0.id) && $0.name == checkpointName }?.id
-            }
-            guard record.checkpointID != nil else {
-                throw ComputerRunFailure.unconfirmed("The checkpoint job finished, but Silo did not return its checkpoint id. The task was not started.")
-            }
-            guard await persist(record) else { throw ComputerRunFailure.job("Fjord couldn't save the checkpoint id; the task was not started.") }
-            progressSink.record = record
-            try requireCurrentAction()
 
             let prompt = ComputerRunPrompt.render(settings.promptTemplate, thing: thing)
             guard !prompt.isEmpty else { throw ComputerRunFailure.result("The rendered task prompt is empty.") }
@@ -498,11 +538,13 @@ final class ComputerRunCoordinator {
             try await transition(&record, settings.recordProof ? .recording : .running,
                                  settings.recordProof ? "Preparing guest proof recorder" : "Starting headless Claude",
                                  persist: persist)
+            try requireCurrentAction()
             let supervisor = try ComputerRunResource.data(named: "run.mjs")
             let helperWrite = GuestFileWriteRequest(computer: settings.target, path: helperPath, data: supervisor,
                                                     mode: 0o700, createParents: true, replace: .always)
             _ = try await guest.filesWrite(helperWrite)
             if account.operatingSystem == .macos, settings.recordProof {
+                try requireCurrentAction()
                 let recorder = try ComputerRunResource.data(named: "GuestRecorder.app.zip")
                 _ = try await guest.filesWrite(GuestFileWriteRequest(computer: settings.target,
                     path: "\(controlRoot)/GuestRecorder.app.zip", data: recorder, mode: 0o600,
@@ -516,6 +558,7 @@ final class ComputerRunCoordinator {
                 display: linuxDisplay, videoPath: videoPath, manifestPath: manifestPath,
                 recorderArchivePath: "\(controlRoot)/GuestRecorder.app.zip")
             let configData = try JSONEncoder().encode(config)
+            try requireCurrentAction()
             _ = try await guest.filesWrite(GuestFileWriteRequest(computer: settings.target, path: configPath,
                 data: configData, mode: 0o600, createParents: true, replace: .always))
 
@@ -535,9 +578,17 @@ final class ComputerRunCoordinator {
             }
             record.execJobID = jobID
             progressSink.record = record
+            guard await persist(record) else {
+                record.phase = .unconfirmed
+                record.detail = "Silo accepted the guest job, but Fjord couldn't save its job id. It will not launch a duplicate."
+                _ = await persist(record)
+                throw ComputerRunFailure.unconfirmed(record.detail)
+            }
+            try await cancelIfRequested(record, jobID: jobID)
             record.phase = .running
             record.detail = settings.recordProof ? "Recorder ready; Claude started on branch \(record.branch)" : "Claude started on branch \(record.branch)"
             record.updatedAt = Date()
+            progressSink.record = record
             guard await persist(record) else {
                 record.phase = .unconfirmed
                 record.detail = "The engine accepted the run, but Fjord couldn't save its job id. It will not launch a duplicate."
@@ -552,7 +603,10 @@ final class ComputerRunCoordinator {
                 record.proofState = .notStarted
             }
             if record.phase != .result && record.phase != .cancelled && record.phase != .failed {
-                if let failure = error as? ComputerRunFailure, case .unconfirmed = failure {
+                if cancellationRequested() || error as? ComputerRunFailure == .cancellationRequested {
+                    record.phase = .cancelled
+                    record.detail = error.localizedDescription
+                } else if let failure = error as? ComputerRunFailure, case .unconfirmed = failure {
                     record.phase = .unconfirmed
                     record.detail = error.localizedDescription
                 } else if record.phase != .unconfirmed {
@@ -574,10 +628,11 @@ final class ComputerRunCoordinator {
         }
         let key = GuestReference(deviceId: initial.deviceID, computerId: initial.computerID).key
         guard Self.activeComputers.insert(key).inserted else { return initial }
+        Self.restoredComputers.remove(key)
         defer { Self.activeComputers.remove(key) }
         var record = initial
         let target = GuestReference(deviceId: record.deviceID, computerId: record.computerID)
-        let progressSink = ComputerRunProgressSink(record: record, persist: persist)
+        let progressSink = ComputerRunProgressSink(record: record, persist: progressWriter)
         let subscription: String?
         do {
             subscription = try await engine.eventsSubscribe(events: ["operations.job.progress", "operations.job.finished",
@@ -621,12 +676,16 @@ final class ComputerRunCoordinator {
     private func finishGuestJob(_ completed: GuestExecJobResult, record: inout ComputerRunRecord,
                                 repo: String,
                                 persist: @escaping @MainActor (ComputerRunRecord) async -> Bool) async throws -> ComputerRunRecord {
-        if !completed.stdout.isEmpty || record.summary == nil {
-            let parsed = ComputerRunResultParser.parse(completed.stdout, repo: repo)
-            record.summary = parsed.summary ?? "Claude exited without a structured final result."
-            record.pullRequestURL = parsed.pullRequestURL
-            record.taskReportedError = parsed.isError
+        let parsed: ComputerRunParsedResult
+        if completed.stdout.isEmpty, let summary = record.summary {
+            parsed = ComputerRunParsedResult(summary: summary, isError: record.taskReportedError == true,
+                pullRequestURL: record.pullRequestURL, hasFinalResult: true)
+        } else {
+            parsed = ComputerRunResultParser.parse(completed.stdout, repo: repo)
         }
+        record.summary = parsed.summary
+        record.pullRequestURL = parsed.pullRequestURL
+        record.taskReportedError = parsed.hasFinalResult ? parsed.isError : nil
         record.exitCode = completed.exitCode ?? record.exitCode
         record.terminalState = switch completed.state {
         case .exited: .exited
@@ -688,8 +747,19 @@ final class ComputerRunCoordinator {
             _ = await persist(record)
             throw ComputerRunFailure.result(record.detail)
         }
+        guard parsed.hasFinalResult else {
+            record.phase = .failed
+            record.summary = nil
+            record.taskReportedError = nil
+            record.detail = "Claude exited without a valid structured final result."
+            if let proofFailure { record.detail += " Proof recording also failed: \(proofFailure)" }
+            record.updatedAt = Date()
+            _ = await persist(record)
+            throw ComputerRunFailure.result(record.detail)
+        }
         record.phase = .result
         record.detail = "Run complete on \(record.branch). Claude's summary is unverified by Fjord."
+        if record.automaticCheckpointSkipped == true { record.detail += " Automatic checkpoints off." }
         if let proofFailure { record.detail += " Proof recording failed: \(proofFailure)" }
         record.updatedAt = Date()
         guard await persist(record) else { throw ComputerRunFailure.job("The result exists, but Fjord couldn't save the completed run record.") }
@@ -723,26 +793,140 @@ final class ComputerRunCoordinator {
         guard !record.phase.isEngineOwnedActive, record.phase != .unconfirmed else {
             throw ComputerRunFailure.job("Wait for the guest run to reach a confirmed result before restoring its checkpoint.")
         }
+        guard record.rollbackOperationID == nil, record.rollbackJobID == nil, record.rolledBackAt == nil else {
+            throw ComputerRunFailure.job("A rollback is already pending or complete.")
+        }
         guard let checkpointID = record.checkpointID else { throw ComputerRunFailure.job("This run has no checkpoint to restore.") }
+        let key = GuestReference(deviceId: record.deviceID, computerId: record.computerID).key
+        guard !Self.restoredComputers.contains(key), Self.activeComputers.insert(key).inserted else {
+            throw ComputerRunFailure.job("Another Triage operation is active on \(record.computerName).")
+        }
+        defer { Self.activeComputers.remove(key) }
         changed.rollbackOperationID = UUID()
         changed.rollbackError = nil
-        guard await persist(changed) else { throw ComputerRunFailure.job("Fjord couldn't save the rollback request.") }
+        changed.updatedAt = Date()
+        guard await persist(changed) else {
+            changed.rollbackOperationID = nil
+            changed.rollbackError = "Fjord couldn't save the rollback request; no restore was submitted."
+            changed.updatedAt = Date()
+            if !(await persist(changed)) { Self.restoredComputers.insert(key) }
+            throw ComputerRunFailure.job("Fjord couldn't save the rollback request.")
+        }
+        var restoreAccepted = false
+        var confirmedJobFailure = false
         do {
             let job = try await engine.checkpointsRestore(CheckpointRestoreRequest(
                 checkpointId: checkpointID, computerId: record.computerID, deviceId: record.deviceID))
+            restoreAccepted = true
             changed.rollbackJobID = job.jobId
-            guard await persist(changed) else { throw ComputerRunFailure.unconfirmed("Rollback was accepted, but Fjord couldn't save its job id.") }
-            _ = try await requireSuccessfulJob(job.jobId, deviceID: record.deviceID)
+            changed.updatedAt = Date()
+            guard await persist(changed) else {
+                changed.rollbackError = "Rollback was accepted, but Fjord couldn't save its job id. It will not submit another restore."
+                changed.updatedAt = Date()
+                _ = await persist(changed)
+                Self.restoredComputers.insert(key)
+                throw ComputerRunFailure.unconfirmed(
+                    "Rollback was accepted, but Fjord couldn't save its job id. It will not submit another restore.")
+            }
+            do {
+                _ = try await requireSuccessfulJob(job.jobId, deviceID: record.deviceID)
+            } catch {
+                if Self.isFinishedRollbackFailure(error) { confirmedJobFailure = true }
+                throw error
+            }
             changed.rolledBackAt = Date()
             changed.updatedAt = Date()
-            _ = await persist(changed)
+            guard await persist(changed) else {
+                changed.rolledBackAt = nil
+                changed.rollbackError = "The restore finished, but Fjord couldn't save its result. It will not submit another restore."
+                changed.updatedAt = Date()
+                _ = await persist(changed)
+                Self.restoredComputers.insert(key)
+                throw ComputerRunFailure.unconfirmed(
+                    "The restore finished, but Fjord couldn't save its result. It will not submit another restore.")
+            }
             return changed
         } catch {
+            let confirmedRejection = !restoreAccepted && Self.isConfirmedRestoreRejection(error)
+            let canRetry = confirmedRejection || confirmedJobFailure
+            let failure: Error
+            if canRetry {
+                changed.rollbackOperationID = nil
+                changed.rollbackJobID = nil
+                failure = error
+            } else if !restoreAccepted, !(error is ComputerRunFailure) {
+                failure = ComputerRunFailure.unconfirmed(
+                    "Fjord couldn't confirm whether Silo accepted the rollback. It will not submit a duplicate. \(error.localizedDescription)")
+            } else {
+                failure = error
+            }
+            changed.rollbackError = failure.localizedDescription
+            changed.updatedAt = Date()
+            let saved = await persist(changed)
+            if !canRetry || !saved { Self.restoredComputers.insert(key) }
+            throw failure
+        }
+    }
+
+    /// Reconcile an accepted rollback after relaunch without submitting another restore.
+    func reattachRollback(_ initial: ComputerRunRecord,
+                          persist: @escaping @MainActor (ComputerRunRecord) async -> Bool) async throws -> ComputerRunRecord {
+        guard initial.rollbackOperationID != nil, initial.rolledBackAt == nil,
+              let jobID = initial.rollbackJobID else {
+            throw ComputerRunFailure.unconfirmed("Fjord has no saved restore job id and will not submit a duplicate rollback.")
+        }
+        let key = GuestReference(deviceId: initial.deviceID, computerId: initial.computerID).key
+        guard Self.activeComputers.insert(key).inserted else { return initial }
+        Self.restoredComputers.remove(key)
+        defer { Self.activeComputers.remove(key) }
+
+        var changed = initial
+        var confirmedJobFailure = false
+        do {
+            do {
+                _ = try await requireSuccessfulJob(jobID, deviceID: initial.deviceID)
+            } catch {
+                if Self.isFinishedRollbackFailure(error) { confirmedJobFailure = true }
+                throw error
+            }
+            changed.rolledBackAt = Date()
+            changed.rollbackError = nil
+            changed.updatedAt = Date()
+            guard await persist(changed) else {
+                changed.rolledBackAt = nil
+                changed.rollbackError = "The restore finished, but Fjord couldn't save its result. It will not submit another restore."
+                changed.updatedAt = Date()
+                _ = await persist(changed)
+                Self.restoredComputers.insert(key)
+                throw ComputerRunFailure.unconfirmed(
+                    "The restore finished, but Fjord couldn't save its result. It will not submit another restore.")
+            }
+            return changed
+        } catch {
+            if confirmedJobFailure {
+                changed.rollbackOperationID = nil
+                changed.rollbackJobID = nil
+            }
             changed.rollbackError = error.localizedDescription
             changed.updatedAt = Date()
-            _ = await persist(changed)
+            let saved = await persist(changed)
+            if !confirmedJobFailure || !saved { Self.restoredComputers.insert(key) }
+            if confirmedJobFailure, saved { return changed }
             throw error
         }
+    }
+
+    private static func isConfirmedRestoreRejection(_ error: Error) -> Bool {
+        guard let error = error as? EngineClientError else { return false }
+        switch error {
+        case .notFound, .unsupported, .invalidAction, .jobFailed: return true
+        case .unavailable: return false
+        }
+    }
+
+    private static func isFinishedRollbackFailure(_ error: Error) -> Bool {
+        guard let error = error as? ComputerRunFailure, case .job = error else { return false }
+        return true
     }
 
     private func prepareWorkspace(repo: String, path: String, root: String, branch: String,
@@ -784,7 +968,7 @@ final class ComputerRunCoordinator {
         var state = GuestExecJobResult(state: .running, exitCode: nil, stdout: Data(), stderr: Data(), nextSequence: sequence)
         for _ in 0..<14_400 {
             do {
-                state = try await guest.execGet(jobId: jobID, sinceSequence: sequence)
+                state = try await guest.execGet(computer: computer, jobId: jobID, sinceSequence: sequence)
             } catch {
                 throw ComputerRunFailure.unconfirmed("Fjord lost the guest job connection. The saved job id remains available for reattachment; no replacement task was submitted. \(error.localizedDescription)")
             }
@@ -858,9 +1042,18 @@ final class ComputerRunCoordinator {
     }
 
     private func requireCurrentAction() throws {
+        if cancellationRequested() { throw ComputerRunFailure.cancellationRequested }
         guard shouldContinue() else {
             throw ComputerRunFailure.gateClosed("The Triage rule or its trigger changed before the guest run started.")
         }
+    }
+
+    private func cancelIfRequested(_ record: ComputerRunRecord, jobID: String?) async throws {
+        guard cancellationRequested() else { return }
+        if let jobID {
+            try? await engine.operationsCancel(jobId: jobID, deviceId: record.deviceID)
+        }
+        throw ComputerRunFailure.cancellationRequested
     }
 
     private func requireLinuxDesktopReady(target: GuestReference) async throws -> String {
@@ -990,10 +1183,10 @@ final class ComputerRunCoordinator {
 @MainActor
 private final class ComputerRunProgressSink {
     var record: ComputerRunRecord
-    private let persist: @MainActor (ComputerRunRecord) async -> Bool
+    private let persist: @MainActor (ComputerRunRecord, String, Date) async -> Bool
     private var active = true
 
-    init(record: ComputerRunRecord, persist: @escaping @MainActor (ComputerRunRecord) async -> Bool) {
+    init(record: ComputerRunRecord, persist: @escaping @MainActor (ComputerRunRecord, String, Date) async -> Bool) {
         self.record = record
         self.persist = persist
     }
@@ -1006,7 +1199,7 @@ private final class ComputerRunProgressSink {
             let copy = record
             Task { @MainActor [weak self] in
                 guard let self, self.active else { return }
-                _ = await self.persist(copy)
+                _ = await self.persist(copy, copy.detail, copy.updatedAt)
             }
             return
         }
@@ -1024,7 +1217,7 @@ private final class ComputerRunProgressSink {
         let copy = record
         Task { @MainActor [weak self] in
             guard let self, self.active else { return }
-            _ = await self.persist(copy)
+            _ = await self.persist(copy, copy.detail, copy.updatedAt)
         }
     }
 
@@ -1062,7 +1255,7 @@ extension Store {
         guard let record = actionLedger.computerRuns[id],
               record.phase.isEngineOwnedActive || record.phase == .unconfirmed else { return }
         let target = GuestReference(deviceId: record.deviceID, computerId: record.computerID)
-        guard !ComputerRunCoordinator.isActive(on: target) else { return }
+        guard !ComputerRunCoordinator.isExecuting(on: target) else { return }
         guard record.execJobID != nil else {
             guard record.phase != .unconfirmed else { return }
             var uncertain = record
@@ -1081,13 +1274,42 @@ extension Store {
             return
         }
         let coordinator = ComputerRunCoordinator(engine: engineClient, guest: guest,
-                                                   authorization: .blocked(ComputerRunGate.productionBlocker))
+            authorization: .blocked(ComputerRunGate.productionBlocker),
+            cancellationRequested: { [weak self] in
+                self?.actionLedger.computerRuns[id]?.cancellationRequested == true
+            },
+            progressWriter: { [weak self] source, detail, updatedAt in
+                guard let self else { return false }
+                return await self.saveComputerRunProgress(source, detail: detail, updatedAt: updatedAt)
+            })
         do {
-            let resumed = try await coordinator.reattach(record) { [weak self] updated in
+            _ = try await coordinator.reattach(record) { [weak self] updated in
                 guard let self else { return false }
                 return await self.saveComputerRun(updated)
             }
-            actionLedger.computerRuns[id] = resumed
+        } catch { }
+    }
+
+    func resumeComputerRunRollback(_ id: UUID) async {
+        guard let record = actionLedger.computerRuns[id], record.rollbackOperationID != nil,
+              record.rollbackJobID != nil, record.rolledBackAt == nil else { return }
+        let target = GuestReference(deviceId: record.deviceID, computerId: record.computerID)
+        guard !ComputerRunCoordinator.isExecuting(on: target) else { return }
+        let guest: any GuestClient
+        if let registered = GuestRouterRuntime.shared.guestClient(for: record.location) {
+            guest = registered
+        } else if let socket = engineClient as? SocketEngineClient {
+            guest = SiloGuestClient(engine: socket)
+        } else {
+            return
+        }
+        let coordinator = ComputerRunCoordinator(engine: engineClient, guest: guest,
+            authorization: .blocked(ComputerRunGate.productionBlocker))
+        do {
+            _ = try await coordinator.reattachRollback(record) { [weak self] updated in
+                guard let self else { return false }
+                return await self.saveComputerRunRollback(updated)
+            }
         } catch { }
     }
 
@@ -1115,12 +1337,88 @@ extension Store {
     }
 
     func saveComputerRun(_ record: ComputerRunRecord) async -> Bool {
-        actionLedger.computerRuns[record.id] = record
+        var saved = record
+        if let current = actionLedger.computerRuns[record.id] {
+            let incomingWins: Bool
+            if current.phase.isTerminal {
+                incomingWins = record.phase == current.phase && record.updatedAt >= current.updatedAt
+            } else {
+                incomingWins = record.updatedAt >= current.updatedAt
+            }
+            let other = incomingWins ? current : record
+            saved = incomingWins ? record : current
+            saved.startJobID = saved.startJobID ?? other.startJobID
+            saved.checkpointJobID = saved.checkpointJobID ?? other.checkpointJobID
+            saved.checkpointID = saved.checkpointID ?? other.checkpointID
+            saved.automaticCheckpointSkipped = saved.automaticCheckpointSkipped ?? other.automaticCheckpointSkipped
+            saved.execJobID = saved.execJobID ?? other.execJobID
+            saved.localVideoPath = saved.localVideoPath ?? other.localVideoPath
+            saved.rolledBackAt = saved.rolledBackAt ?? other.rolledBackAt
+            let confirmsRollbackFailure = incomingWins && record.rollbackOperationID == nil
+                && record.rollbackJobID == nil && record.rollbackError != nil
+                && current.rollbackOperationID != nil && current.rolledBackAt == nil
+            let beginsRollbackRetry = incomingWins && record.rollbackOperationID != nil
+                && record.rollbackOperationID != current.rollbackOperationID
+            if confirmsRollbackFailure {
+                saved.rollbackOperationID = nil
+                saved.rollbackJobID = nil
+                saved.rollbackError = record.rollbackError
+            } else {
+                saved.rollbackOperationID = saved.rollbackOperationID ?? other.rollbackOperationID
+                saved.rollbackJobID = saved.rollbackJobID ?? other.rollbackJobID
+                if beginsRollbackRetry {
+                    saved.rollbackError = record.rollbackError
+                } else {
+                    saved.rollbackError = saved.rollbackError ?? other.rollbackError
+                }
+            }
+            saved.presented = record.presented || current.presented
+            saved.acknowledged = record.acknowledged || current.acknowledged
+            saved.checkpointAcknowledged = record.checkpointAcknowledged == true || current.checkpointAcknowledged == true
+                ? true : record.checkpointAcknowledged ?? current.checkpointAcknowledged
+            saved.execAcknowledged = record.execAcknowledged == true || current.execAcknowledged == true
+                ? true : record.execAcknowledged ?? current.execAcknowledged
+            saved.cancellationRequested = record.cancellationRequested == true || current.cancellationRequested == true
+                ? true : record.cancellationRequested ?? current.cancellationRequested
+        }
+        actionLedger.computerRuns[record.id] = saved
+        return await actionsWritten()
+    }
+
+    func saveComputerRunRollback(_ source: ComputerRunRecord) async -> Bool {
+        guard var current = actionLedger.computerRuns[source.id], current.phase == source.phase,
+              current.checkpointID == source.checkpointID, current.execJobID == source.execJobID else { return false }
+        let startsNewAttempt = current.rollbackOperationID == nil && source.rollbackOperationID != nil
+            && source.rollbackError == nil
+        let confirmsFailure = source.rollbackOperationID == nil && source.rollbackJobID == nil
+            && source.rollbackError != nil && current.rollbackOperationID != nil && current.rolledBackAt == nil
+        guard current.rollbackOperationID == source.rollbackOperationID
+                || startsNewAttempt || confirmsFailure else { return false }
+        current.rollbackOperationID = source.rollbackOperationID
+        current.rollbackJobID = source.rollbackJobID
+        current.rolledBackAt = source.rolledBackAt
+        current.rollbackError = source.rollbackError
+        current.updatedAt = max(current.updatedAt, source.updatedAt)
+        actionLedger.computerRuns[source.id] = current
+        return await actionsWritten()
+    }
+
+    func saveComputerRunProgress(_ source: ComputerRunRecord, detail: String, updatedAt: Date) async -> Bool {
+        guard var current = actionLedger.computerRuns[source.id], !current.phase.isTerminal,
+              current.phase == source.phase,
+              current.startJobID == source.startJobID,
+              current.checkpointJobID == source.checkpointJobID,
+              current.execJobID == source.execJobID,
+              current.rollbackJobID == source.rollbackJobID else { return true }
+        current.detail = detail
+        current.updatedAt = max(current.updatedAt, updatedAt)
+        actionLedger.computerRuns[source.id] = current
         return await actionsWritten()
     }
 
     func rollbackComputerRun(_ id: UUID) async {
         guard let record = actionLedger.computerRuns[id] else { return }
+        guard record.rollbackOperationID == nil, record.rollbackJobID == nil, record.rolledBackAt == nil else { return }
         guard !record.phase.isEngineOwnedActive, record.phase != .unconfirmed else {
             actionLedger.computerRuns[id]?.rollbackError = "Wait for the guest run to reach a confirmed result before restoring its checkpoint."
             return
@@ -1140,17 +1438,24 @@ extension Store {
         do {
             let changed = try await coordinator.rollback(record) { [weak self] updated in
                 guard let self else { return false }
-                return await self.saveComputerRun(updated)
+                return await self.saveComputerRunRollback(updated)
             }
-            actionLedger.computerRuns[id] = changed
-            if let jobID = changed.rollbackJobID {
+            if let current = actionLedger.computerRuns[id], let jobID = current.rollbackJobID,
+               current.rollbackOperationID == changed.rollbackOperationID {
                 do {
-                    try await engineClient.operationsJobAcknowledge(jobId: jobID, deviceId: changed.deviceID)
-                    actionLedger.computerRuns[id]?.acknowledged = true
+                    try await engineClient.operationsJobAcknowledge(jobId: jobID, deviceId: current.deviceID)
+                    if actionLedger.computerRuns[id]?.rollbackJobID == jobID {
+                        actionLedger.computerRuns[id]?.acknowledged = true
+                        _ = await actionsWritten()
+                    }
                 } catch { }
             }
         } catch {
-            actionLedger.computerRuns[id]?.rollbackError = error.localizedDescription
+            guard var latest = actionLedger.computerRuns[id] else { return }
+            latest.rollbackError = error.localizedDescription
+            latest.updatedAt = Date()
+            actionLedger.computerRuns[id] = latest
+            _ = await actionsWritten()
         }
     }
 
@@ -1174,37 +1479,60 @@ extension Store {
         record.presented = true
         actionLedger.computerRuns[id] = record
         guard await saveComputerRun(record) else { return }
+        var checkpointAcknowledged = record.checkpointAcknowledged == true
+        var execAcknowledged = record.execAcknowledged == true
         if let jobID = record.checkpointJobID, record.checkpointAcknowledged != true,
            record.checkpointID != nil || record.phase.isTerminal {
             do {
                 try await engineClient.operationsJobAcknowledge(jobId: jobID, deviceId: record.deviceID)
-                record.checkpointAcknowledged = true
+                checkpointAcknowledged = true
             } catch { }
         }
         if let jobID = record.execJobID, record.phase.isTerminal, record.execAcknowledged != true {
             do {
                 try await engineClient.operationsJobAcknowledge(jobId: jobID, deviceId: record.deviceID)
-                record.execAcknowledged = true
+                execAcknowledged = true
             } catch { }
         }
-        record.acknowledged = (record.checkpointJobID == nil || record.checkpointAcknowledged == true)
-            && (record.execJobID == nil || record.execAcknowledged == true)
-        actionLedger.computerRuns[id] = record
-        _ = await saveComputerRun(record)
+        guard var latest = actionLedger.computerRuns[id] else { return }
+        latest.presented = true
+        if checkpointAcknowledged { latest.checkpointAcknowledged = true }
+        if execAcknowledged { latest.execAcknowledged = true }
+        latest.acknowledged = (latest.checkpointJobID == nil || latest.checkpointAcknowledged == true)
+            && (latest.execJobID == nil || latest.execAcknowledged == true)
+        actionLedger.computerRuns[id] = latest
+        _ = await actionsWritten()
     }
 
     func cancelComputerRun(_ id: UUID) async {
-        guard var record = actionLedger.computerRuns[id], let jobID = record.execJobID,
+        guard var record = actionLedger.computerRuns[id],
               record.phase.isEngineOwnedActive || record.phase == .unconfirmed else { return }
+        record.cancellationRequested = true
+        let jobID: String?
+        switch record.phase {
+        case .startingComputer: jobID = record.startJobID
+        case .checkpointing: jobID = record.checkpointJobID ?? record.startJobID
+        case .recording, .running, .finalizingProof: jobID = record.execJobID
+        case .unconfirmed: jobID = record.execJobID ?? record.checkpointJobID ?? record.startJobID
+        case .preflight, .preparingWorkspace, .result, .failed, .cancelled: jobID = nil
+        }
+        if jobID != nil {
+            record.detail = "Cancellation requested; waiting for the current guest operation to stop."
+        } else {
+            record.detail = "Cancellation requested; no guest job has been admitted."
+        }
+        record.updatedAt = Date()
+        actionLedger.computerRuns[id] = record
+        guard await saveComputerRun(record), let jobID else { return }
+        guard let latest = actionLedger.computerRuns[id], !latest.phase.isTerminal else { return }
         do {
             try await engineClient.operationsCancel(jobId: jobID, deviceId: record.deviceID)
-            record.detail = "Cancellation requested; waiting for the guest process to stop and finalize proof."
-            record.updatedAt = Date()
-            _ = await saveComputerRun(record)
         } catch {
-            record.detail = "Cancellation failed: \(error.localizedDescription)"
-            record.updatedAt = Date()
-            _ = await saveComputerRun(record)
+            guard var latest = actionLedger.computerRuns[id], !latest.phase.isTerminal else { return }
+            latest.detail = "Cancellation request could not be confirmed: \(error.localizedDescription)"
+            latest.updatedAt = Date()
+            actionLedger.computerRuns[id] = latest
+            _ = await actionsWritten()
         }
     }
 }

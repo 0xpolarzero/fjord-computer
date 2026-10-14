@@ -121,15 +121,17 @@ struct ComputerRunResultView: View {
     }
 
     private func resultActions(_ run: ComputerRunRecord) -> some View {
-        HStack(spacing: 8) {
+        let rollbackPending = run.rollbackOperationID != nil && run.rolledBackAt == nil
+        return HStack(spacing: 8) {
             Button("Open in Claude") { Task { await store.openComputerRunInClaude(run.id) } }
                 .buttonStyle(SettingsButtonStyle(size: .sm))
-            Button(run.rolledBackAt == nil ? "Roll Back" : "Restored") {
+            Button(run.rolledBackAt != nil ? "Restored" : rollbackPending
+                ? (run.rollbackJobID == nil ? "Rollback pending" : "Restoring…") : "Roll Back") {
                 Task { await store.rollbackComputerRun(run.id) }
             }
             .buttonStyle(SettingsButtonStyle(variant: .ghost, size: .sm))
             .disabled(run.checkpointID == nil || run.rolledBackAt != nil
-                      || run.phase.isEngineOwnedActive || run.phase == .unconfirmed)
+                      || rollbackPending || run.phase.isEngineOwnedActive || run.phase == .unconfirmed)
             if run.phase.isEngineOwnedActive || (run.phase == .unconfirmed && run.execJobID != nil) {
                 Button("Cancel run") { Task { await store.cancelComputerRun(run.id) } }
                     .buttonStyle(SettingsButtonStyle(variant: .ghost, size: .sm))

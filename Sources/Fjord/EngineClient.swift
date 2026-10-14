@@ -607,6 +607,16 @@ final class MockEngineClient: EngineClient {
     private(set) var operationsListCallCount = 0
     private(set) var jobGetCallCount = 0
     private(set) var cancelRequests: [String] = []
+    var suspendNextCancelRequest = false
+    private var cancelRequestContinuation: CheckedContinuation<Void, Never>?
+    private var cancelRequestWaiters: [CheckedContinuation<Void, Never>] = []
+    var suspendNextJobAcknowledge = false
+    private var jobAcknowledgeContinuation: CheckedContinuation<Void, Never>?
+    private var jobAcknowledgeWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var checkpointRestoreRequests: [CheckpointRestoreRequest] = []
+    var suspendNextCheckpointRestore = false
+    private var checkpointRestoreContinuation: CheckedContinuation<Void, Never>?
+    private var checkpointRestoreWaiters: [CheckedContinuation<Void, Never>] = []
     var suspendNextSubscription = false
     private var subscriptionContinuation: CheckedContinuation<Void, Never>?
     private var subscriptionWaiters: [CheckedContinuation<Void, Never>] = []
@@ -879,6 +889,15 @@ final class MockEngineClient: EngineClient {
     }
 
     func checkpointsRestore(_ request: CheckpointRestoreRequest) async throws -> ComputerJob {
+        checkpointRestoreRequests.append(request)
+        if suspendNextCheckpointRestore {
+            suspendNextCheckpointRestore = false
+            await withCheckedContinuation { continuation in
+                checkpointRestoreContinuation = continuation
+                checkpointRestoreWaiters.forEach { $0.resume() }
+                checkpointRestoreWaiters.removeAll()
+            }
+        }
         let row = try requireComputer(request.computerId)
         guard row.checkpoints.contains(where: { $0.id == request.checkpointId }) else {
             throw EngineClientError.notFound("This checkpoint no longer exists.")
@@ -1399,6 +1418,14 @@ final class MockEngineClient: EngineClient {
 
     func operationsCancel(jobId: String, deviceId: String? = nil) async throws {
         cancelRequests.append(jobId)
+        if suspendNextCancelRequest {
+            suspendNextCancelRequest = false
+            await withCheckedContinuation { continuation in
+                cancelRequestContinuation = continuation
+                cancelRequestWaiters.forEach { $0.resume() }
+                cancelRequestWaiters.removeAll()
+            }
+        }
         if let index = operationQueue.waiting.firstIndex(where: { $0.jobId == jobId }) {
             operationQueue.waiting.remove(at: index)
         } else if let index = operationQueue.running.firstIndex(where: { $0.jobId == jobId }) {
@@ -1440,6 +1467,14 @@ final class MockEngineClient: EngineClient {
 
     func operationsJobAcknowledge(jobId: String, deviceId: String? = nil) async throws {
         acknowledgedJobs.append(jobId)
+        if suspendNextJobAcknowledge {
+            suspendNextJobAcknowledge = false
+            await withCheckedContinuation { continuation in
+                jobAcknowledgeContinuation = continuation
+                jobAcknowledgeWaiters.forEach { $0.resume() }
+                jobAcknowledgeWaiters.removeAll()
+            }
+        }
         finished[jobId] = nil
     }
 
@@ -1494,6 +1529,39 @@ final class MockEngineClient: EngineClient {
     func resumeSuspendedSubscription() {
         let continuation = subscriptionContinuation
         subscriptionContinuation = nil
+        continuation?.resume()
+    }
+
+    func waitForSuspendedCancelRequest() async {
+        if cancelRequestContinuation != nil { return }
+        await withCheckedContinuation { cancelRequestWaiters.append($0) }
+    }
+
+    func waitForSuspendedJobAcknowledge() async {
+        if jobAcknowledgeContinuation != nil { return }
+        await withCheckedContinuation { jobAcknowledgeWaiters.append($0) }
+    }
+
+    func resumeSuspendedJobAcknowledge() {
+        let continuation = jobAcknowledgeContinuation
+        jobAcknowledgeContinuation = nil
+        continuation?.resume()
+    }
+
+    func resumeSuspendedCancelRequest() {
+        let continuation = cancelRequestContinuation
+        cancelRequestContinuation = nil
+        continuation?.resume()
+    }
+
+    func waitForSuspendedCheckpointRestore() async {
+        if checkpointRestoreContinuation != nil { return }
+        await withCheckedContinuation { checkpointRestoreWaiters.append($0) }
+    }
+
+    func resumeSuspendedCheckpointRestore() {
+        let continuation = checkpointRestoreContinuation
+        checkpointRestoreContinuation = nil
         continuation?.resume()
     }
 
