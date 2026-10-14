@@ -312,12 +312,12 @@ enum SiloGeneratedMethods {
         SiloGeneratedMethodCall<SiloWireConnectionsSetEnabledParams, SiloWireConnectionsStatus>(name: "connections.setEnabled", kind: .command, params: params)
     }
 
-    static func connectionsSshAuthorizationCommand(_ params: SiloWireSshAddressParams) -> SiloGeneratedMethodCall<SiloWireSshAddressParams, SiloWireSshCommandResult> {
-        SiloGeneratedMethodCall<SiloWireSshAddressParams, SiloWireSshCommandResult>(name: "connections.ssh.authorizationCommand", kind: .query, params: params)
+    static func connectionsSshAuthorizationCommand(_ params: SiloWireSSHAddressParams) -> SiloGeneratedMethodCall<SiloWireSSHAddressParams, SiloWireSSHCommandResult> {
+        SiloGeneratedMethodCall<SiloWireSSHAddressParams, SiloWireSSHCommandResult>(name: "connections.ssh.authorizationCommand", kind: .query, params: params)
     }
 
-    static func connectionsSshKeySetupCommand(_ params: SiloWireSshAddressParams) -> SiloGeneratedMethodCall<SiloWireSshAddressParams, SiloWireSshCommandResult> {
-        SiloGeneratedMethodCall<SiloWireSshAddressParams, SiloWireSshCommandResult>(name: "connections.ssh.keySetupCommand", kind: .command, params: params)
+    static func connectionsSshKeySetupCommand(_ params: SiloWireSSHAddressParams) -> SiloGeneratedMethodCall<SiloWireSSHAddressParams, SiloWireSSHCommandResult> {
+        SiloGeneratedMethodCall<SiloWireSSHAddressParams, SiloWireSSHCommandResult>(name: "connections.ssh.keySetupCommand", kind: .command, params: params)
     }
 
     static func connectionsStatus(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWireConnectionsStatus> {
@@ -712,16 +712,16 @@ enum SiloGeneratedMethods {
         SiloGeneratedMethodCall<SiloWireSettingsUpdateParams, SiloWireSettingsSnapshot>(name: "settings.update", kind: .command, params: params)
     }
 
-    static func sshAccessConnection(_ params: SiloWireSshAccessConnectionParams) -> SiloGeneratedMethodCall<SiloWireSshAccessConnectionParams, String?> {
-        SiloGeneratedMethodCall<SiloWireSshAccessConnectionParams, String?>(name: "sshAccess.connection", kind: .command, params: params)
+    static func sshAccessConnection(_ params: SiloWireSSHAccessConnectionParams) -> SiloGeneratedMethodCall<SiloWireSSHAccessConnectionParams, String?> {
+        SiloGeneratedMethodCall<SiloWireSSHAccessConnectionParams, String?>(name: "sshAccess.connection", kind: .command, params: params)
     }
 
-    static func sshAccessSave(_ params: SiloWireSshAccessSaveParams) -> SiloGeneratedMethodCall<SiloWireSshAccessSaveParams, SiloWireSshAccessState> {
-        SiloGeneratedMethodCall<SiloWireSshAccessSaveParams, SiloWireSshAccessState>(name: "sshAccess.save", kind: .command, params: params)
+    static func sshAccessSave(_ params: SiloWireSSHAccessSaveParams) -> SiloGeneratedMethodCall<SiloWireSSHAccessSaveParams, SiloWireSSHAccessState> {
+        SiloGeneratedMethodCall<SiloWireSSHAccessSaveParams, SiloWireSSHAccessState>(name: "sshAccess.save", kind: .command, params: params)
     }
 
-    static func sshAccessState(_ params: SiloWireDeviceParams) -> SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWireSshAccessState> {
-        SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWireSshAccessState>(name: "sshAccess.state", kind: .query, params: params)
+    static func sshAccessState(_ params: SiloWireDeviceParams) -> SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWireSSHAccessState> {
+        SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWireSSHAccessState>(name: "sshAccess.state", kind: .query, params: params)
     }
 
     static func storageRead(_ params: SiloWireStorageParams) -> SiloGeneratedMethodCall<SiloWireStorageParams, SiloWireStorageState> {

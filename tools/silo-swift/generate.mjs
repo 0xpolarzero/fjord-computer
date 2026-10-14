@@ -58,7 +58,8 @@ function swiftTypeForSchema(value) {
   if (value.$ref) {
     const definitionName = value.$ref.match(/^#\/\$defs\/([^/]+)$/)?.[1];
     if (!definitionName || !definitionNames.has(definitionName)) throw new Error(`Unsupported schema reference ${value.$ref}`);
-    return `SiloWire${definitionName}`;
+    const quicktypeName = definitionName.replace(/^Ssh/, "SSH");
+    return `SiloWire${quicktypeName}`;
   }
   if (Array.isArray(value.anyOf) || Array.isArray(value.oneOf)) {
     const variants = value.anyOf ?? value.oneOf;
