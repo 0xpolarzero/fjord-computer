@@ -10,6 +10,7 @@ Silo branch: `engine/d-guest` (worktree `/Users/polarzero/silo-work/d-guest`), f
 | `7aea377e` | `feat(engine): add guest access for Linux and macOS computers` (`silo_engine::guest`, ID-keyed aliases in `editor.rs`, targeted event delivery, `GuestExec` cancel route, macOS bridge) |
 | `1575e3e4` | `feat(silod): serve the guest, files, terminal and editor methods` (all handlers, `guest.files.watch` activation, unit and socket tests; also a few engine test fixtures and the pure macOS command-line builder with its test) |
 | `a9c0f179` | `fix(engine): treat newlines in guest file paths as data` (plus the changeset `guest-access-methods.md`) |
+| `2ea62d10` | `fix(engine): end guest runs cancelled before the guest recorded them` (a cancel or timeout right after start used to miss the guest process group; the control helper now waits for it, cancellation retries until the host process is gone, and the account check is cached for 5 s) |
 
 Nothing was pushed. No VM or app was started.
 
@@ -51,11 +52,33 @@ Shared-code changes (all additive): `silo-api` (`GuestExecGetParams.deviceId` an
 
 Run from `app/SiloUI` with `CARGO_TARGET_DIR=/Users/polarzero/silo-work/d-guest/target CARGO_BUILD_JOBS=3`.
 
-- Engine guest suite (`cargo test --locked -p silo-engine --lib -- guest::`): 36 tests passing, covering validation, argv as data, invalid UTF-8 stdin and stdout, signal reporting, the stdout cap (exact cap succeeds, cap+1 fails), a deadline ending the whole guest tree, root and account runs, atomic writes and modes, a four-way create-only race with one winner, null-hash create-only, compare-and-replace, ranged reads, links not followed, directory refusal, exec jobs (ordered input, interleaved sequences, replay eviction, cancel ending the tree, saved outcome after the session is gone), watches (reports changes, not existing content, ends when not wanted or stopped), ID-keyed aliases and their scoped, idempotent removal, the macOS command line quoting and the pending-parity answers. The fake runtime is a shell script standing in for `msb` that runs the command after `--` on this Mac, so the real Perl helpers and the real process plumbing run.
+- Engine guest suite (`cargo test --locked -p silo-engine --lib -- guest::`): 38 tests passing, covering validation, argv as data, invalid UTF-8 stdin and stdout, signal reporting, the stdout cap (exact cap succeeds, cap+1 fails), a deadline ending the whole guest tree, root and account runs, atomic writes and modes, a four-way create-only race with one winner, null-hash create-only, compare-and-replace, ranged reads, links not followed, directory refusal, exec jobs (ordered input, interleaved sequences, replay eviction, cancel ending the tree, saved outcome after the session is gone), watches (reports changes, not existing content, ends when not wanted or stopped), ID-keyed aliases and their scoped, idempotent removal, the macOS command line quoting and the pending-parity answers. The fake runtime is a shell script standing in for `msb` that runs the command after `--` on this Mac, so the real Perl helpers and the real process plumbing run.
 - `silo-engine` event bus: one test for targeted delivery.
 - silod handler tests (`cargo test --locked -p silod --lib methods::guest`): 12 tests, one or more per handler, including device refusal for every per-computer method.
 - Socket-level integration test (`silod/tests/guest.rs`): one session over a real `engine.sock` drives files (create-only with an explicit null, conflict, ranged read), bounded exec with raw bytes, an exec job with streamed output, exit and finished events and replay, a file watch that delivers on its own subscription, and stable error codes.
-- Full gate: see "Gate" below.
+- Full gate: see "Gate".
+
+## Gate
+
+`cargo test --locked --workspace --no-fail-fast` from `app/SiloUI` on the final commit (`2ea62d10`):
+
+| Crate | Result |
+| --- | --- |
+| `silo-api` | 28 passed |
+| `silo-engine` | 2,365 passed, 30 ignored, **2 failed** (not this track, see below) |
+| `silo-ui` | 71 passed |
+| `silod` (lib) | 53 passed (12 are the new guest handler tests) |
+| `silod` `tests/guest.rs` (new) | 1 passed |
+| `silod` `tests/handshake.rs` | 1 passed |
+
+The two failures are outside the guest domain:
+
+- `backup_controller::tests::install_schedules_pending_import_recovery_outside_tokio_runtime` **fails identically on the base commit `bd7c7c27`** (checked in a throwaway worktree of that commit, then removed). It asserts `!controller.busy` after recovery and is unrelated to guest code.
+- `dependencies::tests::version_probe_accepts_the_output_limit_and_rejects_overflow_on_either_stream` timed out under the machine's load (load average 30 to 40 from the parallel tracks) and **passes when run alone**.
+
+`cargo +1.94.0 fmt --all --check` is **not clean on this branch, and was not clean on `main`**: the remaining diffs are all in other domains' files and were left alone to avoid conflicts (`backup_controller.rs`, `jobs/registry.rs` (three hunks, formatting only), `macos_computers.rs` (one test hunk), `silod/src/methods/{checkpoints,computers,mod,services}.rs`). Every file this track created or changed is formatted. The coordinator can run `cargo +1.94.0 fmt --all` once at integration. (Run from `src-tauri/` or with `+1.94.0`: `src-tauri/rust-toolchain.toml` pins 1.94.0 and a plain `cargo fmt` from `app/SiloUI` uses a newer stable.)
+
+Cargo tests leave an untracked `src-tauri/engine/engine/` registry fixture (as the keystone report noted); it was removed after the last run.
 
 ## Deviations from the spec and choices
 

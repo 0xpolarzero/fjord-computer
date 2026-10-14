@@ -2,6 +2,16 @@
 
 This is the orchestration tracker, kept by the coordinating agent. The spec is this folder (README → 95 → 05 → 10–70 → 80). Every implementer reads [the implementer brief](#implementer-brief) first.
 
+## Status (2026-10-14, evening)
+
+All planned engine and Fjord work is merged: Silo main is at f501d99e and Fjord main has it all. Live checks: macOS mostly pass (probes/live-macos-2.md); the end-to-end engine side passes (probes/e2e.md).
+
+What's left needs the owner:
+1. A stable signing identity (`scripts/make-signing-cert.sh`), then the final macOS live run: secret substitution and revocation, the import with SecureToken, a handoff to a newer silod. This needs a template rebuild, because agent tools are now in setup.
+2. The end-to-end GUI rerun: the owner clicks Allow on the computer-use approval panel.
+3. GitHub sign-in over SSH (B-25): needs the owner's GitHub sign-in and a second Mac.
+4. Push Silo main to GitHub, once the above is done.
+
 ## Phases and tracks
 
 Silo repo: `/Users/polarzero/code/projects/microsandbox-workspaces`, crate `app/SiloUI/src-tauri` (`silo-ui`). Each Silo track works in its own git worktree under `~/silo-work/<track>` on branch `engine/<track>`. The coordinator reviews (Sol high) and merges into Silo `main`. Fjord tracks work in `/Users/polarzero/code/projects/lookout` on `main` directly; only one Fjord track at a time edits a given file.

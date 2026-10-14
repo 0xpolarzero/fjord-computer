@@ -1,0 +1,34 @@
+Found **one P1 security defect and eight follow-up defects**. References use the `f232e3d7` snapshot, including engine changes from `d8152632`. Read-only review: no tests ran, no files changed, and the supplied report remains unchanged.
+
+1. **P1: Missing local key permits removal without remote revocation.** [access.rs:2035](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:2035)  
+   When the private key is absent, removal skips the owner and succeeds even offline. Deleting, resetting or rotating the controller key does not remove its previous public key from the owner. **Fix:** retain the installed public key per device; preserve pending removal when revocation cannot be confirmed. Test an installed owner key followed by deletion of the controller’s private file.
+
+2. **P2: Successful revocation followed by cleanup failure strands removal.** [access.rs:2045](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:2045)  
+   A crash or local cleanup failure after revocation leaves the saved device, but retry requires authentication with the revoked key. Account-key fallback is not guaranteed. **Fix:** persist removal intent and owner confirmation before cleanup; resume confirmed local cleanup after restart. Preserve uncertainty after a lost acknowledgement. Test reply loss, cleanup failure and restart with the Silo key as the sole authorization.
+
+3. **P2: Concurrent GitHub sign-ins mix job and callback identities.** [access.rs:1032](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1032), [access.rs:1148](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1148)  
+   A second request overwrites `ACTIVE_CONNECT` before acquiring the engine’s flow lock. It can receive the first flow’s URL with the second job ID. A port collision then cancels both flows through shared cancellation state; another controller can relay job 2 into flow 1. **Fix:** admit one flow atomically and bind its job, generation, URL and listener together. Test overlapping local/remote connects and cancellation isolation.
+
+4. **P2: The mirror acknowledges an outcome that failed local persistence.** [access.rs:1501](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1501)  
+   `acknowledge` depends on receiving the owner outcome, while local `finish_with_result`/`finish_with_error` failures are discarded. The owner can delete its durable outcome while the controller retains only an in-memory pending copy; restart loses the result. **Fix:** acknowledge only after confirmed durable local storage, or preserve owner job identity through canonical get/cancel/acknowledge routing. Test failed persistence followed by restart.
+
+5. **P2: `push.start` can return a nonexistent job ID.** [access.rs:1601](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1601), [access.rs:1613](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1613)  
+   Both branches discard the operation response and return the requested ID. `start_result` turns preparation failures into data without necessarily creating a job; coalescing can return an existing operation with another ID. **Fix:** return the actual accepted identity and either reject preparation failures or persist them as terminal jobs. Test invalid targets, journal failures and duplicate active pushes locally and remotely.
+
+6. **P2: Blocking work remains on async workers.** [access.rs:1020](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1020), [access.rs:2035](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:2035)  
+   Local connect performs synchronous SQLite allocation and acquires credential locks that can span Keychain operations. Removal synchronously derives the public key through `ssh-keygen`. **Fix:** move both startup/key lookup paths into `spawn_blocking`. Test that stalled storage or credential access leaves unrelated requests responsive.
+
+7. **P2: Remote network changes are published with the controller’s identity.** [access.rs:1799](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1799), [access.rs:1910](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1910)  
+   Remote port changes publish owner state through the local event bus, which stamps the controller’s `deviceId`. Remote SSH changes instead publish the controller’s local network state. Clients can attribute access state to the wrong device. **Fix:** relay owner events with owner identity and sequencing. Test event envelopes against distinct controller/owner states.
+
+8. **P2: Owner job dispatch loses canonical error codes.** [access.rs:1118](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1118)  
+   Registry errors become strings, then `internal` bridge errors. Unknown cancellation loses `not_found`; acknowledgement of a running job loses `busy`; unknown lookup returns `null`. The local mapper also classifies cancellation by message substring. **Fix:** preserve typed errors across the adapter. Test exact wire codes, not merely `.is_err()`.
+
+9. **P3: Mirror-thread startup failure leaks the route and leaves an unfinished job.** [access.rs:1314](/Users/polarzero/silo-work/d-access/app/SiloUI/src-tauri/silod/src/methods/access.rs:1314)  
+   Spawn failure returns after creating the listener and durable controller job, without closing the route, cancelling the owner or finishing the local job. **Fix:** unwind all three resources; inject thread-start failure in a regression test.
+
+No demonstrated secret-value disclosure, wildcard bypass, third-device authorization pivot, or OAuth state/PKCE/SSRF bypass was found. Secrets travel through SSH stdin; journal markers exclude parameters; public secret responses exclude values. Wildcard acknowledgement is checked before controller routing and again on the owner. Owner dispatch executes locally, and callbacks target the active loopback listener.
+
+The remaining security evidence gaps are successful remote secret-save tests with sentinel leak checks, a complete two-engine callback test covering collisions/delayed headers/SSH failure, and connected-owner revocation tests covering existing sessions and reconnect races. Current relay tests bypass SSH establishment; rewriting `authorized_keys` does not prove existing-session termination.
+
+**Next action:** fix the per-device revocation identity and missing-key removal path first.
