@@ -75,6 +75,8 @@ final class ComputersModel {
     @ObservationIgnored private var isRecovering = false
     @ObservationIgnored private var wantsConnection = false
     @ObservationIgnored private var ownerRefreshID: UUID?
+    @ObservationIgnored var prepareComputerRemoval: (@MainActor (ComputerRow) async throws -> Void)?
+    @ObservationIgnored var computerRemovalCompleted: (@MainActor (ComputerRow) -> Void)?
 
     init(client: any EngineClient, initialInventory: ComputerInventory? = nil) {
         self.client = client
@@ -303,8 +305,15 @@ final class ComputersModel {
             actionError = EngineClientError.notFound("This computer no longer exists.").localizedDescription
             return
         }
+        if let prepareComputerRemoval {
+            do { try await prepareComputerRemoval(row) }
+            catch { actionError = error.localizedDescription; return }
+        }
         let expected: ComputerConfiguration? = if case .linux(let computer) = row { computer.configuration } else { nil }
-        await perform("Delete") { try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId, expected: expected)) }
+        let deleted = await perform("Delete") {
+            try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId, expected: expected))
+        }
+        if deleted { computerRemovalCompleted?(row) }
     }
     func showDisplay(_ computerId: String) async {
         actionError = nil
@@ -377,18 +386,21 @@ final class ComputersModel {
         await perform("Delete checkpoint") { try await self.client.checkpointsDelete(CheckpointDeleteRequest(computerId: computerId, checkpointId: checkpointId)) }
     }
 
-    private func perform<T>(_ label: String, _ action: () async throws -> T) async {
+    @discardableResult
+    private func perform<T>(_ label: String, _ action: () async throws -> T) async -> Bool {
         actionError = nil
         do {
             let accepted = try await action()
             let jobId: String? = if let job = accepted as? ComputerJob { job.jobId }
                 else if let job = accepted as? ComputerCreateResult { job.jobId }
                 else { nil }
-            guard let jobId else { return }
+            guard let jobId else { return false }
             jobActions[jobId] = label
-            presentJobOutcome(try await waitForFinish(jobId), action: label)
+            let outcome = try await waitForFinish(jobId)
+            presentJobOutcome(outcome, action: label)
+            return outcome.error == nil
         }
-        catch { actionError = error.localizedDescription }
+        catch { actionError = error.localizedDescription; return false }
     }
 
     private func inventoryForCreation() async throws -> ComputerInventory {

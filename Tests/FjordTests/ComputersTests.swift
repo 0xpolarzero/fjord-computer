@@ -87,6 +87,20 @@ import Testing
         #expect(model.actionError == nil)
     }
 
+    @Test func computerDeletionCleansRouterAliasesBeforeDeleteAndFinalizesAfterSuccess() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        var steps: [String] = []
+        model.prepareComputerRemoval = { _ in steps.append("cleanup") }
+        model.computerRemovalCompleted = { _ in steps.append("removed") }
+
+        await model.delete(MockEngineClient.failedID)
+
+        #expect(steps == ["cleanup", "removed"])
+        #expect(client.deleteRequests.count == 1)
+        #expect(model.actionError == nil)
+    }
+
     @Test func acceptedJobFailureIsShownBeforeItIsAcknowledged() async throws {
         let client = MockEngineClient()
         client.nextJobFailure = OperationJobError(code: "internal", message: "disk image could not be opened")

@@ -21,7 +21,7 @@ actor SiloGuestClient: GuestClient {
         guard let uid = UInt32(exactly: wire.uid), wire.home.hasPrefix("/"), !wire.home.contains("\0") else {
             throw GuestClientFailure.unavailable("Silo returned an invalid guest account.")
         }
-        let command = "# fjord-account-probe\nprintf 'node=%s\\nclaude=%s\\nos=%s\\narch=%s\\n' \"$(command -v node || true)\" \"$(command -v claude || true)\" \"$(uname -s)\" \"$(uname -m)\""
+        let command = "# fjord-account-probe\nprivate_node=\"$HOME/.local/share/fjord/runtime/node-\(GuestNodeRuntime.version)/bin/node\"; node=\"$(command -v node || true)\"; [ ! -x \"$private_node\" ] || node=\"$private_node\"; printf 'node=%s\\nclaude=%s\\nos=%s\\narch=%s\\n' \"$node\" \"$(command -v claude || true)\" \"$(uname -s)\" \"$(uname -m)\""
         let probe = try await engine.guestExec(Self.execParams(computer: computer,
             argv: ["/bin/sh", "-lc", command], cwd: wire.home, timeoutSeconds: 15))
         guard probe.exitCode == 0, let output = String(bytes: Self.data(probe.stdout), encoding: .utf8) else {
@@ -31,11 +31,12 @@ actor SiloGuestClient: GuestClient {
             guard let equals = line.firstIndex(of: "=") else { return nil }
             return (String(line[..<equals]), String(line[line.index(after: equals)...]))
         }, uniquingKeysWith: { _, newest in newest })
-        guard let node = values["node"], node.hasPrefix("/"),
+        guard let nodeValue = values["node"],
               let claude = values["claude"], claude.hasPrefix("/"),
               let system = values["os"], let architecture = values["arch"], !architecture.isEmpty else {
-            throw GuestClientFailure.unavailable("The guest needs Node 18+, Git, and Claude Code on its account PATH.")
+            throw GuestClientFailure.unavailable("The guest needs Git and Claude Code on its account PATH.")
         }
+        let node = nodeValue.hasPrefix("/") ? nodeValue : ""
         let operatingSystem: ComputerKind
         switch system {
         case "Linux": operatingSystem = .linux
@@ -50,6 +51,36 @@ actor SiloGuestClient: GuestClient {
         let wire = try await engine.guestExec(Self.execParams(computer: request.computer, argv: request.argv,
             cwd: request.cwd, timeoutSeconds: request.timeoutSeconds))
         return GuestExecResult(exitCode: wire.exitCode ?? -1, stdout: Self.data(wire.stdout), stderr: Self.data(wire.stderr))
+    }
+
+    func execStart(_ request: GuestExecStartRequest) async throws -> String {
+        guard let retainOutputBytes = UInt64(exactly: request.retainOutputBytes) else {
+            throw GuestClientFailure.unavailable("The requested guest job output limit is invalid.")
+        }
+        let wire = try await engine.guestExecStart(SiloWireGuestExecStartParams(argv: request.argv,
+            computerId: request.computer.computerId, cwd: request.cwd, deviceId: request.computer.deviceId,
+            retainOutputBytes: retainOutputBytes, stdinOpen: false))
+        return wire.jobId
+    }
+
+    func execGet(jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult {
+        let wire = try await engine.guestExecGet(SiloWireGuestExecGetParams(jobId: jobId, sinceSeq: sinceSequence))
+        var stdout = Data()
+        var stderr = Data()
+        var nextSequence = sinceSequence
+        for output in wire.output.sorted(by: { $0.seq < $1.seq }) {
+            if output.stream == .stdout { stdout.append(Self.data(output.data)) }
+            else { stderr.append(Self.data(output.data)) }
+            nextSequence = max(nextSequence, output.seq &+ 1)
+        }
+        let state: GuestExecJobState = switch wire.state {
+        case .running: .running
+        case .exited: .exited
+        case .cancelled: .cancelled
+        case .lost: .lost
+        }
+        return GuestExecJobResult(state: state, exitCode: wire.exitCode, stdout: stdout, stderr: stderr,
+                                  nextSequence: nextSequence)
     }
 
     func filesRead(computer: GuestReference, path: String, offset: Int64?, length: Int?) async throws -> GuestFileReadResult {

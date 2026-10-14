@@ -58,6 +58,8 @@ struct RouterState: Codable, Equatable {
     var guestPendingForms: [GuestPendingForm] = []
     /// A Router-off removal that could not reach its guest yet; retried on the next guest connection.
     var pendingGuestDisables: [SessionLocation] = []
+    /// A deleted computer's Desktop SSH entry or engine alias could not be removed yet; retried after reconnect.
+    var pendingGuestRemovals: [SessionLocation] = []
 
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
@@ -113,7 +115,7 @@ struct RouterState: Codable, Equatable {
     /// `chat` is read, never written (an older file's changes); `claudeSessionID`, and an older file's `autoContinue` and
     /// `autoContinueSessions`, are ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, handledTurns, replies, style, runsOnProjects, pendingDesktopStarts, guestRelayDeliveries, guestPendingForms, pendingGuestDisables
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, handledTurns, replies, style, runsOnProjects, pendingDesktopStarts, guestRelayDeliveries, guestPendingForms, pendingGuestDisables, pendingGuestRemovals
     }
 
     func encode(to encoder: Encoder) throws {
@@ -140,6 +142,7 @@ struct RouterState: Codable, Equatable {
         try c.encode(guestRelayDeliveries, forKey: .guestRelayDeliveries)
         try c.encode(guestPendingForms, forKey: .guestPendingForms)
         try c.encode(pendingGuestDisables, forKey: .pendingGuestDisables)
+        try c.encode(pendingGuestRemovals, forKey: .pendingGuestRemovals)
     }
 
     init(from decoder: Decoder) throws {
@@ -193,6 +196,7 @@ struct RouterState: Codable, Equatable {
         guestRelayDeliveries = list(.guestRelayDeliveries)
         guestPendingForms = list(.guestPendingForms)
         pendingGuestDisables = list(.pendingGuestDisables)
+        pendingGuestRemovals = list(.pendingGuestRemovals)
         linkUnlinkedChanges(legacy: legacy)
         dropped = lost
     }

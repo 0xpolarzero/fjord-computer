@@ -22,7 +22,7 @@ struct GuestRouterInstaller: Sendable {
 
         var errorDescription: String? {
             switch self {
-            case .invalidAccount: "The guest account doesn't have absolute home, Node, and Claude paths."
+            case .invalidAccount: "The guest account doesn't have an absolute home and Claude path, or Node provisioning did not produce an absolute executable."
             case .command(let command, let code, let detail): "Guest command \(command) failed (exit \(code)): \(detail)"
             case .invalidSettings(let path): "\(path) isn't valid JSON; Fjord left it alone."
             case .incompatibleSettings(let path): "\(path) has an incompatible hooks.PermissionRequest value; Fjord left it alone."
@@ -37,14 +37,19 @@ struct GuestRouterInstaller: Sendable {
 
     func install(computer: GuestReference,
                  activationAllowed: @escaping @MainActor @Sendable () -> Bool = { true }) async throws -> Installed {
-        let account = try await client.account(for: computer)
-        guard account.home.hasPrefix("/"), account.nodeExecutable.hasPrefix("/"), account.claudeExecutable.hasPrefix("/") else {
+        var account = try await client.account(for: computer)
+        guard account.home.hasPrefix("/"), account.claudeExecutable.hasPrefix("/") else {
             throw Failure.invalidAccount
         }
-        try await check(account.nodeExecutable, minimumNodeMajor: 18, computer: computer, cwd: account.home)
         try await check(account.claudeExecutable, minimumNodeMajor: nil, computer: computer, cwd: account.home)
         let git = try await client.exec(GuestExecRequest(computer: computer, argv: ["git", "--version"], cwd: account.home, timeoutSeconds: 3))
         guard git.succeeded else { throw Failure.prerequisite("Git is unavailable in the guest PATH") }
+        if try await hasSupportedNode(account, computer: computer) == false {
+            try await GuestNodeRuntime.provision(client: client, computer: computer, account: account)
+            account = try await client.account(for: computer)
+        }
+        guard account.nodeExecutable.hasPrefix("/") else { throw Failure.invalidAccount }
+        try await check(account.nodeExecutable, minimumNodeMajor: 18, computer: computer, cwd: account.home)
         let paths = try GuestRouterPaths(home: account.home)
         let version = ClaudePlugin.version(app: "fjord-guest-1")
         let previous = try? await client.filesRead(computer: computer, path: GuestRouterPaths.join(paths.root, "install-version"), offset: nil, length: nil)
@@ -162,6 +167,17 @@ struct GuestRouterInstaller: Sendable {
               let major = Int(text[match].drop(while: { !$0.isNumber })), major >= minimumNodeMajor else {
             throw Failure.prerequisite("Node \(minimumNodeMajor) or newer is required in the guest")
         }
+    }
+
+    private func hasSupportedNode(_ account: GuestAccount, computer: GuestReference) async throws -> Bool {
+        guard account.nodeExecutable.hasPrefix("/") else { return false }
+        let result = try await client.exec(GuestExecRequest(computer: computer, argv: [account.nodeExecutable, "--version"],
+                                                           cwd: account.home, timeoutSeconds: 3))
+        guard result.succeeded else { return false }
+        let text = String(data: result.stdout.isEmpty ? result.stderr : result.stdout, encoding: .utf8) ?? ""
+        guard let match = text.range(of: #"^v?(\d+)"#, options: .regularExpression),
+              let major = Int(text[match].drop(while: { !$0.isNumber })) else { return false }
+        return major >= 18
     }
 }
 

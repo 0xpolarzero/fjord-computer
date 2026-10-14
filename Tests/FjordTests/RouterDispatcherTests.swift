@@ -1516,6 +1516,28 @@ import Testing
         #expect(RouterDispatcher.repoWorld(pinned, store: s) == nil)
     }
 
+    @Test func notificationRepoWorldIncludesMatchedGuestSessionThroughItsSourceProject() async {
+        let (store, _, _) = setup()
+        await cloned(store)
+        let source = "/code/lookout"
+        store.setRunsOnPlacement(.computer(deviceId: "owner-1", computerId: "computer-1", guestPath: "/workspace/lookout"),
+                                 for: source)
+        let project = store.runsOnProject(for: source)
+        let guest = ClaudeSession(id: "local_guest", title: "Guest build", folder: "/workspace/lookout",
+            lastActivity: Date().addingTimeInterval(60), running: true, cliID: "cli-guest", sshHost: "ssh-computer-1")
+        store.claudeSessions[guest.id] = guest
+        store.router.pendingDesktopStarts = [PendingDesktopStart(projectID: project.id,
+            location: .computer(deviceId: "owner-1", computerId: "computer-1"), alias: "ssh-computer-1",
+            folder: "/workspace/lookout", prompt: "Start", state: .matched,
+            desktopSessionID: guest.id, guestSessionID: "cli-guest")]
+        let (_, context) = tagged(store, [.pointer(.notification("pr:o/lookout#7"))])
+
+        let world = RouterDispatcher.repoWorld(context, store: store)
+
+        #expect(world?.clones == ["/code/lookout", "/code/lookout-2"])
+        #expect(world?.targets.first == "session:local_guest")
+    }
+
     @Test func anActionsMessageGoesOnlyToASessionAndWaitsForYouWhenJevIsntSure() async throws {
         let (s, d, f) = setup()
         await cloned(s)

@@ -87,6 +87,17 @@ enum AppWindowShots {
             }
         }),
         Shot(name: "router") { _ in .router },
+        Shot(name: "router-placement-popover", destination: { _ in .router }, compose: { model, store in
+            model.draft = "@lookout"
+            model.caret = nil
+        }, prepare: { store in
+            store.routerPlacementShot = true
+            guard let engine = store.engineClient as? MockEngineClient else { return }
+            let ownerID = "shot-owner"
+            engine.connectedDevices = [SiloWireDevice(address: "dev@example.test", id: ownerID, name: "Dev box")]
+            let inventory = engine.inventory
+            engine.ownerInventories[ownerID] = inventory
+        }),
         Shot(name: "router-composing", destination: { _ in .router }, compose: { model, store in
             let folder = store.knownFolders.first { !$0.isEmpty } ?? "/Users/me/code/lookout"
             model.pointers = [.project(folder)]

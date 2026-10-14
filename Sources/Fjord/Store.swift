@@ -12,6 +12,7 @@ final class Store {
     @ObservationIgnored let engineClient: any EngineClient
     @ObservationIgnored let hasEngineConnection: Bool
     @ObservationIgnored let computers: ComputersModel
+    @ObservationIgnored var routerPlacementShot = false
 
     init(engineClient: (any EngineClient)? = nil) {
         let socketRequested = CommandLine.arguments.contains("--socket-client")
@@ -25,7 +26,20 @@ final class Store {
         let selectedClient = client ?? UnavailableEngineClient()
         self.engineClient = selectedClient
         self.hasEngineConnection = client != nil
-        self.computers = ComputersModel(client: selectedClient, initialInventory: (selectedClient as? MockEngineClient)?.inventory)
+        let computers = ComputersModel(client: selectedClient, initialInventory: (selectedClient as? MockEngineClient)?.inventory)
+        self.computers = computers
+        if selectedClient is SocketEngineClient {
+            computers.prepareComputerRemoval = { [weak self] row in
+                guard let self else { return }
+                try await GuestRouterRuntime.shared.prepareComputerRemoval(store: self,
+                    computer: GuestReference(deviceId: nil, computerId: row.id))
+            }
+            computers.computerRemovalCompleted = { [weak self] row in
+                guard let self else { return }
+                GuestRouterRuntime.shared.computerRemoved(store: self,
+                    computer: GuestReference(deviceId: nil, computerId: row.id))
+            }
+        }
     }
 
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).

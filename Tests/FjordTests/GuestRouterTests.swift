@@ -61,6 +61,10 @@ private struct AccountPausingGuestClient: GuestClient {
     }
     func sshAliasRemove(computer: GuestReference) async throws { try await base.sshAliasRemove(computer: computer) }
     func exec(_ request: GuestExecRequest) async throws -> GuestExecResult { try await base.exec(request) }
+    func execStart(_ request: GuestExecStartRequest) async throws -> String { try await base.execStart(request) }
+    func execGet(jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult {
+        try await base.execGet(jobId: jobId, sinceSequence: sinceSequence)
+    }
 }
 
 @Suite(.serialized) struct GuestRouterTests {
@@ -131,6 +135,29 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(await guest.filesSnapshot(for: computer)[paths.key] == nil)
         #expect(await guest.filesSnapshot(for: computer)[GuestRouterPaths.join(paths.forms, FormBridge.marker)] == nil)
         #expect(await guest.filesSnapshot(for: computer)[GuestRouterPaths.join(paths.presence, "cli-1")] == nil)
+    }
+
+    @Test func guestInstallerProvisionsPinnedOfficialNodeWhenNodeIsMissing() async throws {
+        let missingNode = GuestAccount(home: account.home, uid: account.uid, operatingSystem: .linux,
+            architecture: "aarch64", nodeExecutable: "", claudeExecutable: account.claudeExecutable)
+        let guest = MockGuestClient(accounts: [computer: missingNode])
+
+        let installed = try await GuestRouterInstaller(client: guest).install(computer: computer)
+
+        let artifact = try #require(GuestNodeRuntime.artifact(operatingSystem: .linux, architecture: "aarch64"))
+        let request = try #require(await guest.execStartRecords().first)
+        #expect(request.argv.contains(artifact.url))
+        #expect(request.argv.contains(artifact.sha256))
+        #expect(request.retainOutputBytes == GuestNodeRuntime.outputLimit)
+        let files = await guest.filesSnapshot(for: computer)
+        let script = try #require(files[request.argv[1]])
+        let source = try #require(String(data: script, encoding: .utf8))
+        let hookData = try #require(files[installed.paths.hook])
+        let hook = try #require(String(data: hookData, encoding: .utf8))
+        #expect(source.contains("sha256sum") && source.contains("shasum -a 256"))
+        #expect(source.contains("curl --fail --location"))
+        #expect(source.contains("trap 'exit 143' TERM") && source.contains("mv \"$backup\" \"$install\""))
+        #expect(hook.contains(GuestNodeRuntime.nodePath(home: account.home)))
     }
 
     @Test func guestFormHookExitsQuietlyOnTerminationWhileStdinIsHeldOpen() throws {
@@ -977,6 +1004,8 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(store.claudeActivity[desktopID]?.text == "Writing")
         #expect(store.guestExecutionStates[desktopID]?.availability == .live)
         #expect(store.guestExecutionStates[desktopID]?.isRunning == false)
+        let matchedSession = try #require(store.claudeSessions[desktopID])
+        #expect(await store.finalMessage(matchedSession) == "Done")
 
         var mirror = ClaudeSession(id: desktopID, title: "Widget", folder: "/workspace/repo", lastActivity: opened,
                                   running: true, cliID: "mirror-cli")
@@ -1177,11 +1206,50 @@ private struct AccountPausingGuestClient: GuestClient {
         var state = RouterState()
         state.guestPendingForms = [pending]
         state.pendingGuestDisables = [pending.location]
+        state.pendingGuestRemovals = [pending.location]
         GuestRelayLedger.upsert(receipt, into: &state.guestRelayDeliveries)
         let decoded = try JSONDecoder().decode(RouterState.self, from: JSONEncoder().encode(state))
 
         #expect(decoded.guestPendingForms == [pending])
         #expect(decoded.guestRelayDeliveries == [receipt])
         #expect(decoded.pendingGuestDisables == [pending.location])
+        #expect(decoded.pendingGuestRemovals == [pending.location])
+    }
+
+    @MainActor @Test func guestAliasCleanupRetriesAfterEngineReconnectAndCleansDesktopSettings() async throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-guest-removal-\(UUID().uuidString)")
+        let claudeDir = tempHome.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        defer {
+            GuestRouterRuntime.shared.stopAll()
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+        let computer = self.computer
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        let settingsComputer = ClaudeSSHSettings.Computer(deviceId: computer.deviceId, computerId: computer.computerId,
+            computerName: "Linux dev", ownerName: "Owner", alias: "ssh-computer-1")
+        let rawSettings = try JSONSerialization.data(withJSONObject: [
+            "sshConfigs": [settingsComputer.json, ["id": "mine", "name": "Keep me", "sshHost": "other"]],
+        ])
+        try rawSettings.write(to: claudeDir.appendingPathComponent("settings.json"))
+        let settings = ClaudeSSHSettings(claudeDir: claudeDir)
+        let guest = client()
+        _ = try await guest.sshAliasEnsure(computer: computer, installInclude: true)
+        await guest.failNextAliasRemoval()
+        let engine = engineWithComputer(state: .stopped)
+        let store = Store(engineClient: engine)
+        store.stateFile = tempHome.appendingPathComponent("state.json")
+        store.persists = false
+        store.router.pendingGuestRemovals = [location]
+
+        await GuestRouterRuntime.shared.rehydrate(store: store, client: guest, sshSettings: settings)
+
+        #expect(store.router.pendingGuestRemovals == [location])
+        let firstPass = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: settings.settings)) as? [String: Any])
+        #expect((firstPass["sshConfigs"] as? [[String: String]])?.map { $0["id"] } == ["mine"])
+        engine.deliver(.reconnected)
+        await waitUntil { store.router.pendingGuestRemovals.isEmpty }
+        let calls = await guest.callLog()
+        #expect(calls.filter { $0 == "ssh-alias:remove:\(computer.key)" }.count == 2)
     }
 }

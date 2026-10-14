@@ -522,6 +522,14 @@ final class SocketEngineClient: EngineClient {
         try await invokeGuest(SiloGeneratedMethods.guestExec(params))
     }
 
+    func guestExecStart(_ params: SiloWireGuestExecStartParams) async throws -> SiloWireJobStartResult {
+        try await invokeGuest(SiloGeneratedMethods.guestExecStart(params))
+    }
+
+    func guestExecGet(_ params: SiloWireGuestExecGetParams) async throws -> SiloWireGuestExecGetResult {
+        try await invokeGuest(SiloGeneratedMethods.guestExecGet(params))
+    }
+
     func guestFilesList(_ params: SiloWireGuestFilesListParams) async throws -> SiloWireGuestFilesListResult {
         try await invokeGuest(SiloGeneratedMethods.guestFilesList(params), path: params.path)
     }

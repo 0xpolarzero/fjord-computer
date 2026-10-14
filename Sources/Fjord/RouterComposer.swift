@@ -442,7 +442,7 @@ struct MentionList: View {
                     .buttonStyle(.plain)
                     .onHover { if $0 { hover?(i) } }
                     if let folder = row.folder, let store {
-                        RunsOnProjectMenu(store: store, folder: folder)
+                        RunsOnProjectMenu(store: store, folder: folder, opensGuestFolderPromptForShot: store.routerPlacementShot)
                             .padding(.trailing, 3)
                     }
                 }

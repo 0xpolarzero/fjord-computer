@@ -4,6 +4,7 @@ import SwiftUI
 struct RunsOnProjectMenu: View {
     let store: Store
     let folder: String
+    var opensGuestFolderPromptForShot = false
     @State private var computer: ComputerPlacementOption?
     @State private var guestPath = ""
     @State private var asksForGuestFolder = false
@@ -50,9 +51,29 @@ struct RunsOnProjectMenu: View {
         .menuStyle(.borderlessButton)
         .help("Runs on: \(placementTitle)")
         .accessibilityLabel("Runs on: \(placementTitle)")
-        .task { await store.computers.refreshPlacementInventories() }
-        .popover(isPresented: $asksForGuestFolder, arrowEdge: .trailing) {
+        .task {
+            await store.computers.refreshPlacementInventories()
+            guard opensGuestFolderPromptForShot,
+                  let option = store.computers.placementOptions.first(where: { $0.deviceId != nil })
+                    ?? store.computers.placementOptions.first else { return }
+            computer = option
+            guestPath = "/workspace/lookout"
+            asksForGuestFolder = true
+        }
+        .popover(isPresented: Binding(get: { asksForGuestFolder && !opensGuestFolderPromptForShot },
+                                      set: { if !$0 { asksForGuestFolder = false } }), arrowEdge: .trailing) {
             guestFolderPrompt
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if opensGuestFolderPromptForShot && asksForGuestFolder {
+                guestFolderPrompt
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(CDS.Surface.s3))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
+                    .shadow(color: CDS.PanelShadow.near.color, radius: CDS.PanelShadow.near.radius,
+                            y: CDS.PanelShadow.near.y)
+                    .offset(x: -40, y: -16)
+                    .zIndex(1)
+            }
         }
     }
 

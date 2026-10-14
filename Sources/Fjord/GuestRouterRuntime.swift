@@ -12,6 +12,10 @@ import Foundation
     private var generatedClient: SiloGuestClient?
     private var watchers: [String: Task<Void, Never>] = [:]
     private var leaseChecks: [String: Task<Void, Never>] = [:]
+    private weak var reconciliationStore: Store?
+    private var reconciliationClient: (any EngineClient)?
+    private var reconciliationSubscription: String?
+    private var reconciliationSettings = ClaudeSSHSettings()
     private var evidence: [String: [GuestSessionEvidence]] = [:]
     private var activeStartKeys: Set<String> = []
     private var operationTails: [String: Task<Void, Never>] = [:]
@@ -101,10 +105,13 @@ import Foundation
     }
 
     /// Restores guest clients and watches from saved placements and matched starts after the local Router starts.
-    func rehydrate(store: Store, client override: (any GuestClient)? = nil) async {
+    func rehydrate(store: Store, client override: (any GuestClient)? = nil,
+                   sshSettings: ClaudeSSHSettings = ClaudeSSHSettings()) async {
         self.store = store
+        reconciliationSettings = sshSettings
+        await startRemovalReconciliation(store: store)
         let router = store.router
-        var locations = router.pendingGuestDisables
+        var locations = router.pendingGuestDisables + router.pendingGuestRemovals
         if store.routerOn {
             locations += router.runsOnProjects.map { $0.placement.location }
             locations += router.pendingDesktopStarts.map(\.location)
@@ -116,6 +123,15 @@ import Foundation
             let computer = GuestReference(deviceId: deviceId, computerId: computerId)
             guard let client = override ?? guestClient(for: location) else { continue }
             registerInstallationTarget(store: store, client: client, computer: computer)
+            if store.router.pendingGuestRemovals.contains(location) {
+                do {
+                    try await serialized(computer) { [self] in
+                        try await reconcileGuestRemoval(computer: computer, client: client, settings: sshSettings)
+                    }
+                } catch {
+                    store.routerHookError = "Guest SSH cleanup is pending for \(computer.computerId): \(error.localizedDescription)"
+                }
+            }
             if store.routerOn {
                 do { try await startWatching(store: store, client: client, computer: computer) }
                 catch {
@@ -127,6 +143,67 @@ import Foundation
                 catch { store.routerHookError = "Guest Router disable is pending for \(computer.computerId): \(error.localizedDescription)" }
             }
         }
+    }
+
+    /// Records cleanup before changing either side, so a failed engine call is retried after the next reconnect.
+    func prepareComputerRemoval(store: Store, computer: GuestReference,
+                               sshSettings: ClaudeSSHSettings = ClaudeSSHSettings()) async throws {
+        self.store = store
+        reconciliationSettings = sshSettings
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        if !store.router.pendingGuestRemovals.contains(location) {
+            var state = store.router
+            state.pendingGuestRemovals.append(location)
+            store.router = state
+        }
+        guard let client = guestClient(for: location) else {
+            try sshSettings.remove(deviceId: computer.deviceId, computerId: computer.computerId)
+            clearPendingGuestRemoval(location)
+            return
+        }
+        registerInstallationTarget(store: store, client: client, computer: computer)
+        await startRemovalReconciliation(store: store)
+        try await serialized(computer) { [self] in
+            try await reconcileGuestRemoval(computer: computer, client: client, settings: sshSettings)
+        }
+    }
+
+    /// Drops in-memory readers after the engine confirms deletion and returns future starts to This Mac.
+    func computerRemoved(store: Store, computer: GuestReference) {
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        watchers[computer.key]?.cancel()
+        leaseChecks[computer.key]?.cancel()
+        watchers[computer.key] = nil
+        leaseChecks[computer.key] = nil
+        clients[computer.key] = nil
+        computers[computer.key] = nil
+        evidence[computer.key] = nil
+
+        var state = store.router
+        state.runsOnProjects = state.runsOnProjects.map { project in
+            guard project.placement.location == location else { return project }
+            var project = project
+            project.placement = .thisMac(path: project.sourceFolder)
+            return project
+        }
+        state.pendingDesktopStarts.removeAll { $0.location == location && $0.state == .readyInClaude }
+        state.guestPendingForms.removeAll { $0.location == location }
+        state.pendingGuestDisables.removeAll { $0 == location }
+        store.router = state
+
+        for pending in state.pendingDesktopStarts where pending.location == location && pending.state == .matched {
+            guard let desktopID = pending.desktopSessionID, let cliID = pending.guestSessionID else { continue }
+            store.guestExecutionStates[desktopID] = GuestExecutionState(cliSessionID: cliID, availability: .dead,
+                isRunning: false, activity: nil)
+            if var session = store.claudeSessions[desktopID] {
+                session.running = false
+                session.cliID = cliID
+                store.claudeSessions[desktopID] = session
+            }
+            store.claudeActivity[desktopID] = nil
+            store.claudeTasks[desktopID] = nil
+        }
+        store.feedRouter()
     }
 
     func disableAll() {
@@ -171,6 +248,70 @@ import Foundation
         guard store?.router.pendingGuestDisables.contains(location) == true else { return }
         try await GuestRouterInstaller(client: client).disable(computer: computer)
         clearPendingDisable(computer)
+    }
+
+    private func reconcileGuestRemoval(computer: GuestReference, client: any GuestClient,
+                                       settings: ClaudeSSHSettings) async throws {
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        try settings.remove(deviceId: computer.deviceId, computerId: computer.computerId)
+        try await client.sshAliasRemove(computer: computer)
+        clearPendingGuestRemoval(location)
+    }
+
+    private func reconcilePendingGuestRemovals(store: Store) async {
+        for location in store.router.pendingGuestRemovals {
+            guard case .computer(let deviceId, let computerId) = location,
+                  let client = guestClient(for: location) else { continue }
+            let computer = GuestReference(deviceId: deviceId, computerId: computerId)
+            do {
+                try await serialized(computer) { [self] in
+                    try await reconcileGuestRemoval(computer: computer, client: client, settings: reconciliationSettings)
+                }
+            } catch {
+                store.routerHookError = "Guest SSH cleanup is pending for \(computer.computerId): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func startRemovalReconciliation(store: Store) async {
+        guard !store.router.pendingGuestRemovals.isEmpty else { return }
+        if reconciliationStore === store, reconciliationSubscription != nil { return }
+        if let previous = reconciliationClient, let reconciliationSubscription {
+            await previous.eventsUnsubscribe(subscription: reconciliationSubscription)
+        }
+        reconciliationStore = store
+        reconciliationClient = store.engineClient
+        do {
+            let subscription = try await store.engineClient.eventsSubscribe(events: ["connections.devices.changed"]) {
+                [weak self, weak store] delivery in
+                let shouldRetry: Bool
+                switch delivery {
+                case .reconnected, .event(_, .connectionsDevicesChanged): shouldRetry = true
+                default: shouldRetry = false
+                }
+                guard shouldRetry else { return }
+                Task { @MainActor [weak self, weak store] in
+                    guard let self, let store else { return }
+                    await self.reconcilePendingGuestRemovals(store: store)
+                }
+            }
+            reconciliationSubscription = subscription
+        } catch {
+            store.routerHookError = "Guest SSH cleanup will retry on the next engine connection: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearPendingGuestRemoval(_ location: SessionLocation) {
+        guard let store else { return }
+        var state = store.router
+        state.pendingGuestRemovals.removeAll { $0 == location }
+        store.router = state
+        guard state.pendingGuestRemovals.isEmpty, reconciliationStore === store,
+              let reconciliationClient, let reconciliationSubscription else { return }
+        self.reconciliationSubscription = nil
+        self.reconciliationClient = nil
+        self.reconciliationStore = nil
+        Task { @MainActor in await reconciliationClient.eventsUnsubscribe(subscription: reconciliationSubscription) }
     }
 
     private func serialized<T: Sendable>(_ computer: GuestReference,

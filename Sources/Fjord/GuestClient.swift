@@ -30,6 +30,23 @@ struct GuestExecRequest: Equatable, Sendable {
     var timeoutSeconds: Int
 }
 
+struct GuestExecStartRequest: Equatable, Sendable {
+    var computer: GuestReference
+    var argv: [String]
+    var cwd: String
+    var retainOutputBytes: Int = 64 * 1024
+}
+
+enum GuestExecJobState: Equatable, Sendable { case running, exited, cancelled, lost }
+
+struct GuestExecJobResult: Equatable, Sendable {
+    var state: GuestExecJobState
+    var exitCode: Int32?
+    var stdout: Data
+    var stderr: Data
+    var nextSequence: UInt64
+}
+
 struct GuestExecResult: Equatable, Sendable {
     var exitCode: Int32
     var stdout: Data
@@ -122,6 +139,8 @@ protocol GuestClient: Sendable {
     func sshAliasEnsure(computer: GuestReference, installInclude: Bool) async throws -> GuestSSHAlias
     func sshAliasRemove(computer: GuestReference) async throws
     func exec(_ request: GuestExecRequest) async throws -> GuestExecResult
+    func execStart(_ request: GuestExecStartRequest) async throws -> String
+    func execGet(jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult
 }
 
 /// Deterministic guest filesystem and call recorder for Router feature tests and window shots.
@@ -147,8 +166,12 @@ actor MockGuestClient: GuestClient {
     private var recordedWrites: [GuestFileWriteRequest] = []
     private var recordedRemovals: [(GuestReference, [String])] = []
     private var recordedExecs: [GuestExecRequest] = []
+    private var recordedExecStarts: [GuestExecStartRequest] = []
+    private var nextAliasRemovalFailure: GuestClientFailure?
     private var operationLog: [String] = []
     private var execResults: [String: GuestExecResult] = [:]
+    private var execJobResults: [String: GuestExecJobResult] = [:]
+    private var nextExecJobID = 1
     private var readFailures: [String: [GuestClientFailure]] = [:]
     private var postAdmissionWriteFailures: [String: GuestClientFailure] = [:]
     private var acknowledgementsOnAdmission: [String: (path: String, data: Data, hintPath: String?)] = [:]
@@ -264,6 +287,7 @@ actor MockGuestClient: GuestClient {
     }
 
     func sshAliasEnsure(computer: GuestReference, installInclude: Bool) throws -> GuestSSHAlias {
+        operationLog.append("ssh-alias:ensure:\(computer.key)")
         _ = installInclude
         guard accounts[computer.key] != nil else { throw GuestClientFailure.unavailable("No mock account for \(computer.key)") }
         if let found = aliases[computer.key] { return found }
@@ -273,7 +297,14 @@ actor MockGuestClient: GuestClient {
         return result
     }
 
-    func sshAliasRemove(computer: GuestReference) { aliases[computer.key] = nil }
+    func sshAliasRemove(computer: GuestReference) throws {
+        operationLog.append("ssh-alias:remove:\(computer.key)")
+        if let failure = nextAliasRemovalFailure {
+            nextAliasRemovalFailure = nil
+            throw failure
+        }
+        aliases[computer.key] = nil
+    }
 
     func exec(_ request: GuestExecRequest) async throws -> GuestExecResult {
         _ = try account(for: request.computer)
@@ -290,9 +321,30 @@ actor MockGuestClient: GuestClient {
         return execResults[key] ?? execResult
     }
 
+    func execStart(_ request: GuestExecStartRequest) throws -> String {
+        _ = try account(for: request.computer)
+        recordedExecStarts.append(request)
+        if request.argv.contains(where: { $0.hasSuffix("provision-runtime.sh") }),
+           let root = request.argv.last, root.hasPrefix("/"), var account = accounts[request.computer.key] {
+            account.nodeExecutable = GuestRouterPaths.join(root, "bin/node")
+            accounts[request.computer.key] = account
+        }
+        defer { nextExecJobID += 1 }
+        return "guest-job-\(nextExecJobID)"
+    }
+
+    func execGet(jobId: String, sinceSequence: UInt64) throws -> GuestExecJobResult {
+        _ = sinceSequence
+        return execJobResults[jobId] ?? GuestExecJobResult(state: .exited, exitCode: 0,
+                                                            stdout: Data(), stderr: Data(), nextSequence: 0)
+    }
+
     func setExecResult(_ result: GuestExecResult, argv: [String]) {
         execResults[argv.joined(separator: "\u{1f}")] = result
     }
+
+    func setExecJobResult(_ result: GuestExecJobResult, jobId: String) { execJobResults[jobId] = result }
+    func failNextAliasRemoval() { nextAliasRemovalFailure = .unavailable("The guest alias service is temporarily disconnected.") }
 
     func failNextRead(computer: GuestReference, path: String, with failure: GuestClientFailure) {
         readFailures[Self.fileKey(computer, path), default: []].append(failure)
@@ -324,6 +376,7 @@ actor MockGuestClient: GuestClient {
     func writeRecords() -> [GuestFileWriteRequest] { recordedWrites }
     func removalRecords() -> [(GuestReference, [String])] { recordedRemovals }
     func execRecords() -> [GuestExecRequest] { recordedExecs }
+    func execStartRecords() -> [GuestExecStartRequest] { recordedExecStarts }
     func callLog() -> [String] { operationLog }
     func filesSnapshot(for computer: GuestReference) -> [String: Data] {
         let prefix = computer.key + ":"
