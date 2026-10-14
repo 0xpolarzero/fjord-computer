@@ -354,7 +354,10 @@ final class CodeFolderScanner {
         clones = repos.filter { !bare.contains($0.key) }
         projectSet = sessionFolders.union(clones.keys)
         let list = CodeFolders.sorted(projectSet.subtracting([""]))
-        if list != projectFolders { projectFolders = list }
+        if list != projectFolders {
+            projectFolders = list
+            store?.corpusChanged()
+        }
         var byRepo: [String: [String]] = [:]
         for folder in list {
             // What a scan read of a clone is taken over a session's own read: the same file, read later or at once.

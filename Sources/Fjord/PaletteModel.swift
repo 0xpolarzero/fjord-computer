@@ -111,6 +111,7 @@ final class PaletteModel {
     @ObservationIgnored private var pointerMoved = false
     @ObservationIgnored private var lastPointer: CGPoint?
     @ObservationIgnored private var lastOffset: CGFloat?
+    @ObservationIgnored private var reloadPending = false
     @ObservationIgnored private weak var previousWindow: NSWindow?
     @ObservationIgnored private weak var previousResponder: NSResponder?
     @ObservationIgnored private var announced = Date.distantPast
@@ -186,39 +187,36 @@ final class PaletteModel {
     /// Whether the computers' quit dialog is up, which the palette gives way to.
     var quitPromptUp: Bool { store.computers.quitPrompt != nil }
 
-    /// Everything the sources make items of, boiled down to a number that moves when it does (a card archived, a session
-    /// titled or made, a computer, a snippet, a category, a tool switched): the open palette lists the data again then.
-    var sourceStamp: Int {
-        var hasher = Hasher()
-        hasher.combine(store.inboxRevision)
-        hasher.combine(store.routerOn)
-        hasher.combine(store.tools)
-        for card in store.router.cards {
-            hasher.combine(card.id)
-            hasher.combine(card.addressedAt != nil)
-            hasher.combine(card.title)
-        }
-        // Dictionaries have no order: each session adds its own hash.
-        var sessions = 0
-        for (id, session) in store.claudeSessions {
-            sessions &+= Hasher.hash(id, session.title, session.running, session.isArchived, session.folder)
-        }
-        hasher.combine(sessions)
+    /// What the sources are made of, as numbers that move when it does: the store's revisions (the inbox and its categories,
+    /// the Router's cards, Claude's sessions and agents, the actions' runs, the snippets, the project folders), the Router's
+    /// and the tools' switches, whether the Router can send, and the computers (a few). Cheap, so the view can watch it.
+    struct Stamp: Equatable {
+        var inbox: Int, display: Int, router: Int, corpus: Int
+        var routerOn: Bool, canSend: Bool, tools: Set<Tool>
+        var computers: Int
+    }
+
+    var sourceStamp: Stamp {
+        var computers = Hasher()
         for computer in store.computers.inventory?.allComputers ?? [] {
-            hasher.combine(computer.id)
-            hasher.combine(computer.name)
-            hasher.combine(computer.displayState.title)
+            computers.combine(computer.id)
+            computers.combine(computer.name)
+            computers.combine(computer.displayState.title)
         }
-        for snippet in store.snippets {
-            hasher.combine(snippet.id)
-            hasher.combine(snippet.name)
+        return Stamp(inbox: store.inboxRevision, display: store.inboxDisplayRevision, router: store.routerRevision,
+                     corpus: store.corpusRevision, routerOn: store.routerOn, canSend: routerModel.canSend(store),
+                     tools: store.tools, computers: computers.finalize())
+    }
+
+    /// Lists the data again soon, once for the changes that come together (Claude's sessions change by the second).
+    func reloadSoon() {
+        guard isOpen, !reloadPending else { return }
+        reloadPending = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            self?.reloadPending = false
+            self?.reload()
         }
-        for category in store.categories {
-            hasher.combine(category.id)
-            hasher.combine(category.name)
-            hasher.combine(category.hidden)
-        }
-        return hasher.finalize()
     }
 
     // MARK: Keys
@@ -413,8 +411,9 @@ final class PaletteModel {
         var result: [PaletteSection] = []
         let needs = hits(needsYou)
         if !needs.isEmpty { result.append(PaletteSection(id: "needs", title: "Needs you", hits: needs)) }
-        let recent = hits((usage?.recent(Self.recents * 4) ?? []).compactMap { byID[$0] }.filter { !seen.contains($0.id) })
-            .prefix(Self.recents)
+        // The whole history, newest first: picks that are gone (an addressed card) don't hide older ones that are not.
+        let recent = hits((usage?.recent(Int.max) ?? []).lazy.compactMap { self.byID[$0] }.filter { !seen.contains($0.id) }
+            .prefix(Self.recents).map { $0 })
         if !recent.isEmpty { result.append(PaletteSection(id: "recents", title: "Recents", hits: Array(recent))) }
         if result.isEmpty {
             let pages = hits(items.filter { $0.kind == .page })
@@ -545,14 +544,5 @@ final class PaletteModel {
         close()
         let run = action.run
         later(run)
-    }
-}
-
-private extension Hasher {
-    /// One hash of a few values.
-    static func hash(_ values: AnyHashable...) -> Int {
-        var hasher = Hasher()
-        values.forEach { hasher.combine($0) }
-        return hasher.finalize()
     }
 }

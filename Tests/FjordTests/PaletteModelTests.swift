@@ -410,7 +410,49 @@ import Testing
         let withSnippet = model.sourceStamp
         #expect(withSnippet != before)
         store.categories[0].name = "Renamed"
-        #expect(model.sourceStamp != withSnippet)
+        let renamed = model.sourceStamp
+        #expect(renamed != withSnippet)
+        // A card reclassified (same id, title and addressed state), a session, the action runs, the Router's switch.
+        var card = RouterCard(id: "s#t1", sessionID: "s", kind: .question, title: "Same", folder: "/code/web", text: "?",
+                              createdAt: Date())
+        store.router.cards = [card]
+        let carded = model.sourceStamp
+        #expect(carded != renamed)
+        card.kind = .stuck
+        store.router.cards = [card]
+        #expect(model.sourceStamp != carded)
+        let sessioned = model.sourceStamp
+        store.claudeSessions["x"] = ClaudeSession(id: "x", title: "T", folder: "/code/web", lastActivity: Date())
+        #expect(model.sourceStamp != sessioned)
+        let ledgered = model.sourceStamp
+        store.actionLedger = ActionLedger()
+        #expect(model.sourceStamp != ledgered)
+        let before2 = model.sourceStamp
+        store.corpusChanged()
+        #expect(model.sourceStamp != before2)
+    }
+
+    @Test func recentsWalkTheWholeHistoryPastPicksThatAreGone() {
+        let (usage, _) = usage()
+        let kept = item("setting:a", "A setting", kind: .setting)
+        let model = make(.fixed([kept, item("entry:b", "Other")]), usage: usage)
+        usage.record("setting:a", query: "")
+        // Thirty picks since, none of them listed any more (cards that were addressed).
+        for n in 1...30 { usage.record("card:gone\(n)", query: "") }
+        model.open()
+        #expect(model.sections.map(\.title) == ["Recents"] && ids(model) == ["setting:a"])
+    }
+
+    @Test func manyChangesTogetherReloadOnce() async {
+        var made = 0
+        var sources = PaletteSources.fixed([])
+        sources.router = { _ in made += 1; return PaletteSourceOutput(items: []) }
+        let model = make(sources)
+        model.open()
+        let opened = made
+        model.reloadSoon(); model.reloadSoon(); model.reloadSoon()
+        try? await Task.sleep(for: .milliseconds(600))
+        #expect(made == opened + 1)
     }
 
     @Test func theOwnerOfTheKeyboardIsTheFieldBeingEditedNotTheSharedEditor() {

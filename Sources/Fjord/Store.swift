@@ -113,7 +113,7 @@ final class Store {
     }
     /// Prompt texts kept for reuse, in the order you put them (Snippets.swift); @ lists them.
     var snippets: [Snippet] = [] {
-        didSet { persistedRevision &+= 1 }
+        didSet { persistedRevision &+= 1; corpusRevision &+= 1 }
     }
     /// The Snippets page's undo history while it is open (⌘Z there is the page's).
     @ObservationIgnored var snippetHistory: SnippetHistory?
@@ -207,7 +207,7 @@ final class Store {
     /// What the categories' actions have done and what was already there when they began (InboxActions.swift); kept in its
     /// own file next to the state.
     var actionLedger = ActionLedger() {
-        didSet { saveActions() }
+        didSet { saveActions(); corpusRevision &+= 1 }
     }
     /// Does what actions do; nil is the real one (and nothing at all in the playground and tests).
     @ObservationIgnored var actionPerformer: ActionPerformer?
@@ -317,6 +317,7 @@ final class Store {
             agentEntryIndex = nil
             persistedRevision &+= 1
             shownRevision &+= 1
+            corpusRevision &+= 1
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
             refreshSessionRows(sessionRowsChanged(from: oldValue))
@@ -398,6 +399,7 @@ final class Store {
         didSet {
             claudeSessionsRevision &+= 1
             shownRevision &+= 1
+            corpusRevision &+= 1
             agentCache = nil
             refreshFolderNames()
             refreshSessionRows(sessionRowsChanged(oldValue, claudeSessions))
@@ -410,6 +412,10 @@ final class Store {
     @ObservationIgnored var guestExecutionStates: [String: GuestExecutionState] = [:]
     /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
     @ObservationIgnored private(set) var claudeSessionsRevision = 0
+    /// Bumped when what the open palette lists changes besides the inbox and the Router (`inboxRevision`, `routerRevision`):
+    /// the sessions, the agents, the actions' runs, the snippets, the project folders. Observed, so the palette follows it.
+    private(set) var corpusRevision = 0
+    func corpusChanged() { corpusRevision &+= 1 }
     /// Bumped on every change to what the window shows of Claude besides the inbox and the Router (the sessions, their
     /// activity, task titles, the agents, the forms pending, a recent session ageing out): the window's kept picture is not forgiven
     /// a small difference across one (`AppTransition.Marks`). Unobserved.
