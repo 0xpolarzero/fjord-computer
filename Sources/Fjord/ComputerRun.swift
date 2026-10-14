@@ -424,7 +424,8 @@ final class ComputerRunCoordinator {
 
             let inventory = try await engine.computersList(deviceId: settings.deviceID)
             guard let computer = inventory.computer(settings.computerID) else {
-                throw ComputerRunFailure.computerUnavailable("The selected computer no longer exists on \(settings.deviceID ?? "This Mac").")
+                // Never falls back to a computer with the same id on another owner: ids are owner-local.
+                throw ComputerRunFailure.computerUnavailable("\(record.computerName) is no longer in the inventory of \(settings.deviceID.map { "device \($0)" } ?? "This Mac"). Choose a computer again.")
             }
             try requireCurrentAction()
             var lifecycleSubscription: String?

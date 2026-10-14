@@ -28,15 +28,13 @@ final class Store {
         let computers = ComputersModel(client: selectedClient, initialInventory: (selectedClient as? MockEngineClient)?.inventory)
         self.computers = computers
         if selectedClient is SocketEngineClient {
-            computers.prepareComputerRemoval = { [weak self] row in
+            computers.prepareComputerRemoval = { [weak self] computer in
                 guard let self else { return }
-                try await GuestRouterRuntime.shared.prepareComputerRemoval(store: self,
-                    computer: GuestReference(deviceId: nil, computerId: row.id))
+                try await GuestRouterRuntime.shared.prepareComputerRemoval(store: self, computer: computer)
             }
-            computers.computerRemovalCompleted = { [weak self] row in
+            computers.computerRemovalCompleted = { [weak self] computer in
                 guard let self else { return }
-                GuestRouterRuntime.shared.computerRemoved(store: self,
-                    computer: GuestReference(deviceId: nil, computerId: row.id))
+                GuestRouterRuntime.shared.computerRemoved(store: self, computer: computer)
             }
         }
     }

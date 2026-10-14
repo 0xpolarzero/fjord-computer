@@ -169,8 +169,8 @@ final class ComputersModel {
     @ObservationIgnored private var isRecovering = false
     @ObservationIgnored private var wantsConnection = false
     @ObservationIgnored private var ownerRefreshID: UUID?
-    @ObservationIgnored var prepareComputerRemoval: (@MainActor (ComputerRow) async throws -> Void)?
-    @ObservationIgnored var computerRemovalCompleted: (@MainActor (ComputerRow) -> Void)?
+    @ObservationIgnored var prepareComputerRemoval: (@MainActor (GuestReference) async throws -> Void)?
+    @ObservationIgnored var computerRemovalCompleted: (@MainActor (GuestReference) -> Void)?
 
     init(client: any EngineClient, initialInventory: ComputerInventory? = nil) {
         self.client = client
@@ -437,15 +437,18 @@ final class ComputersModel {
             actionError = EngineClientError.notFound("This computer no longer exists.").localizedDescription
             return
         }
+        // The removal hooks get the owner-scoped reference: a deleted This Mac computer never matches a same-id computer
+        // that another device owns.
+        let removed = GuestReference.thisMac(row.id)
         if let prepareComputerRemoval {
-            do { try await prepareComputerRemoval(row) }
+            do { try await prepareComputerRemoval(removed) }
             catch { actionError = error.localizedDescription; return }
         }
         let expected: ComputerConfiguration? = if case .linux(let computer) = row { computer.configuration } else { nil }
         let deleted = await perform("Delete") {
             try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId, expected: expected))
         }
-        if deleted { computerRemovalCompleted?(row) }
+        if deleted { computerRemovalCompleted?(removed) }
     }
     func showDisplay(_ computerId: String) async {
         actionError = nil

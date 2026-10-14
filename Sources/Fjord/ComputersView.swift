@@ -204,7 +204,7 @@ struct ComputerDetailView: View {
                 case .overview:
                     await model.loadComputerUse(computerId: computerId)
                     if model.inventory?.computer(computerId)?.displayState == .running {
-                        await model.loadAgentTools(GuestReference(deviceId: nil, computerId: computerId))
+                        await model.loadAgentTools(GuestReference.thisMac(computerId))
                     }
                     await model.loadCheckpointUsage(computerId: computerId)
                 case .files:

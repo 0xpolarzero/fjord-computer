@@ -235,7 +235,7 @@ struct ComputerUsePanel: View {
 struct ComputerAgentToolsPanel: View {
     let row: ComputerRow
     let model: ComputersModel
-    private var target: GuestReference { GuestReference(deviceId: nil, computerId: row.id) }
+    private var target: GuestReference { GuestReference.thisMac(row.id) }
     private var status: SiloWireAgentToolsStatus? { model.agentTools(for: target) }
     private var setupMessage: String? { model.agentToolsSetupMessage[target.key] }
 
