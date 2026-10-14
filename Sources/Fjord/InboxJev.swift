@@ -90,8 +90,8 @@ enum InboxJev {
     /// The one choice asked of message `id`: its label, for `me`.
     static func labelQuestion(_ id: String, me: String) -> JevClient.Question {
         .choice(CommentLabel.allCases.map(\.rawValue), hints: [
-            CommentLabel.asks.rawValue: "It asks \(me) a question, or for a decision only they can make",
-            CommentLabel.todo.rawValue: "It asks \(me) to change or do something: rebase, fix, address a review, resolve a conflict, review",
+            CommentLabel.asks.rawValue: "It asks \(me) a question, or for a decision only they can make; a request to do something, review included, is `todo`, not this",
+            CommentLabel.todo.rawValue: "It asks \(me) to change or do something: rebase, fix, address a review, resolve a conflict, or review (any request to review is `todo`)",
             CommentLabel.fyi.rawValue: "It informs: nothing for \(me) to answer or do, or it asks someone else",
             CommentLabel.noise.rawValue: "Thanks, +1, an acknowledgement, or automated output nobody needs to read (CI or coverage reports, deploy previews, dependency or lint bots); a code review with findings, even from a bot, is not",
         ], instructions: "Message \(id): what does it ask of \(me)? Pick the one label that fits best.")

@@ -224,8 +224,8 @@ struct RouterTriage: Codable, Hashable {
     static func questions(options: [WaitOption]) -> [String: JevClient.Question] {
         var q: [String: JevClient.Question] = [
             "state": .choice(State.allCases.map(\.rawValue), hints: [
-                "done": "It completed the work it was asked for and reports it; some follow-through by the user may remain",
-                "asks": "It needs the user's answer, decision, review, test or action now before it can go on: questions in prose, or something to choose or decide",
+                "done": "It completed the work it was asked for and reports it; nothing is asked of the user",
+                "asks": "It needs the user's answer, decision, review, test or action now before it can go on: questions in prose, or something to choose or decide; it also covers follow-through left to the user (merge, try it, run something)",
                 "approval": "It asks permission before doing something consequential: pushing, publishing, deleting, driving the screen, spending money",
                 "blocked": "It hit an error, lacks access or a permission, or can't proceed without help",
                 "waiting": "Its work is blocked by a running process, an event or someone other than the user: CI or checks, tests running, a deploy, another session, someone else's review, a rate limit; nothing is needed from the user now",
@@ -242,10 +242,10 @@ struct RouterTriage: Codable, Hashable {
                 "pr": "A pull request is open (or was opened) for the changes",
                 "unknown": "The message doesn't say",
             ], instructions: "Where do this turn's code changes stand, according to the message? Pick unknown unless it says."),
-            "waitingOn": .choice(WaitingOn.allCases.map(\.rawValue), hints: [
+            "waitingOn": .choice(WaitingOn.allCases.map(\.rawValue) + ["none"], hints: [
                 "ci": "CI or checks on a branch or pull request", "tests": "A test run", "deploy": "A deploy or release",
                 "session": "Another Claude session or agent", "review": "A review by someone other than the user", "rateLimit": "A rate limit or quota",
-                "other": "Something else, or it isn't waiting",
+                "other": "Something else outside it", "none": "It isn't waiting on anything outside it",
             ], instructions: "If the session is waiting on something outside it before continuing, what is it?"),
         ]
         if !options.isEmpty {
