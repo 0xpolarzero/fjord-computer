@@ -235,6 +235,38 @@ import Testing
         #expect(none.isError && none.text.contains("no form"))
     }
 
+    @Test func answerFormRoutesMatchedGuestFormToTheGuestHook() async throws {
+        let dir = TempDir()
+        let store = await store(dir)
+        let computer = GuestReference(deviceId: "owner-1", computerId: "guest-1")
+        let account = GuestAccount(home: "/home/guest", uid: 1001, operatingSystem: .linux, architecture: "aarch64",
+                                   nodeExecutable: "/usr/bin/node", claudeExecutable: "/home/guest/.local/bin/claude")
+        let guest = MockGuestClient(accounts: [computer: account])
+        defer { GuestRouterRuntime.shared.stopAll() }
+        try await GuestRouterRuntime.shared.startWatching(store: store, client: guest, computer: computer)
+
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        let form = PendingForm(id: "guest-form-1", cliSessionID: "cli-guest-a", transcriptPath: "/guest/transcript.jsonl",
+            questions: [.init(question: "Which database?", header: "DB", multiSelect: false,
+                               options: [.init(label: "SQLite", description: "")])], createdAt: now,
+            pid: 42, toolUseID: "toolu_a")
+        store.router.pendingDesktopStarts = [PendingDesktopStart(projectID: UUID(), location: location,
+            alias: "ssh-guest-1", folder: "/workspace/repo", prompt: "Start", state: .matched,
+            desktopSessionID: "local_a", guestSessionID: "cli-guest-a")]
+        store.router.guestPendingForms = [GuestPendingForm(computer: computer, location: location, form: form)]
+
+        let output = try #require(await tools(store).tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
+        let paths = try GuestRouterPaths(home: account.home)
+        let guestAnswer = try await guest.filesRead(computer: computer,
+            path: GuestRouterPaths.join(paths.forms, "\(form.id).answer.json"), offset: nil, length: nil)
+        let answer = try #require(json(guestAnswer.data) as? [String: Any])
+        let localAnswer = FormBridge.answerURL(form.id, in: dir.path("support/forms"))
+
+        #expect(!output.isError)
+        #expect(answer["answers"] as? [String: String] == ["Which database?": "SQLite"])
+        #expect(!FileManager.default.fileExists(atPath: localAnswer.path))
+    }
+
     @Test func aNewSessionStartsInAKnownProjectOnly() async throws {
         let dir = TempDir()
         let s = await store(dir)

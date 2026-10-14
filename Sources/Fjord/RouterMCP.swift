@@ -915,7 +915,8 @@ final class RouterMCPServer: @unchecked Sendable {
     func answerForm(_ store: Store, _ args: [String: Any], ticket: Ticket) async throws -> String {
         let card = try card(store, Self.string(args, "card"))
         guard let raw = args["answers"] as? [String: Any], !raw.isEmpty else { throw Failure("`answers` must be an object of question → answer") }
-        guard let form = store.pendingForm(for: card) else {
+        let guestForm = store.guestPendingForm(for: card)
+        guard let form = guestForm?.form ?? store.pendingForm(for: card) else {
             throw Failure("“\(card.title)” has no form Fjord can answer (it isn't stopped on a question Fjord's hook holds). Tell the user to answer it on the card or in Claude.")
         }
         guard !form.isPlan else {
@@ -937,6 +938,11 @@ final class RouterMCPServer: @unchecked Sendable {
             answers[question?.question ?? key] = text
         }
         try live(ticket)
+        let receipt = form.questions.map { "\($0.question) = \(answers[$0.question] ?? "")" }.joined(separator: "; ")
+        if let guestForm {
+            try await GuestRouterRuntime.shared.answer(guestForm, answers: answers, cardID: card.id)
+            return "Answered “\(card.title)”: " + receipt
+        }
         guard let dir = store.formBridge.dir else { throw Failure("Fjord isn't holding forms (the Router is off)") }
         // Still worth writing when its turn comes: the same Router, the card still open, the same form still held.
         let cardID = card.id, formID = form.id
@@ -945,7 +951,7 @@ final class RouterMCPServer: @unchecked Sendable {
                   let now = store.router.cards.first(where: { $0.id == cardID }), now.isOpen else { return false }
             return store.pendingForm(for: now)?.id == formID
         }
-        return "Answered “\(card.title)”: " + form.questions.map { "\($0.question) = \(answers[$0.question] ?? "")" }.joined(separator: "; ")
+        return "Answered “\(card.title)”: " + receipt
     }
 
     /// A project by Fjord's name for it (case-insensitive), its folder's last component, or its path.
