@@ -76,6 +76,12 @@ struct CategoriesView: View {
             store.categoryEditorRequest = nil
             if store.categories.contains(where: { $0.id == id }) { editing = .existing(id) }
         }
+        // New category, from the palette.
+        .onChange(of: store.newCategoryRequest, initial: true) { _, asked in
+            guard asked else { return }
+            store.newCategoryRequest = false
+            create(in: nil)
+        }
         .onChange(of: hub?.groupRequest, initial: true) { _, request in
             guard let request, let id = UUID(uuidString: request.id) else { return }
             hub?.groupRequest = nil

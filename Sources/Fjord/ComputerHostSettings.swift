@@ -11,8 +11,8 @@ struct ComputerHostSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
-            computerDefaults
-            connections
+            computerDefaults.id(SettingsView.computerDefaultsID)
+            connections.id(SettingsView.connectedMacsID)
             if let error = model.actionError {
                 ComputerNotice(text: error, tone: .danger)
             }

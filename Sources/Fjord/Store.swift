@@ -119,6 +119,8 @@ final class Store {
     @ObservationIgnored var snippetHistory: SnippetHistory?
     /// A category whose editor the categories page opens when it shows (a rule-off mark's click, from the bar or the window).
     var categoryEditorRequest: UUID?
+    /// Set to have the categories page open the editor of a new category when it shows (the palette's New category).
+    var newCategoryRequest = false
     /// Who is changing the categories and groups now, for the log (see `InboxLog`); nil is the editor.
     @ObservationIgnored var inboxSource: InboxChangeSource?
     /// Where those log lines go; the tests read them.

@@ -17,24 +17,34 @@ struct SettingsView: View {
     @State private var notificationsBlocked = false
 
     static let updatesID = "updates"
-    /// The Router's section (shots scroll there).
+    /// The Router's row in Tools (shots scroll there).
     static let routerID = "router"
     static let notificationsID = "notifications"
     static let generalID = "general"
+    static let toolsID = "tools"
+    static let computerDefaultsID = "computer-defaults"
+    static let connectedMacsID = "connected-macs"
+    static let githubID = "github"
+    static let claudeID = "claude"
+    static let codeFoldersID = "code-folders"
+    static let shortcutsID = "shortcuts"
+    /// Every section's anchor, in page order (the ⌘K palette scrolls to one for each of its rows).
+    static let anchors = [toolsID, computerDefaultsID, connectedMacsID, githubID, notificationsID, claudeID, codeFoldersID,
+                          shortcutsID, updatesID, generalID]
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
-                    tools
+                    tools.id(Self.toolsID)
                     if store.computersOn && store.computersEngineReady { ComputerHostSettings(store: store) }
-                    if store.triageOn { account }
+                    if store.triageOn { account.id(Self.githubID) }
                     notifications.id(Self.notificationsID)
                     // The Router's own sections read the Router's state in views of their own: what changes with every read of
                     // Claude's sessions redraws them, not the whole page.
-                    if store.routerOn { RouterSettings(store: store, part: .claude) }
-                    if store.triageOn || store.routerOn { CodeFoldersSettings(store: store) }
-                    shortcuts
+                    if store.routerOn { RouterSettings(store: store, part: .claude).id(Self.claudeID) }
+                    if store.triageOn || store.routerOn { CodeFoldersSettings(store: store).id(Self.codeFoldersID) }
+                    shortcuts.id(Self.shortcutsID)
                     updates.id(Self.updatesID)
                     general.id(Self.generalID)
                 }

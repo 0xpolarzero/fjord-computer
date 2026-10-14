@@ -188,6 +188,12 @@ extension Store {
         go(.categories)
     }
 
+    /// Opens the editor of a new category: the categories page takes the request when it shows (`go` takes the window there).
+    func newCategory(go: (AppDestination) -> Void) {
+        newCategoryRequest = true
+        go(.categories)
+    }
+
     func moveCategory(from source: IndexSet, to destination: Int) { categories.move(fromOffsets: source, toOffset: destination) }
 
     /// Your assignment rated (and marked, and acted on) before GitHub said when it was made, as `assigned`, is the same
