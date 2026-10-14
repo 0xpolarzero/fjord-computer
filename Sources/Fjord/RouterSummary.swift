@@ -357,11 +357,17 @@ extension Store {
                 try? await Task.sleep(for: .milliseconds(600))
                 text = Self.canned(subject)
             } else {
-                let cli = row.session.cliID
-                let reader = store.activityReader
-                let steps = await Task.detached(priority: .utility) {
-                    cli.flatMap { reader.transcript($0) }.map { Claude.recentTimedSteps(tail: Claude.tail(of: $0)) } ?? []
-                }.value
+                let guestRuntime = GuestRouterRuntime.shared
+                let steps: [Claude.TranscriptStep]
+                if guestRuntime.location(for: row.session.id) != nil {
+                    steps = guestRuntime.transcript(for: row.session.id)?.recentSteps ?? []
+                } else {
+                    let cli = row.session.cliID
+                    let reader = store.activityReader
+                    steps = await Task.detached(priority: .utility) {
+                        cli.flatMap { reader.transcript($0) }.map { Claude.recentTimedSteps(tail: Claude.tail(of: $0)) } ?? []
+                    }.value
+                }
                 let context = RouterSummaryContext.build(subject, previous: store.router.summaries.last { $0.sessionID == id },
                                                          steps: steps, cards: store.router.cards, decisions: store.router.decisions,
                                                          now: covers)

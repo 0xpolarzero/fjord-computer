@@ -85,6 +85,10 @@ extension Store {
 
     private func readReply(_ session: ClaudeSession, after ms: Int64) async -> String? {
         if let reader = routerTriager.replyReader { return await reader(session, ms) }
+        let guestRuntime = GuestRouterRuntime.shared
+        if guestRuntime.location(for: session.id) != nil {
+            return guestRuntime.transcript(for: session.id).flatMap { Claude.userMessages(tail: $0.tail, after: ms) }
+        }
         let reader = activityReader
         let cli = session.cliID
         return await Task.detached(priority: .utility) {

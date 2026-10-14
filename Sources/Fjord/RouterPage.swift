@@ -2181,6 +2181,7 @@ struct WorkingCard: View, Equatable {
         let busy = summarizer.busy.contains(row.id)
         let start = Store.workingStart(row)
         let current = row.session.running ? row.activity?.text ?? "Working" : (row.tasksText ?? "Working")
+        let project = store.routerSessionProject(row.id)
         // The line composed from its task list and narration, when there is one; the raw step otherwise.
         let explained = store.liveExplanation(row)
         let doing = explained ?? current
@@ -2196,7 +2197,7 @@ struct WorkingCard: View, Equatable {
                         Spacer(minLength: 4)
                         // Its folder, as the cards that need you name it; narrower, it goes first, then what it left running.
                         if columnWidth >= 560 {
-                            ProjectLabel(name: row.projectName, color: row.color)
+                            ProjectLabel(name: project.name, color: project.color)
                                 .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).fixedSize().layoutPriority(1)
                         }
                         if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
@@ -2215,7 +2216,7 @@ struct WorkingCard: View, Equatable {
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(row.session.title)
-                .accessibilityValue("working, \(row.projectName), \(doing)\(row.tasks.isEmpty ? "" : ", \(row.tasksText ?? "")")")
+                .accessibilityValue("working, \(project.name), \(doing)\(row.tasks.isEmpty ? "" : ", \(row.tasksText ?? "")")")
                 .accessibilityHint(expanded ? "Folds its details" : "Shows its summaries, subagents and commands")
                 .accessibilityAddTraits(expanded ? .isSelected : [])
                 .accessibilityAction(named: "Open in Claude") { store.openAgent(row.id) }

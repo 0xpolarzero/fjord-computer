@@ -169,6 +169,8 @@ final class RouterCanvasState {
         var picked: Set<String>
         var expanded: Set<String>
         var searching: Bool
+        var guestProjects: [RunsOnProject]
+        var guestStarts: [PendingDesktopStart]
     }
     @ObservationIgnored var folderMemo: (inputs: FolderInputs, folders: [CanvasFolder])?
 
@@ -454,11 +456,14 @@ extension RouterModel {
         let inputs = RouterCanvasState.FolderInputs(store: ObjectIdentifier(store), page: page, done: canvasDone(store),
             muted: store.agents.mutedFolders, colors: store.agents.folderColors, names: store.folderNames,
             named: store.namedFoldersSeen, filter: canvas.filter, picked: Set([selection, expandedNeed].compactMap { $0 }),
-            expanded: canvas.expandedMore, searching: searching)
+            expanded: canvas.expandedMore, searching: searching, guestProjects: store.router.runsOnProjects,
+            guestStarts: store.router.pendingDesktopStarts)
         if let memo = canvas.folderMemo, memo.inputs == inputs { return memo.folders }
         let folders = RouterCanvasModel.make(page: page, done: inputs.done, muted: Set(inputs.muted),
-            name: store.folderName, color: store.projectColor, filter: inputs.filter,
-            picked: inputs.picked, expanded: inputs.expanded, showsAll: inputs.searching)
+            name: store.routerProjectGroupName, color: store.routerProjectGroupColor, filter: inputs.filter,
+            picked: inputs.picked, expanded: inputs.expanded, showsAll: inputs.searching,
+            projectKey: { store.routerProjectGroupKey(sessionID: $0, folder: $1) },
+            projectSource: store.routerProjectGroupSource)
         canvas.folderMemo = (inputs, folders)
         return folders
     }
@@ -535,7 +540,9 @@ extension RouterModel {
     private func uncover(_ node: String, store: Store) {
         let page = zones(store)
         guard let folder = RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
-                                                  name: { $0 }, color: { _ in nil }, picked: [node], showsAll: true)
+                                                  name: { $0 }, color: { _ in nil }, picked: [node], showsAll: true,
+                                                  projectKey: { store.routerProjectGroupKey(sessionID: $0, folder: $1) },
+                                                  projectSource: store.routerProjectGroupSource)
             .first(where: { $0.groups.contains { $0.items.contains { $0.id == node } } }),
               let group = folder.groups.first(where: { $0.items.contains { $0.id == node } })?.group else { return }
         // The chips light the groups shown: its own lit with them.

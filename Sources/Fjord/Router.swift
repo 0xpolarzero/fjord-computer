@@ -52,6 +52,12 @@ struct RouterState: Codable, Equatable {
     var runsOnProjects: [RunsOnProject] = []
     /// Desktop SSH starts Fjord prepared but cannot observe a session until guest presence and transcript evidence arrive.
     var pendingDesktopStarts: [PendingDesktopStart] = []
+    /// Signed guest inbox deliveries and their confirmed/uncertain state; a timeout never licenses a new nonce.
+    var guestRelayDeliveries: [GuestRelayRecord] = []
+    /// Current guest forms, watched through the owning computer. Their location accompanies the CLI id on persistence.
+    var guestPendingForms: [GuestPendingForm] = []
+    /// A Router-off removal that could not reach its guest yet; retried on the next guest connection.
+    var pendingGuestDisables: [SessionLocation] = []
 
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
@@ -107,7 +113,7 @@ struct RouterState: Codable, Equatable {
     /// `chat` is read, never written (an older file's changes); `claudeSessionID`, and an older file's `autoContinue` and
     /// `autoContinueSessions`, are ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, handledTurns, replies, style, runsOnProjects, pendingDesktopStarts
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, handledTurns, replies, style, runsOnProjects, pendingDesktopStarts, guestRelayDeliveries, guestPendingForms, pendingGuestDisables
     }
 
     func encode(to encoder: Encoder) throws {
@@ -131,6 +137,9 @@ struct RouterState: Codable, Equatable {
         try c.encodeIfPresent(style, forKey: .style)
         try c.encode(runsOnProjects, forKey: .runsOnProjects)
         try c.encode(pendingDesktopStarts, forKey: .pendingDesktopStarts)
+        try c.encode(guestRelayDeliveries, forKey: .guestRelayDeliveries)
+        try c.encode(guestPendingForms, forKey: .guestPendingForms)
+        try c.encode(pendingGuestDisables, forKey: .pendingGuestDisables)
     }
 
     init(from decoder: Decoder) throws {
@@ -181,6 +190,9 @@ struct RouterState: Codable, Equatable {
         style = value(.style)
         runsOnProjects = list(.runsOnProjects)
         pendingDesktopStarts = list(.pendingDesktopStarts)
+        guestRelayDeliveries = list(.guestRelayDeliveries)
+        guestPendingForms = list(.guestPendingForms)
+        pendingGuestDisables = list(.pendingGuestDisables)
         linkUnlinkedChanges(legacy: legacy)
         dropped = lost
     }
@@ -953,19 +965,33 @@ extension Store {
     /// The form Fjord's hook holds for this card's own question or plan: the one for the very call the card waits on
     /// (an older card never shows a newer question's form, nor a card a form whose call isn't known yet).
     func pendingForm(for card: RouterCard) -> PendingForm? {
-        guard card.kind == .question || card.kind == .plan, card.isOpen, let call = card.toolUseID,
-              let cli = claudeSessions[card.sessionID]?.cliID, let form = pendingForms[cli], form.toolUseID == call,
-              form.isPlan == (card.kind == .plan) else { return nil }
+        guard card.kind == .question || card.kind == .plan, card.isOpen, let call = card.toolUseID else { return nil }
+        if let cli = claudeSessions[card.sessionID]?.cliID, let form = pendingForms[cli], form.toolUseID == call,
+           form.isPlan == (card.kind == .plan) { return form }
+        guard let start = router.pendingDesktopStarts.first(where: { $0.desktopSessionID == card.sessionID && $0.state == .matched }),
+              let form = router.guestPendingForms.first(where: { $0.location == start.location && $0.form.cliSessionID == start.guestSessionID })?.form,
+              form.toolUseID == call, form.isPlan == (card.kind == .plan) else { return nil }
         return form
+    }
+
+    func guestPendingForm(for card: RouterCard) -> GuestPendingForm? {
+        guard card.kind == .question || card.kind == .plan, card.isOpen, let call = card.toolUseID,
+              let start = router.pendingDesktopStarts.first(where: { $0.desktopSessionID == card.sessionID && $0.state == .matched }),
+              let guest = router.guestPendingForms.first(where: { $0.location == start.location && $0.form.cliSessionID == start.guestSessionID }),
+              guest.form.toolUseID == call, guest.form.isPlan == (card.kind == .plan) else { return nil }
+        return guest
     }
 
     /// The calls whose forms Fjord's hook holds, by desktop session; nil until the forms folder has been read.
     private var heldForms: [String: Set<String>]? {
         guard routerFormsLoaded else { return nil }
         var held: [String: Set<String>] = [:]
-        guard !pendingForms.isEmpty else { return held }
-        for session in claudeSessions.values {
+        for session in claudeSessions.values where !pendingForms.isEmpty {
             if let cli = session.cliID, let call = pendingForms[cli]?.toolUseID { held[session.id, default: []].insert(call) }
+        }
+        for pending in router.pendingDesktopStarts where pending.state == .matched {
+            if let call = router.guestPendingForms.first(where: { $0.location == pending.location && $0.form.cliSessionID == pending.guestSessionID })?.form.toolUseID,
+               let desktop = pending.desktopSessionID { held[desktop, default: []].insert(call) }
         }
         return held
     }

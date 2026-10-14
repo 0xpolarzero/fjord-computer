@@ -63,7 +63,9 @@ extension RouterTools {
     /// What Jev routes among: the sessions (working, then the 20 most recent others), the cards of sessions not among them,
     /// a new session per project, and the intents. `projects`: folders you tagged; only theirs then.
     func destinations(_ store: Store, projects: Set<String>? = nil, now: Date = Date()) -> [Destination] {
-        let cards = store.routerShownOpenCards.filter { projects?.contains($0.folder ?? "") ?? true }
+        let cards = store.routerShownOpenCards.filter {
+            projects?.contains(store.routerProjectFolder(sessionID: $0.sessionID, fallback: $0.folder)) ?? true
+        }
         let told = store.lastTold()
         let (working, recent) = candidates(store, projects: projects)
         let sessions = Array((working + recent).prefix(80))
@@ -77,7 +79,7 @@ extension RouterTools {
         var out: [Destination] = []
         for s in sessions {
             let mine = cards.filter { $0.sessionID == s.id }.sorted { $0.createdAt < $1.createdAt }
-            let project = store.folderName(s.folderKey)
+            let project = store.routerSessionProject(s.id).name
             var title = Self.hinted(s.title, 80)
             if repeated[s.title.lowercased()] != nil { title += " (\(Self.hinted(project, 40)))" }
             var criteria: [String: Any] = ["kind": "Claude Code session", "project": Self.hinted(project, 80),
@@ -91,7 +93,8 @@ extension RouterTools {
         // A card whose session isn't offered (gone from the list): itself.
         let offered = Set(sessions.map(\.id))
         for card in cards where !offered.contains(card.sessionID) {
-            let criteria: [String: Any] = ["kind": "Claude Code session", "project": Self.hinted(store.folderName(card.folder ?? ""), 80),
+            let project = store.routerSessionProject(card.sessionID).name
+            let criteria: [String: Any] = ["kind": "Claude Code session", "project": Self.hinted(project, 80),
                                            "now": Self.cardStatus(store, card) ?? "finished: \(Self.hinted(card.text, 300))"]
             out.append(Destination(target: "answer:\(card.id)", name: unique(Self.hinted(card.title, 80)), criteria: criteria,
                                    sessionID: card.sessionID))
@@ -207,18 +210,24 @@ extension RouterTools {
         var cliID: String?
         var working: Bool
         var board: [RouterLexical.Turn]
+        var isGuest: Bool = false
+        var guestTail: Data?
     }
 
     func lexicalSources(_ store: Store, facts: Facts) -> [String: LexicalSource] {
         let told = store.toldAll()
         let cards = store.routerShownOpenCards
         var out: [String: LexicalSource] = [:]
+        let guestRuntime = GuestRouterRuntime.shared
         for id in facts.targetOf.keys {
             guard let s = store.claudeSessions[id] else { continue }
             let board = RouterLexical.boardTurns(
                 told: told[id] ?? [], cards: cards.filter { $0.sessionID == id }.map(\.text),
                 earlier: [s.summary?.detail ?? "", store.claudeActivity[id]?.text ?? ""])
-            out[id] = LexicalSource(title: s.title, cliID: s.cliID, working: facts.running.contains(id), board: board)
+            let isGuest = guestRuntime.location(for: id) != nil
+            out[id] = LexicalSource(title: s.title, cliID: guestRuntime.guestSessionID(for: id) ?? s.cliID,
+                                    working: facts.running.contains(id), board: board, isGuest: isGuest,
+                                    guestTail: guestRuntime.transcript(for: id)?.tail)
         }
         return out
     }
@@ -229,7 +238,9 @@ extension RouterTools {
         var sessions: [String: (title: String, turns: [RouterLexical.Turn])] = [:]
         for (id, source) in sources {
             var turns: [RouterLexical.Turn] = []
-            if let reader, let cli = source.cliID, let url = reader.transcript(cli) {
+            if source.isGuest {
+                if let tail = source.guestTail { turns = RouterLexical.turns(tail: tail, working: source.working) }
+            } else if let reader, let cli = source.cliID, let url = reader.transcript(cli) {
                 turns = RouterLexical.turns(tail: Claude.tail(of: url, bytes: 256 * 1024), working: source.working)
             }
             sessions[id] = (source.title, turns.isEmpty ? source.board : turns)

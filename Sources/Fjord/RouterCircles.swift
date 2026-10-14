@@ -103,6 +103,8 @@ extension Store {
     /// The final messages of the session's turns before this one, oldest first.
     func earlierTurnEnds(_ session: ClaudeSession) async -> [String] {
         if let earlier = routerTriager.earlier { return await earlier(session) }
+        let guestRuntime = GuestRouterRuntime.shared
+        if guestRuntime.location(for: session.id) != nil { return guestRuntime.transcript(for: session.id)?.earlierTurnEnds ?? [] }
         let reader = activityReader
         let cli = session.cliID
         return await Task.detached(priority: .utility) {

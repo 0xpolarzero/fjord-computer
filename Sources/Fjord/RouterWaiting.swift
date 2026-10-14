@@ -156,7 +156,19 @@ extension Store {
         }
         // The inbox's PRs and workflows go to TypeSafe only while you let Jev read the inbox (Settings).
         guard jevReadsInbox else { return options }
-        let repos = await gitRepos(of: session.folder)
+        let guestRuntime = GuestRouterRuntime.shared
+        let repos: Set<String>
+        if let computer = guestRuntime.guestReference(for: session.id),
+           let folder = guestRuntime.guestFolder(for: session.id),
+           let client = guestRuntime.guestClient(for: session.id) {
+            let result = try? await GuestCodeFolders(client: client).scan(computer: computer, roots: [folder])
+            repos = Set((result?.repos.values.flatMap { $0 } ?? []).map { $0.lowercased() })
+        } else if guestRuntime.location(for: session.id) != nil {
+            // A guest path is never inspected with this Mac's filesystem when its remote client is unavailable.
+            repos = []
+        } else {
+            repos = await gitRepos(of: session.folder)
+        }
         // Switched off while the remotes were read: none goes.
         guard jevReadsInbox else { return options }
         let candidates = things.values.filter { thing in

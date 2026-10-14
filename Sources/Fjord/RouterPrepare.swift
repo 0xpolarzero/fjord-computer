@@ -335,6 +335,8 @@ struct Prepared: Equatable, Sendable {
     /// What the session gets as your words, when `text` is that signed for its plugin (the chat shows this, never the
     /// header).
     var body: String? = nil
+    /// A guest-delivered message never falls back to the controller's Claude peer channel.
+    var guestLocation: SessionLocation? = nil
 }
 
 /// The only edit a message gets before it goes to a session as your words: what addresses the session or the Router is

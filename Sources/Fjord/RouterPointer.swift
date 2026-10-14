@@ -441,7 +441,7 @@ extension RouterMentions {
         let sessions = MentionBase.sessions(store).lazy.filter { !except.contains(.session($0.id)) }.prefix(40)
         var made = 0
         for s in sessions where made < limit {
-            let project = store.folderName(s.folderKey)
+            let project = store.routerSessionProject(s.id).name
             guard found([s.title, project]) else { continue }
             let look = store.pointerLook(.session(s.id))
             out.append(MentionSuggestion(section: .sessions, pick: .pointer(.session(s.id)), name: look.label,

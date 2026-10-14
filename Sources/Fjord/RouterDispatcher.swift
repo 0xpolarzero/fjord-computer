@@ -1294,11 +1294,12 @@ struct RouterAskBack: Identifiable, Equatable {
         if target.hasPrefix("answer:") {
             guard let card = store.router.cards.first(where: { $0.id == String(target.dropFirst(7)) }),
                   RouterPage.shows(card, tasks: store.routerTasks) else { return nil }
-            return .init(target: target, title: card.title, detail: "\(card.kind.label) · \(store.folderName(card.folder ?? ""))")
+            return .init(target: target, title: card.title,
+                         detail: "\(card.kind.label) · \(store.routerSessionProject(card.sessionID).name)")
         }
         if target.hasPrefix("session:") {
             guard let s = store.claudeSessions[String(target.dropFirst(8))] else { return nil }
-            return .init(target: target, title: s.title, detail: store.folderName(s.folderKey))
+            return .init(target: target, title: s.title, detail: store.routerSessionProject(s.id).name)
         }
         if target.hasPrefix("new:") {
             let folder = String(target.dropFirst(4))
@@ -1496,7 +1497,9 @@ extension RouterDispatcher {
         guard !repos.isEmpty else { return nil }
         var clones: [String] = []
         for repo in repos { for folder in store.localClones(of: repo) where !clones.contains(folder) { clones.append(folder) } }
-        let sessions = store.claudeSessions.values.filter { !$0.isArchived && clones.contains($0.folderKey) }
+        let sessions = store.claudeSessions.values.filter {
+            !$0.isArchived && clones.contains(store.routerProjectFolder(sessionID: $0.id, fallback: $0.folderKey))
+        }
             .sorted { $0.lastActivity > $1.lastActivity }.map { "session:\($0.id)" }
         return RepoWorld(repos: repos, clones: clones, targets: sessions + clones.map { "new:\($0)" })
     }
@@ -1528,8 +1531,11 @@ extension RouterDispatcher {
     static func folder(of target: String, store: Store) -> String? {
         if target.hasPrefix("new:") { return String(target.dropFirst(4)) }
         guard let session = session(of: target, store: store) else { return nil }
-        if let s = store.claudeSessions[session] { return s.folderKey }
-        return store.router.cards.first { $0.sessionID == session }?.folder
+        if let s = store.claudeSessions[session] {
+            return store.routerProjectFolder(sessionID: session, fallback: s.folderKey)
+        }
+        return store.router.cards.first { $0.sessionID == session }
+            .map { store.routerProjectFolder(sessionID: session, fallback: $0.folder) }
     }
 
     /// The session a target is for: a session, or a card's.
@@ -1554,10 +1560,13 @@ extension RouterDispatcher {
         func named(_ folder: String) -> Bool {
             !folder.isEmpty && !said.isDisjoint(with: shortNames(store.folderName(folder) + " " + (folder as NSString).lastPathComponent))
         }
-        guard named(s.folderKey) else { return false }
+        let sessionProject = store.routerProjectFolder(sessionID: session, fallback: s.folderKey)
+        guard named(sessionProject) else { return false }
         let sessions = store.claudeSessions.values.filter { !$0.isArchived }
-        let projects = Set((store.knownFolders + sessions.map(\.folderKey)).filter(named))
-        return projects == [s.folderKey] && sessions.filter { $0.folderKey == s.folderKey }.map(\.id) == [session]
+        let sessionProjects = sessions.map { store.routerProjectFolder(sessionID: $0.id, fallback: $0.folderKey) }
+        let projects = Set((store.knownFolders + sessionProjects).filter(named))
+        return projects == [sessionProject]
+            && sessions.enumerated().filter { sessionProjects[$0.offset] == sessionProject }.map { $0.element.id } == [session]
     }
 
     /// Two or three letters, said as a name ("CI", "API", "db"): not a common short word.

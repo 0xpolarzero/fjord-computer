@@ -268,6 +268,35 @@ enum RouterSender {
     @MainActor @discardableResult
     static func send(binary: String, cwd: URL, to: String, text: String, tools: RouterTools, timeout: TimeInterval = 45,
                      inbox: RelayInbox? = nil) async throws -> String? {
+        if let ready = tools.prepared[to], let location = ready.guestLocation {
+            guard case .computer(let deviceId, let computerId) = location,
+                  let target = RelayInbox.header(of: text)?.target else {
+                throw RouterTools.Failure("The guest delivery isn't signed for a known computer session")
+            }
+            let guestClient = tools.guestClient ?? GuestRouterRuntime.shared.guestClient(for: location)
+            guard guestClient != nil else {
+                throw RouterTools.Failure("The guest file client isn't connected for this computer yet")
+            }
+            let ticket = tools.ticket()
+            if let refusal = tools.approveSend(["to": to, "message": text], otherFields: []) { throw RouterTools.Failure(refusal) }
+            let gate: @MainActor @Sendable () -> String? = {
+                do { try tools.live(ticket) } catch { return error.localizedDescription }
+                return tools.deliveryCheck?()
+            }
+            do {
+                return try await GuestRouterRuntime.shared.deliver(text, to: target,
+                    computer: GuestReference(deviceId: deviceId, computerId: computerId), gate: gate)
+            } catch is CancellationError {
+                tools.prepared[to] = ready
+                throw CancellationError()
+            } catch let failure as GuestRelayInbox.Failure {
+                tools.prepared[to] = ready
+                throw RouterTools.Failure(failure.localizedDescription)
+            } catch {
+                // A guest timeout or refusal never enters the host peer-channel fallback.
+                throw RouterTools.Failure(error.localizedDescription)
+            }
+        }
         if let inbox {
             let ready = tools.prepared[to]
             let ticket = tools.ticket()

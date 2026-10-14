@@ -47,7 +47,12 @@ extension RouterModel {
         }
         let folders = canvasFolders(store, page: zones(store))
         let target = CanvasFlightPlaces.target(key, folders: folders, folder: { id in
-            key.hasPrefix("card:") ? store.router.cards.first { $0.id == id }?.folder : store.claudeSessions[id]?.folderKey
+            if key.hasPrefix("card:") {
+                guard let card = store.router.cards.first(where: { $0.id == id }) else { return nil }
+                return store.routerProjectGroupKey(sessionID: card.sessionID, folder: card.folder ?? "")
+            }
+            guard let session = store.claudeSessions[id] else { return nil }
+            return store.routerProjectGroupKey(sessionID: id, folder: session.folderKey)
         }, fallback: fallback)
         guard let target else {
             guard fallback else { return nil }

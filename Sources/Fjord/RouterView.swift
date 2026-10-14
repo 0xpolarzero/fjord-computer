@@ -8,17 +8,62 @@ import SwiftUI
 // MARK: - Store
 
 extension Store {
+    /// A session's visible project keeps its execution owner and guest root separate from the host folder mirror.
+    func routerSessionProject(_ sessionID: String) -> (name: String, color: Color?) {
+        guard let start = router.pendingDesktopStarts.first(where: { $0.desktopSessionID == sessionID && $0.state == .matched }),
+              let project = router.runsOnProjects.first(where: { $0.id == start.projectID }) else {
+            let folder = claudeSessions[sessionID]?.folderKey ?? ""
+            return (folderName(folder), projectColor(folder))
+        }
+        let owner = start.location.key
+        return ("\(project.name) · \(start.alias) @ \(owner):\(start.folder)", projectColor(project.sourceFolder))
+    }
+
     /// A card's project, as the lists name and colour it.
     func routerProject(_ card: RouterCard) -> (name: String, color: Color?) {
+        if router.pendingDesktopStarts.contains(where: { $0.desktopSessionID == card.sessionID && $0.state == .matched }) {
+            return routerSessionProject(card.sessionID)
+        }
         let folder = card.folder ?? ""
         return (folderName(folder), projectColor(folder))
+    }
+
+    /// A canvas frame key. Local projects keep their old folder key; guest folders include project and owner identity.
+    func routerProjectGroupKey(sessionID: String, folder: String) -> String {
+        guard let start = router.pendingDesktopStarts.first(where: { $0.desktopSessionID == sessionID && $0.state == .matched }) else {
+            return folder
+        }
+        return "guest-project:\(start.projectID.uuidString):\(start.location.key):\(start.folder)"
+    }
+
+    func routerProjectGroupName(_ key: String) -> String {
+        guard key.hasPrefix("guest-project:"),
+              let start = router.pendingDesktopStarts.first(where: {
+                  $0.state == .matched && routerProjectGroupKey(sessionID: $0.desktopSessionID ?? "", folder: $0.folder) == key
+              }) else { return folderName(key) }
+        return routerSessionProject(start.desktopSessionID ?? "").name
+    }
+
+    func routerProjectGroupSource(_ key: String) -> String {
+        guard key.hasPrefix("guest-project:"),
+              let start = router.pendingDesktopStarts.first(where: {
+                  $0.state == .matched && routerProjectGroupKey(sessionID: $0.desktopSessionID ?? "", folder: $0.folder) == key
+              }), let project = router.runsOnProjects.first(where: { $0.id == start.projectID }) else { return key }
+        return project.sourceFolder
+    }
+
+    func routerProjectGroupColor(_ key: String) -> Color? {
+        projectColor(routerProjectGroupSource(key))
     }
 
     /// The Router's switch: it turns the reading of Claude's sessions, which it works on, on and off with it.
     func switchRouter(_ on: Bool) {
         if on { setAgentsEnabled(true) }
         setRouterEnabled(on)
-        if !on { setAgentsEnabled(false) }
+        if !on {
+            GuestRouterRuntime.shared.disableAll()
+            setAgentsEnabled(false)
+        }
     }
 
     /// The sessions working now (not those stopped on you), and those whose turn is over with subagents or commands still
@@ -59,6 +104,14 @@ extension Store {
     /// write is dropped if, by the time it happens, the Router or the sessions are off or the card is no longer open.
     func answerForm(_ form: PendingForm, _ answers: [String: String], card: String) async -> Result<Void, Error> {
         if routerIsPretend { return Result { _ = try FormBridge.validate(form, answers) } }
+        if let cardState = router.cards.first(where: { $0.id == card }),
+           let guestForm = guestPendingForm(for: cardState) {
+            do {
+                try await GuestRouterRuntime.shared.answer(guestForm, answers: answers, cardID: card)
+                logCardAction("Answered the form", card: card)
+                return .success(())
+            } catch { return .failure(error) }
+        }
         guard let dir = formBridge.dir else { return .failure(FormWriter.Cancelled()) }
         do {
             try await FormWriter.write(form, answers: answers, dir: dir) { [weak self] in
@@ -76,6 +129,14 @@ extension Store {
     /// in the app would.
     func answerPlan(_ form: PendingForm, _ decision: PendingForm.PlanDecision, card: String) async -> Result<Void, Error> {
         if routerIsPretend { return Result { _ = try FormBridge.answerData(form, plan: decision) } }
+        if let cardState = router.cards.first(where: { $0.id == card }),
+           let guestForm = guestPendingForm(for: cardState) {
+            do {
+                try await GuestRouterRuntime.shared.answer(guestForm, plan: decision, cardID: card)
+                logCardAction(decision.approve ? "Approved the plan" : "Sent the plan back", card: card)
+                return .success(())
+            } catch { return .failure(error) }
+        }
         guard let dir = formBridge.dir else { return .failure(FormWriter.Cancelled()) }
         do {
             try await FormWriter.write(form, plan: decision, dir: dir) { [weak self] in
@@ -557,7 +618,10 @@ final class RouterModel {
         if layout == .canvas {
             let open = Dictionary((page.needs + page.ready + page.notes).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let all = RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
-                                             name: store.folderName, color: { _ in nil }, filter: canvas.filter, showsAll: true)
+                                             name: store.routerProjectGroupName, color: store.routerProjectGroupColor,
+                                             filter: canvas.filter, showsAll: true,
+                                             projectKey: { store.routerProjectGroupKey(sessionID: $0, folder: $1) },
+                                             projectSource: store.routerProjectGroupSource)
             let order = RouterCanvasModel.order(all, folded: canvas.folded)
             return (order.compactMap { open[$0] }, [], earlier)
         }

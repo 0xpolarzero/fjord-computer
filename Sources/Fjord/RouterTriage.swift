@@ -473,6 +473,8 @@ extension Store {
     /// A session's latest final message (the triage's, and a brief's that wasn't given one).
     func finalMessage(_ session: ClaudeSession) async -> String? {
         if let reader = routerTriager.reader { return await reader(session) }
+        let guestRuntime = GuestRouterRuntime.shared
+        if guestRuntime.location(for: session.id) != nil { return guestRuntime.transcript(for: session.id)?.finalMessage }
         let reader = activityReader
         let cli = session.cliID
         return await Task.detached(priority: .utility) {

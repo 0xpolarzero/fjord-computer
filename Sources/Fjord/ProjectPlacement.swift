@@ -1,7 +1,7 @@
 import Foundation
 
 /// The location chosen for future sessions in one Router project.
-enum ProjectPlacement: Codable, Equatable, Hashable {
+enum ProjectPlacement: Codable, Equatable, Hashable, Sendable {
     case thisMac(path: String)
     case computer(deviceId: String?, computerId: String, guestPath: String)
 
@@ -21,12 +21,19 @@ enum ProjectPlacement: Codable, Equatable, Hashable {
 }
 
 /// Execution location is distinct from a display folder or a Desktop session id.
-enum SessionLocation: Codable, Equatable, Hashable {
+enum SessionLocation: Codable, Equatable, Hashable, Sendable {
     case thisMac
     case computer(deviceId: String?, computerId: String)
+
+    var key: String {
+        switch self {
+        case .thisMac: "local"
+        case .computer(let deviceId, let computerId): "\(deviceId ?? "local")/\(computerId)"
+        }
+    }
 }
 
-struct RunsOnProject: Codable, Equatable, Identifiable {
+struct RunsOnProject: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var name: String
     /// Existing folder key used to resolve Router's local project row. It never identifies a guest session.
@@ -41,7 +48,7 @@ struct RunsOnProject: Codable, Equatable, Identifiable {
     }
 }
 
-struct PendingDesktopStart: Codable, Equatable, Identifiable {
+struct PendingDesktopStart: Codable, Equatable, Identifiable, Sendable {
     enum State: String, Codable { case readyInClaude, matched }
 
     var id: UUID
@@ -103,5 +110,23 @@ extension Store {
             state.runsOnProjects.append(project)
         }
         router = state
+    }
+
+    /// The controller folder is an input to the Runs on picker; the matched session's actual guest folder remains in its
+    /// PendingDesktopStart. Use this identity only when relating a session back to a tagged Router project.
+    func routerProjectFolder(sessionID: String, fallback: String? = nil) -> String {
+        if let start = router.pendingDesktopStarts.first(where: { $0.desktopSessionID == sessionID && $0.state == .matched }),
+           let project = router.runsOnProjects.first(where: { $0.id == start.projectID }) {
+            return project.sourceFolder
+        }
+        return fallback ?? claudeSessions[sessionID]?.folderKey ?? ""
+    }
+
+    func routerSessionMatchesProject(_ sessionID: String, folder: String) -> Bool {
+        routerProjectFolder(sessionID: sessionID) == folder
+    }
+
+    func routerCardMatchesProject(_ card: RouterCard, folder: String) -> Bool {
+        routerProjectFolder(sessionID: card.sessionID, fallback: card.folder) == folder
     }
 }

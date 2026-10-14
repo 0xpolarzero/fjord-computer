@@ -22,6 +22,32 @@ extension Store {
     /// Takes a delivery back through its session's inbox, and reads how far it had gone from the plugin's answer.
     func cancelDelivery(_ sent: RouterDecision.Delivered) async throws -> RouterDecision.Cancelled {
         guard let paths = routerFiles else { throw RouterTools.Failure("The Router is off") }
+        if let computer = GuestRouterRuntime.shared.guestReference(for: sent.session) {
+            guard let client = GuestRouterRuntime.shared.guestClient(for: sent.session),
+                  GuestRouterRuntime.shared.guestSessionID(for: sent.session) == sent.cli else {
+                throw RouterTools.Failure("Fjord's guest file client isn't connected for this session")
+            }
+            let account = try await client.account(for: computer)
+            let guestPaths = try GuestRouterPaths(home: account.home)
+            let guestNowMs = try await GuestClock.sampleMilliseconds(client: client, computer: computer, account: account)
+            let live = try await GuestSessionObserver(client: client).read(computer: computer, paths: guestPaths,
+                                                                              guestNowMs: guestNowMs)
+            guard live.contains(where: { $0.cliSessionID == sent.cli && $0.capabilities.contains(ClaudePlugin.abortCapability) }) else {
+                throw RouterTools.Failure("Fjord's guest plugin can't cancel this delivery, or the session is gone")
+            }
+            let keyFile = try await client.filesRead(computer: computer, path: guestPaths.key, offset: nil, length: nil)
+            guard let key = String(data: keyFile.data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  key.count == 64, key.allSatisfy(\.isHexDigit) else {
+                throw RouterTools.Failure("Fjord's guest relay key is unavailable")
+            }
+            let text = RelaySigner.signAbort(target: sent.cli, cancels: sent.nonce, key: key,
+                                             now: GuestClock.date(milliseconds: guestNowMs))
+            let ack = try await GuestRouterRuntime.shared.deliver(text, to: sent.cli, computer: computer)
+            guard let how = RouterDecision.Cancelled(ack: ack) else {
+                throw RouterTools.Failure("The guest session's plugin answered “\(RouterDecision.clip(ack, 60))”")
+            }
+            return how
+        }
         guard await supportsAbort(sent.cli) else {
             throw RouterTools.Failure("Fjord's plugin in the session can't cancel, or the session is gone")
         }

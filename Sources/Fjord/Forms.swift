@@ -89,13 +89,13 @@ enum PrivateFile {
 
 /// A question form, or a plan to approve, that a session has open, held by Fjord's hook until it is answered
 /// here or in the app.
-struct PendingForm: Hashable, Identifiable {
-    struct Option: Hashable {
+struct PendingForm: Codable, Hashable, Identifiable, Sendable {
+    struct Option: Codable, Hashable, Sendable {
         var label: String
         var description: String
     }
 
-    struct Question: Hashable {
+    struct Question: Codable, Hashable, Sendable {
         var question: String
         var header: String
         var multiSelect: Bool
@@ -119,7 +119,7 @@ struct PendingForm: Hashable, Identifiable {
     var isPlan: Bool { plan != nil }
 
     /// What you decide about a plan: approved, or sent back to keep planning with an optional note.
-    struct PlanDecision: Hashable {
+    struct PlanDecision: Codable, Hashable, Sendable {
         var approve: Bool
         var feedback: String = ""
     }

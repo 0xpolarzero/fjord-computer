@@ -148,7 +148,8 @@ actor MockGuestClient: GuestClient {
     private var recordedRemovals: [(GuestReference, [String])] = []
     private var recordedExecs: [GuestExecRequest] = []
     private var operationLog: [String] = []
-    var execResult = GuestExecResult(exitCode: 0, stdout: Data(), stderr: Data())
+    private var execResults: [String: GuestExecResult] = [:]
+    var execResult = GuestExecResult(exitCode: 0, stdout: Data("v20.11.0\n".utf8), stderr: Data())
 
     init(accounts: [GuestReference: GuestAccount] = [:]) {
         var values: [String: GuestAccount] = [:]
@@ -256,7 +257,11 @@ actor MockGuestClient: GuestClient {
     func exec(_ request: GuestExecRequest) throws -> GuestExecResult {
         _ = try account(for: request.computer)
         recordedExecs.append(request)
-        return execResult
+        return execResults[request.argv.joined(separator: "\u{1f}")] ?? execResult
+    }
+
+    func setExecResult(_ result: GuestExecResult, argv: [String]) {
+        execResults[argv.joined(separator: "\u{1f}")] = result
     }
 
     func writeRecords() -> [GuestFileWriteRequest] { recordedWrites }

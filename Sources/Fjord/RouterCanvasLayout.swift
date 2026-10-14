@@ -105,13 +105,16 @@ enum RouterCanvasModel {
     /// is on, every match drawn.
     static func make(page: RouterPage, done: [RouterCard], muted: Set<String> = [], name: (String) -> String,
                      color: (String) -> Color?, filter: Set<CanvasGroup> = [], picked: Set<String> = [],
-                     expanded: Set<String> = [], showsAll: Bool = false) -> [CanvasFolder] {
+                     expanded: Set<String> = [], showsAll: Bool = false,
+                     projectKey: (String, String) -> String = { _, folder in folder },
+                     projectSource: (String) -> String = { $0 }) -> [CanvasFolder] {
         var items: [String: [CanvasGroup: [CanvasItem]]] = [:]
         var order: [String] = []
         func add(_ item: CanvasItem, _ folder: String, _ group: CanvasGroup) {
-            guard !muted.contains(folder) else { return }
-            if items[folder] == nil { order.append(folder) }
-            items[folder, default: [:]][group, default: []].append(item)
+            let key = projectKey(item.sessionID, folder)
+            guard !muted.contains(projectSource(key)) else { return }
+            if items[key] == nil { order.append(key) }
+            items[key, default: [:]][group, default: []].append(item)
         }
         for card in page.needs { add(.need(card), card.folder ?? "", .needs) }
         for card in page.ready { add(.ready(card), card.folder ?? "", .needs) }
