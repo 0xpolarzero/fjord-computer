@@ -45,13 +45,12 @@ import Testing
     @Test func needsYouIsTheZonesCardsOldestFirstWithAttentionDots() throws {
         let f = fixture()
         let page = f.store.routerZones
-        let expected = (page.needs + page.ready).sorted { $0.createdMs < $1.createdMs }
-        try #require(!expected.isEmpty)
+        let expectedIDs = Set((page.needs + page.ready).map { "card:" + $0.id })
+        try #require(!expectedIDs.isEmpty)
         let output = PaletteRouterSource.make(f.context)
-        #expect(output.needsYou.map(\.id) == expected.map { "card:" + $0.id })
+        #expect(Set(output.needsYou.map(\.id)) == expectedIDs)
+        let expected = output.needsYou.compactMap { item in (page.needs + page.ready).first { "card:" + $0.id == item.id } }
         #expect(output.needsYou.allSatisfy { $0.dot == .attention && $0.kind == .card && $0.weight == 1.3 })
-        let dates = output.needsYou.compactMap(\.date)
-        #expect(dates == dates.sorted())
         let first = try #require(output.needsYou.first)
         #expect(first.subtitle?.hasPrefix(expected[0].kind.label + " · ") == true)
         #expect(first.keywords.contains(expected[0].kind.label))
@@ -131,17 +130,74 @@ import Testing
 
     @Test func aSessionWithoutACardIsShownThroughTheWorkingRow() throws {
         let f = fixture()
-        let withCard = Set(f.store.routerZones.needs.map(\.sessionID) + f.store.routerZones.ready.map(\.sessionID)
-                           + f.store.routerZones.notes.map(\.sessionID) + f.store.routerZones.waiting.map(\.sessionID))
-        let working = try #require(f.store.routerZones.working.first { !withCard.contains($0.id) })
+        let page = f.store.routerZones
+        let withCard = Set((page.needs + page.ready + page.notes + page.waiting).map(\.sessionID))
+        let working = try #require(page.working.first { !withCard.contains($0.id) })
         let item = try #require(PaletteRouterSource.make(f.context).items.first { $0.id == "session:" + working.id })
         #expect(item.actions.first?.title == "Show in Router")
         #expect(item.actions.contains { $0.id == "summary" } == working.session.running)
+        // History showing, Working muted and folded, a search that leaves it out: all undone, then scrolled to.
+        f.model.show(.history)
+        f.model.filter.mute = [.working]
+        f.model.setFolded(.working, true)
+        f.model.search.query = "zzqxv"
+        #expect(f.model.zones(f.store).working.isEmpty)
         item.actions[0].run()
         #expect(f.went.places == [.router])
+        #expect(f.model.pane == .now)
+        #expect(f.model.filter.shows(.working))
+        #expect(!f.model.searching)
+        #expect(!f.model.shownFolds.contains(.working))
+        #expect(f.model.listZones(f.store).working.contains { $0.id == working.id })
         #expect(f.model.revealRequest?.id == RouterModel.workingID(working.id))
         try action("ask", of: item).run()
         #expect(f.went.places == [.router, .router])
+    }
+
+    @Test func soloedOtherStatesAreJoinedByTheWorkingOne() throws {
+        let f = fixture()
+        let page = f.store.routerZones
+        let withCard = Set((page.needs + page.ready + page.notes + page.waiting).map(\.sessionID))
+        let working = try #require(page.working.first { !withCard.contains($0.id) })
+        f.model.filter.solo = [.needs]
+        PaletteRouterSource.showSession(working.id, f.context)
+        #expect(f.model.filter.shows(.working) && f.model.filter.shows(.needs))
+    }
+
+    @Test func anIdleListedSessionWithoutAWorkingRowOpensInClaudeFirst() throws {
+        let f = fixture()
+        let page = f.store.routerZones
+        let shown = Set((page.needs + page.ready + page.notes + page.waiting).map(\.sessionID) + page.working.map(\.id))
+        let idle = try #require(f.store.allAgentRows.first { !shown.contains($0.id) })
+        let item = try #require(PaletteRouterSource.make(f.context).items.first { $0.id == "session:" + idle.id })
+        #expect(item.actions.first?.id == "open")
+        #expect(!item.actions.contains { $0.id == "show" })
+        var opened: [String] = []
+        f.store.interceptOpen = { opened.append($0) }
+        PaletteRouterSource.showSession(idle.id, f.context)
+        #expect(opened.count == 1 && f.went.places.isEmpty)
+    }
+
+    @Test func needsYouPutsWhatStopsASessionBeforeAStuckOneWhateverTheirAge() throws {
+        let f = fixture()
+        let needs = f.store.routerZones.needs
+        try #require(needs.count >= 2)
+        let oldest = (needs.map(\.createdMs).min() ?? 0) - 1000
+        let newest = (needs.map(\.createdMs).max() ?? 0) + 1000
+        let stuck = needs[0].id, question = needs[1].id
+        for i in f.store.router.cards.indices {
+            if f.store.router.cards[i].id == stuck { f.store.router.cards[i].kind = .stuck; f.store.router.cards[i].createdMs = oldest }
+            if f.store.router.cards[i].id == question { f.store.router.cards[i].kind = .question; f.store.router.cards[i].createdMs = newest }
+        }
+        let ids = PaletteRouterSource.make(f.context).needsYou.map(\.id)
+        let q = try #require(ids.firstIndex(of: "card:" + question))
+        let st = try #require(ids.firstIndex(of: "card:" + stuck))
+        #expect(q < st)
+        // Within a group, oldest first.
+        let page = f.store.routerZones
+        let urgent = page.needs.filter { $0.kind != .stuck && $0.kind != .finish }
+        let order = ids.compactMap { id in urgent.first { "card:" + $0.id == id } }
+        #expect(order.map(\.createdMs) == order.map(\.createdMs).sorted())
     }
 
     @Test func anUnlistedSessionOpensInClaudeFirst() throws {
@@ -182,10 +238,16 @@ import Testing
         let long = String(repeating: "word ", count: 60)
         let item = try #require(PaletteRouterSource.send(long, f.context))
         #expect((item.subtitle ?? "").count < 90)
-        let before = f.store.router.cards.count
+        let sent = long.trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = f.store.router.decisions.count
         item.actions[0].run()
         #expect(f.went.places == [.router])
-        #expect(f.store.router.cards.count >= before)
+        #expect(f.store.router.decisions.count == before + 1)
+        guard case .you(let text)? = f.store.router.decisions.last?.trigger else {
+            Issue.record("the last decision is not yours")
+            return
+        }
+        #expect(text == sent)
     }
 
     @Test func aLedgerRunLinkingASessionAddsThePRActionAndKeywords() throws {

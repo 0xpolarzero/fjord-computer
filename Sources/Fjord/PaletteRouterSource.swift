@@ -25,10 +25,16 @@ enum PaletteRouterSource {
         let rows = Dictionary(store.allAgentRows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let links = Links(store)
 
-        // The Needs-you zone, oldest first (the page draws it urgent first; here it is "what waited longest").
-        let needing = (page.needs + page.ready).sorted { $0.createdMs < $1.createdMs }
+        // The Needs-you zone: what stops a session on you first (questions, plans, asks, OKs, a wait that is over), then what
+        // is stuck or left to finish; oldest first within each.
+        let needing = (page.needs + page.ready).sorted {
+            let (a, b) = (urgency($0, ready: page.ready), urgency($1, ready: page.ready))
+            return a != b ? a < b : $0.createdMs < $1.createdMs
+        }
         let needingIDs = Set(needing.map(\.id))
         let others = (page.notes + page.waiting).filter { !needingIDs.contains($0.id) }
+
+        let working = Set(page.working.map(\.id))
 
         // A session's card to show it with: the newest of those on the page.
         var openCard: [String: RouterCard] = [:]
@@ -44,7 +50,8 @@ enum PaletteRouterSource {
             cardItem(card, needsYou: false, context: context, running: rows[card.sessionID]?.session.running == true, links: links)
         }
         output.items += store.claudeSessions.values.map { session in
-            sessionItem(session, row: rows[session.id], card: openCard[session.id], now: now, context: context, links: links)
+            sessionItem(session, row: rows[session.id], card: openCard[session.id], working: working.contains(session.id), now: now,
+                        context: context, links: links)
         }
         return output
     }
@@ -91,6 +98,16 @@ extension PaletteRouterSource {
                            weight: needsYou ? Weight.needsYou : Weight.open, actions: actions)
     }
 
+    /// 0 for what stops a session on you (a question, a plan, asks, an OK, a wait that is over), 1 for stuck turns and last
+    /// steps.
+    private static func urgency(_ card: RouterCard, ready: [RouterCard]) -> Int {
+        switch card.kind {
+        case .stuck, .finish, .done: 1
+        case .waiting: ready.contains { $0.id == card.id } ? 0 : 1
+        default: 0
+        }
+    }
+
     /// The first line of a card's text with something in it, cut to what a keyword needs.
     private static func firstLine(_ text: String) -> String? {
         guard let line = text.split(whereSeparator: \.isNewline).lazy
@@ -102,7 +119,7 @@ extension PaletteRouterSource {
 // MARK: - Sessions
 
 extension PaletteRouterSource {
-    private static func sessionItem(_ session: ClaudeSession, row: AgentRow?, card: RouterCard?, now: Date,
+    private static func sessionItem(_ session: ClaudeSession, row: AgentRow?, card: RouterCard?, working: Bool, now: Date,
                                     context: PaletteContext, links: Links) -> PaletteItem {
         let store = context.store
         let model = context.routerModel
@@ -115,23 +132,12 @@ extension PaletteRouterSource {
         if let thing { keywords += links.keywords(thing) }
 
         let open = PaletteAction(id: "open", title: "Open in Claude", symbol: "arrow.up.forward.app") { store.openAgent(id) }
+        // On the Router's page (a card, or a Working row) it is shown there first; elsewhere, opening it in Claude is it.
         var actions: [PaletteAction] = []
-        if let card {
-            actions.append(PaletteAction(id: "show", title: "Show in Router", symbol: "rectangle.stack") {
-                model.select(card.id, store: store)
-                context.go(.router)
-            })
-            actions.append(open)
-        } else if row != nil {
-            actions.append(PaletteAction(id: "show", title: "Show in Router", symbol: "rectangle.stack") {
-                context.go(.router)
-                model.reveal(RouterModel.workingID(id))
-            })
-            actions.append(open)
-        } else {
-            // Not on the Router's page: opening it in Claude is what there is to do.
-            actions.append(open)
+        if card != nil || working {
+            actions.append(PaletteAction(id: "show", title: "Show in Router", symbol: "rectangle.stack") { showSession(id, context) })
         }
+        actions.append(open)
         actions.append(PaletteAction(id: "ask", title: "Ask the Router about it", symbol: "sparkles") {
             model.prefill([.session(id)])
             context.go(.router)
@@ -159,6 +165,34 @@ extension PaletteRouterSource {
     /// Claude Code id.
     private static func forkAction(_ session: String, _ store: Store) -> PaletteAction {
         PaletteAction(id: "fork", title: "Fork", symbol: "arrow.triangle.branch") { store.forkSession(session) }
+    }
+}
+
+// MARK: - Showing a session
+
+extension PaletteRouterSource {
+    /// Shows a session in the window as the Router has it: its newest card if the page draws one (picked, as a click does);
+    /// else its Working row, with the page brought to where it is seen; else opens it in Claude. Works out what is drawn
+    /// now, not when the palette opened.
+    static func showSession(_ sessionID: String, _ context: PaletteContext) {
+        let store = context.store
+        let model = context.routerModel
+        let page = store.routerZones
+        let drawn = (page.needs + page.ready + page.notes + page.waiting).filter { $0.sessionID == sessionID }
+        if let card = drawn.max(by: { $0.createdMs < $1.createdMs }) {
+            model.select(card.id, store: store)
+            context.go(.router)
+        } else if page.working.contains(where: { $0.id == sessionID }) {
+            // Seen only on Now, with its state chip on, its section open and no search leaving it out.
+            if model.searching, !model.zones(store).working.contains(where: { $0.id == sessionID }) { model.endSearch() }
+            model.show(.now)
+            model.filter.reveal(.working)
+            model.setFolded(.working, false)
+            context.go(.router)
+            model.reveal(RouterModel.workingID(sessionID))
+        } else {
+            store.openAgent(sessionID)
+        }
     }
 }
 
