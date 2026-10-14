@@ -59,7 +59,7 @@ struct RouterComposer: View {
                     if !suggestions.isEmpty {
                         let at = mentionAt ?? CGPoint(x: 0, y: C.pad + (C.row - 20) / 2)
                         let place = MentionList.place(caretX: at.x, available: cardWidth)
-                        MentionList(suggestions: suggestions, index: model.mentionIndex, width: place.width,
+                        MentionList(suggestions: suggestions, index: model.mentionIndex, width: place.width, store: store,
                                     hover: { model.mentionIndex = $0 }) { model.pickMention($0) }
                             .fixedSize()
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
@@ -394,6 +394,7 @@ struct MentionList: View {
     let suggestions: [MentionSuggestion]
     let index: Int
     var width: CGFloat = CDS.Composer.mentionWidth
+    var store: Store? = nil
     var hover: ((Int) -> Void)? = nil
     let pick: (MentionSuggestion) -> Void
 
@@ -417,27 +418,34 @@ struct MentionList: View {
                         .padding(.horizontal, d.pad.md).padding(.top, i == 0 ? 2 : 6).padding(.bottom, 2)
                         .accessibilityAddTraits(.isHeader)
                 }
-                Button { pick(row) } label: {
-                    HStack(spacing: d.gap.xs) {
-                        Image(systemName: row.look.symbol ?? "folder").font(.system(size: 12))
-                            .foregroundStyle(row.look.tint ?? CDS.Text.secondary)
-                            .frame(width: d.icon, height: d.icon)
-                        HStack(alignment: .firstTextBaseline, spacing: d.gap.xs) {
-                            Text(row.insertsText ? row.name : "@" + row.name).font(CDS.sans(d.body.0)).foregroundStyle(CDS.Text.primary)
-                                .lineLimit(1).layoutPriority(1)
-                            Text(row.detail).font(CDS.sans(d.caption.0)).foregroundStyle(CDS.Text.muted)
-                                .lineLimit(1).truncationMode(row.folder == nil ? .tail : .head)
+                HStack(spacing: 2) {
+                    Button { pick(row) } label: {
+                        HStack(spacing: d.gap.xs) {
+                            Image(systemName: row.look.symbol ?? "folder").font(.system(size: 12))
+                                .foregroundStyle(row.look.tint ?? CDS.Text.secondary)
+                                .frame(width: d.icon, height: d.icon)
+                            HStack(alignment: .firstTextBaseline, spacing: d.gap.xs) {
+                                Text(row.insertsText ? row.name : "@" + row.name).font(CDS.sans(d.body.0)).foregroundStyle(CDS.Text.primary)
+                                    .lineLimit(1).layoutPriority(1)
+                                Text(row.detail).font(CDS.sans(d.caption.0)).foregroundStyle(CDS.Text.muted)
+                                    .lineLimit(1).truncationMode(row.folder == nil ? .tail : .head)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        Spacer(minLength: 0)
+                        .padding(.leading, d.pad.md)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: d.control)
+                        .background(RoundedRectangle(cornerRadius: d.radius, style: .continuous)
+                            .fill(i == index ? CDS.Fill.ghostHover : .clear))
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, d.pad.md)
-                    .frame(height: d.control)
-                    .background(RoundedRectangle(cornerRadius: d.radius, style: .continuous)
-                        .fill(i == index ? CDS.Fill.ghostHover : .clear))
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .onHover { if $0 { hover?(i) } }
+                    if let folder = row.folder, let store {
+                        RunsOnProjectMenu(store: store, folder: folder)
+                            .padding(.trailing, 3)
+                    }
                 }
-                .buttonStyle(.plain)
-                .onHover { if $0 { hover?(i) } }
                 .accessibilityLabel("\(row.section.title.dropLast()) \(row.name), \(row.detail)")
                 .accessibilityAddTraits(i == index ? .isSelected : [])
             }

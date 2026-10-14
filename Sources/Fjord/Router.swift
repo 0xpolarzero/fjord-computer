@@ -47,6 +47,12 @@ struct RouterState: Codable, Equatable {
     /// Nil for the default (`RouterStyle.defaultText`).
     var style: String?
 
+    /// Projects whose future sessions have an explicit execution location. `sourceFolder` is a local discovery alias used
+    /// only to find the existing project row; `id` is the project identity and is retained when placement changes.
+    var runsOnProjects: [RunsOnProject] = []
+    /// Desktop SSH starts Fjord prepared but cannot observe a session until guest presence and transcript evidence arrive.
+    var pendingDesktopStarts: [PendingDesktopStart] = []
+
     /// Questions and plans asked while you looked at the session in the app, by session: no card while you do; one is made
     /// when you leave it, if the wait is still on.
     var heldWaits: [String: HeldWait] = [:]
@@ -101,7 +107,7 @@ struct RouterState: Codable, Equatable {
     /// `chat` is read, never written (an older file's changes); `claudeSessionID`, and an older file's `autoContinue` and
     /// `autoContinueSessions`, are ignored.
     private enum CodingKeys: String, CodingKey {
-        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, handledTurns, replies, style
+        case enabled, enabledAt, cards, changes, chat, decisions, summaries = "overviews", seen, waits, waitTools, formSeen, pendingTurns, origins, heldWaits, fjordStarted, handledTurns, replies, style, runsOnProjects, pendingDesktopStarts
     }
 
     func encode(to encoder: Encoder) throws {
@@ -123,6 +129,8 @@ struct RouterState: Codable, Equatable {
         try c.encode(handledTurns, forKey: .handledTurns)
         try c.encode(replies, forKey: .replies)
         try c.encodeIfPresent(style, forKey: .style)
+        try c.encode(runsOnProjects, forKey: .runsOnProjects)
+        try c.encode(pendingDesktopStarts, forKey: .pendingDesktopStarts)
     }
 
     init(from decoder: Decoder) throws {
@@ -171,6 +179,8 @@ struct RouterState: Codable, Equatable {
         handledTurns = map(.handledTurns)
         replies = map(.replies)
         style = value(.style)
+        runsOnProjects = list(.runsOnProjects)
+        pendingDesktopStarts = list(.pendingDesktopStarts)
         linkUnlinkedChanges(legacy: legacy)
         dropped = lost
     }
