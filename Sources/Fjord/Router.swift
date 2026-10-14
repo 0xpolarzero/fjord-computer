@@ -1066,6 +1066,7 @@ extension Store {
     /// happens off the main thread; `routerHookError` says why it failed.
     func setRouterEnabled(_ on: Bool, now: Date = Date()) {
         guard on != router.enabled else { return }
+        routerGeneration &+= 1
         var state = router
         state.enabled = on
         if on {

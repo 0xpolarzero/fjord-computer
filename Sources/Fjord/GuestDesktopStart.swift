@@ -22,13 +22,18 @@ enum GuestDesktopStart {
 
     static func prepare(client: any GuestClient, placement: ProjectPlacement, project: RunsOnProject,
                         prompt: String, computerName: String,
-                        settings: ClaudeSSHSettings = ClaudeSSHSettings(), now: Date = Date()) async throws -> Prepared {
+                        settings: ClaudeSSHSettings = ClaudeSSHSettings(), now: Date = Date(),
+                        activationAllowed: @escaping @MainActor @Sendable () -> Bool = { true }) async throws -> Prepared {
         guard case .computer(let deviceId, let computerId, let rawFolder) = placement else { throw Failure.computerFolderRequired }
         let folder = try GuestFolderPath.validate(rawFolder)
         let computer = GuestReference(deviceId: deviceId, computerId: computerId)
         // Explicitly validate in the guest filesystem. Empty directories are valid; no controller path API touches it.
         _ = try await client.filesList(computer: computer, path: folder)
-        _ = try await GuestRouterInstaller(client: client).install(computer: computer)
+        _ = try await GuestRouterInstaller(client: client).install(computer: computer, activationAllowed: activationAllowed)
+        guard await activationAllowed() else {
+            try? await GuestRouterInstaller(client: client).disable(computer: computer)
+            throw GuestRouterInstaller.Failure.routerTurnedOff
+        }
         let alias = try await client.sshAliasEnsure(computer: computer, installInclude: true)
         try settings.install(.init(deviceId: deviceId, computerId: computerId, computerName: computerName,
                                    ownerName: alias.ownerName, alias: alias.alias))

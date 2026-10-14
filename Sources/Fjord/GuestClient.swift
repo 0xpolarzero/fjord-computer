@@ -151,6 +151,11 @@ actor MockGuestClient: GuestClient {
     private var execResults: [String: GuestExecResult] = [:]
     private var readFailures: [String: [GuestClientFailure]] = [:]
     private var postAdmissionWriteFailures: [String: GuestClientFailure] = [:]
+    private var pausedExecs: Set<String> = []
+    private var blockedExecs: Set<String> = []
+    private var execPauseWaiters: [String: CheckedContinuation<Void, Never>] = [:]
+    private var execResumeWaiters: [String: CheckedContinuation<Void, Never>] = [:]
+    private var execResumeRequests: Set<String> = []
     var execResult = GuestExecResult(exitCode: 0, stdout: Data("v20.11.0\n".utf8), stderr: Data())
 
     init(accounts: [GuestReference: GuestAccount] = [:]) {
@@ -262,10 +267,19 @@ actor MockGuestClient: GuestClient {
 
     func sshAliasRemove(computer: GuestReference) { aliases[computer.key] = nil }
 
-    func exec(_ request: GuestExecRequest) throws -> GuestExecResult {
+    func exec(_ request: GuestExecRequest) async throws -> GuestExecResult {
         _ = try account(for: request.computer)
         recordedExecs.append(request)
-        return execResults[request.argv.joined(separator: "\u{1f}")] ?? execResult
+        let key = request.argv.joined(separator: "\u{1f}")
+        if pausedExecs.remove(key) != nil {
+            blockedExecs.insert(key)
+            execPauseWaiters.removeValue(forKey: key)?.resume()
+            if execResumeRequests.remove(key) == nil {
+                await withCheckedContinuation { execResumeWaiters[key] = $0 }
+            }
+            blockedExecs.remove(key)
+        }
+        return execResults[key] ?? execResult
     }
 
     func setExecResult(_ result: GuestExecResult, argv: [String]) {
@@ -278,6 +292,20 @@ actor MockGuestClient: GuestClient {
 
     func failNextWriteAfterAdmission(computer: GuestReference, path: String, with failure: GuestClientFailure) {
         postAdmissionWriteFailures[Self.fileKey(computer, path)] = failure
+    }
+
+    func pauseNextExec(argv: [String]) { pausedExecs.insert(argv.joined(separator: "\u{1f}")) }
+
+    func waitForExecPause(argv: [String]) async {
+        let key = argv.joined(separator: "\u{1f}")
+        guard !blockedExecs.contains(key) else { return }
+        await withCheckedContinuation { execPauseWaiters[key] = $0 }
+    }
+
+    func resumeExec(argv: [String]) {
+        let key = argv.joined(separator: "\u{1f}")
+        if let waiter = execResumeWaiters.removeValue(forKey: key) { waiter.resume() }
+        else { execResumeRequests.insert(key) }
     }
 
     func writeRecords() -> [GuestFileWriteRequest] { recordedWrites }

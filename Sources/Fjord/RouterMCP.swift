@@ -1260,6 +1260,10 @@ final class RouterMCPServer: @unchecked Sendable {
             guard let guestClient = self.guestClient ?? GuestRouterRuntime.shared.guestClient(for: runsOn.placement.location) else {
                 throw Failure("The guest file client isn't connected for this computer yet")
             }
+            guard case .computer(let deviceId, let computerId, _) = runsOn.placement else { throw Failure("This project isn't on a computer") }
+            let computer = GuestReference(deviceId: deviceId, computerId: computerId)
+            let routerGeneration = store.routerGeneration
+            GuestRouterRuntime.shared.registerInstallationTarget(store: store, client: guestClient, computer: computer)
             try await ensureGuestComputerReady(store: store, placement: runsOn.placement)
             if let previous = store.router.pendingDesktopStarts.first(where: {
                 $0.projectID == runsOn.id && $0.location == runsOn.placement.location && $0.prompt == ready.text
@@ -1276,15 +1280,11 @@ final class RouterMCPServer: @unchecked Sendable {
             }
             defer { GuestRouterRuntime.shared.releaseStart(reservation) }
             do {
-                let rowName: String
-                if case .computer(let deviceId, let computerId, _) = runsOn.placement {
-                    try await GuestRouterRuntime.shared.applyPendingDisable(
-                        computer: GuestReference(deviceId: deviceId, computerId: computerId), client: guestClient)
-                    rowName = store.computers.inventory?.allComputers.first(where: { $0.id == computerId })?.name ?? computerId
-                } else { rowName = name }
+                let rowName = store.computers.inventory?.allComputers.first(where: { $0.id == computerId })?.name ?? computerId
                 let settingsFile = guestSSHSettings ?? ClaudeSSHSettings()
-                let prepared = try await GuestDesktopStart.prepare(client: guestClient, placement: runsOn.placement,
-                    project: runsOn, prompt: ready.text, computerName: rowName, settings: settingsFile)
+                let prepared = try await GuestRouterRuntime.shared.prepareDesktopStart(client: guestClient,
+                    placement: runsOn.placement, project: runsOn, prompt: ready.text, computerName: rowName,
+                    settings: settingsFile, store: store, computer: computer, generation: routerGeneration)
                 try live(ticket)
                 if case .computer(let deviceId, let computerId, _) = runsOn.placement {
                     try await GuestRouterRuntime.shared.startWatching(store: store, client: guestClient,

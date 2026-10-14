@@ -334,6 +334,7 @@ private actor GuestRelayStateRecorder {
 
         let store = Store(engineClient: engineWithComputer(state: .running))
         store.stateFile = tempHome.appendingPathComponent("state.json")
+        store.persists = false
         store.router.enabled = true
         store.agents.enabled = true
         let source = "/local/widget"
@@ -368,6 +369,44 @@ private actor GuestRelayStateRecorder {
         #expect(prepared.0 == "widget")
         #expect(prepared.1 == "local/\(computer.computerId)")
         #expect(prepared.2 == store.router.pendingDesktopStarts[0].id.uuidString)
+    }
+
+    @MainActor @Test func disablingRouterDuringGuestInstallWaitsAndRevokesTheInstallation() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-router-disable-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempHome) }
+
+        let store = Store(engineClient: engineWithComputer(state: .running))
+        store.stateFile = tempHome.appendingPathComponent("state.json")
+        store.persists = false
+        store.router.enabled = true
+        store.agents.enabled = true
+        let source = "/local/widget"
+        store.claudeSessions["local_existing"] = ClaudeSession(id: "local_existing", title: "Widget", folder: source,
+            lastActivity: Date(), running: false)
+        store.setRunsOnPlacement(.computer(deviceId: nil, computerId: computer.computerId, guestPath: "/workspace/repo"), for: source)
+        let guest = MockGuestClient(accounts: [localComputer: account])
+        let paths = try GuestRouterPaths(home: account.home)
+        let marketplace = [account.claudeExecutable, "plugin", "marketplace", "add", paths.plugin, "--scope", "user"]
+        await guest.pauseNextExec(argv: marketplace)
+        let tools = RouterTools(store: store)
+        tools.guestClient = guest
+        tools.guestSSHSettings = ClaudeSSHSettings(home: tempHome)
+        tools.beginTurn("Fix the bug in widget")
+
+        let starting = Task { try await tools.startSession(store, project: "widget", title: "Fix it", ticket: tools.ticket()) }
+        await guest.waitForExecPause(argv: marketplace)
+        store.switchRouter(false)
+        await guest.resumeExec(argv: marketplace)
+        do { _ = try await starting.value } catch { }
+
+        let location = SessionLocation.computer(deviceId: nil, computerId: computer.computerId)
+        await waitUntil { !store.router.pendingGuestDisables.contains(location) }
+        #expect(store.router.pendingDesktopStarts.isEmpty)
+        #expect(store.router.pendingGuestDisables.isEmpty)
+        #expect(await guest.filesSnapshot(for: localComputer)[paths.key] == nil)
+        #expect(await guest.filesSnapshot(for: localComputer)[GuestRouterPaths.join(paths.forms, FormBridge.marker)] == nil)
     }
 
     @Test func guestPresenceRequiresGuestPIDRegistryAndAuthoritativeTranscript() async throws {

@@ -13,6 +13,7 @@ import Foundation
     private var leaseChecks: [String: Task<Void, Never>] = [:]
     private var evidence: [String: [GuestSessionEvidence]] = [:]
     private var activeStartKeys: Set<String> = []
+    private var operationTails: [String: Task<Void, Never>] = [:]
 
     private init() {}
 
@@ -25,10 +26,32 @@ import Foundation
 
     func releaseStart(_ key: String) { activeStartKeys.remove(key) }
 
-    func startWatching(store: Store, client: any GuestClient, computer: GuestReference) async throws {
+    /// Makes the target visible to Router-off before any guest file or command can be changed.
+    func registerInstallationTarget(store: Store, client: any GuestClient, computer: GuestReference) {
         self.store = store
         clients[computer.key] = client
         computers[computer.key] = computer
+    }
+
+    func prepareDesktopStart(client: any GuestClient, placement: ProjectPlacement, project: RunsOnProject,
+                            prompt: String, computerName: String, settings: ClaudeSSHSettings,
+                            store: Store, computer: GuestReference, generation: UInt64) async throws -> GuestDesktopStart.Prepared {
+        registerInstallationTarget(store: store, client: client, computer: computer)
+        let allowed: @MainActor @Sendable () -> Bool = { [weak store] in
+            guard let store else { return false }
+            return store.routerOn && store.routerGeneration == generation
+        }
+        return try await serialized(computer) { [self] in
+            guard allowed() else { throw GuestRouterInstaller.Failure.routerTurnedOff }
+            try await applyPendingDisableNow(computer: computer, client: client)
+            guard allowed() else { throw GuestRouterInstaller.Failure.routerTurnedOff }
+            return try await GuestDesktopStart.prepare(client: client, placement: placement, project: project,
+                prompt: prompt, computerName: computerName, settings: settings, activationAllowed: allowed)
+        }
+    }
+
+    func startWatching(store: Store, client: any GuestClient, computer: GuestReference) async throws {
+        registerInstallationTarget(store: store, client: client, computer: computer)
         guard watchers[computer.key] == nil else { return }
         let account = try await client.account(for: computer)
         let paths = try GuestRouterPaths(home: account.home)
@@ -94,8 +117,11 @@ import Foundation
         Task { @MainActor [weak self, weak store] in
             for (computer, client) in targets {
                 do {
-                    try await GuestRouterInstaller(client: client).disable(computer: computer)
-                    self?.clearPendingDisable(computer)
+                    guard let self else { return }
+                    try await self.serialized(computer) { [self] in
+                        try await GuestRouterInstaller(client: client).disable(computer: computer)
+                        self.clearPendingDisable(computer)
+                    }
                 } catch {
                     store?.routerHookError = "Guest Router disable is pending for \(computer.computerId): \(error.localizedDescription)"
                 }
@@ -105,10 +131,28 @@ import Foundation
 
     /// Reconciles a previously failed Router-off while the guest is reachable, before a new install can begin.
     func applyPendingDisable(computer: GuestReference, client: any GuestClient) async throws {
+        try await serialized(computer) { [self] in
+            try await applyPendingDisableNow(computer: computer, client: client)
+        }
+    }
+
+    private func applyPendingDisableNow(computer: GuestReference, client: any GuestClient) async throws {
         let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
         guard store?.router.pendingGuestDisables.contains(location) == true else { return }
         try await GuestRouterInstaller(client: client).disable(computer: computer)
         clearPendingDisable(computer)
+    }
+
+    private func serialized<T: Sendable>(_ computer: GuestReference,
+        operation: @escaping @MainActor @Sendable () async throws -> T) async throws -> T {
+        let key = computer.key
+        let previous = operationTails[key]
+        let task = Task { @MainActor in
+            await previous?.value
+            return try await operation()
+        }
+        operationTails[key] = Task { @MainActor in _ = try? await task.value }
+        return try await task.value
     }
 
     func reconcileDesktopMetadata() {

@@ -18,6 +18,7 @@ struct GuestRouterInstaller: Sendable {
         case incompatibleSettings(String)
         case settingsKeptChanging(String)
         case prerequisite(String)
+        case routerTurnedOff
 
         var errorDescription: String? {
             switch self {
@@ -27,13 +28,15 @@ struct GuestRouterInstaller: Sendable {
             case .incompatibleSettings(let path): "\(path) has an incompatible hooks.PermissionRequest value; Fjord left it alone."
             case .settingsKeptChanging(let path): "\(path) kept changing while Fjord updated it."
             case .prerequisite(let detail): "Guest Router setup is blocked: \(detail)"
+            case .routerTurnedOff: "The Router was switched off while guest setup was running."
             }
         }
     }
 
     var client: any GuestClient
 
-    func install(computer: GuestReference) async throws -> Installed {
+    func install(computer: GuestReference,
+                 activationAllowed: @escaping @MainActor @Sendable () -> Bool = { true }) async throws -> Installed {
         let account = try await client.account(for: computer)
         guard account.home.hasPrefix("/"), account.nodeExecutable.hasPrefix("/"), account.claudeExecutable.hasPrefix("/") else {
             throw Failure.invalidAccount
@@ -50,7 +53,6 @@ struct GuestRouterInstaller: Sendable {
         try await writeDirectoryMarker(computer: computer, path: paths.forms)
         try await writeDirectoryMarker(computer: computer, path: paths.presence)
         try await writeDirectoryMarker(computer: computer, path: paths.inbox)
-        let key = try await ensureGuestKey(computer: computer, path: paths.key)
         let pluginConfig = try JSONSerialization.data(withJSONObject: [
             "keyPath": paths.key, "presenceDir": paths.presence, "sessionsDir": paths.registry, "inboxDir": paths.inbox,
         ], options: [.sortedKeys, .withoutEscapingSlashes]) + Data("\n".utf8)
@@ -90,8 +92,17 @@ struct GuestRouterInstaller: Sendable {
             }
         }
         try await GuestClaudeSettings.installHook(client: client, computer: computer, paths: paths)
+        guard await activationAllowed() else {
+            try? await disable(computer: computer)
+            throw Failure.routerTurnedOff
+        }
+        let key = try await ensureGuestKey(computer: computer, path: paths.key)
         try await write(Data(version.utf8), computer: computer, path: GuestRouterPaths.join(paths.root, "install-version"), mode: 0o600)
         try await write(Data(), computer: computer, path: GuestRouterPaths.join(paths.forms, FormBridge.marker), mode: 0o600)
+        guard await activationAllowed() else {
+            try? await disable(computer: computer)
+            throw Failure.routerTurnedOff
+        }
         return Installed(paths: paths, version: version, keyID: ClaudePlugin.keyID(of: key))
     }
 

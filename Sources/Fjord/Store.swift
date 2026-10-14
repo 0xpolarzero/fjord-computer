@@ -236,6 +236,7 @@ final class Store {
     /// which follow each other). Kept in step by `router` and `agents` and written only when it changes, so what reads it
     /// doesn't redraw with every read of Claude's sessions, as reading those two whole would.
     private(set) var routerOn = false
+    @ObservationIgnored var routerGeneration: UInt64 = 0
     private func updateRouterOn() {
         if (router.enabled && agents.enabled) != routerOn { routerOn = router.enabled && agents.enabled }
     }
