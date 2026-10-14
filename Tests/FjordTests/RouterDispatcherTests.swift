@@ -26,6 +26,9 @@ import Testing
         var ack: String?
         var settingsSigned = true
         var answered: [(card: String, answers: [String: String])] = []
+        var planned: [(card: String, decision: PendingForm.PlanDecision)] = []
+        /// What a compound run leaves for sessions.
+        var leftover: [String] = []
         var runs: [(intent: RouterRun.Intent, input: String)] = []
         var answer = RouterRun.Answer(reply: "Done.", done: "set it")
         var whileRunning: ((RouterTools) async -> Void)?
@@ -92,7 +95,12 @@ import Testing
                     return RouterDispatcher.Delivery(to: "peer-fork", text: request.message.isEmpty ? "" : "⟦signed⟧\n" + request.message,
                                                      body: request.message, original: request.message, rephrased: false,
                                                      session: "local_fork", newSessionIn: "lookout")
-                })
+                },
+                answerPlan: { [unowned self] _, card, decision in
+                    planned.append((card, decision))
+                    return "decided"
+                },
+                leftovers: { [unowned self] _ in leftover })
         }
 
         func release(_ session: String) {
@@ -1837,6 +1845,134 @@ import Testing
         let id = d.submit("hide the CI category and tell docs to ship")
         await finish(d, f, id)
         #expect(f.runs.map(\.intent) == [.compound] && f.sent.isEmpty)
+    }
+
+    // MARK: Plans, forms in your words, compound halves
+
+    private func holdForm(_ s: Store, plan: String? = nil, questions: [PendingForm.Question] = []) {
+        s.claudeSessions["local_a"]?.cliID = "cli-a"
+        s.router.cards[0].toolUseID = "call-1"
+        if plan != nil { s.router.cards[0].kind = .plan }
+        s.pendingForms["cli-a"] = PendingForm(id: "f", cliSessionID: "cli-a", transcriptPath: "", questions: questions,
+                                              createdAt: Date(), pid: 1, toolUseID: "call-1", plan: plan)
+    }
+
+    private func db() -> PendingForm.Question {
+        .init(question: "Which database?", header: "DB", multiSelect: false,
+              options: [.init(label: "SQLite", description: ""), .init(label: "Postgres", description: "")])
+    }
+
+    private static func pick(_ label: String) -> JevClient.Answer {
+        .choice(.init(choice: label, confidence: 0.9, probabilities: [label: 0.9]))
+    }
+
+    @Test func aWordOfApprovalApprovesAHeldPlanWithoutAskingJev() async {
+        let (s, d, f) = setup()
+        holdForm(s, plan: "1. Do it")
+        var asked = 0
+        d.asker = { _, _ in asked += 1; return [:] }
+        for text in ["Go ahead!", "LGTM", "ship it", "approved."] {
+            let id = d.submit(text, context: RouterContext(replyTo: "local_a#w1"))
+            await finish(d, f, id)
+        }
+        #expect(f.planned.map(\.decision.approve) == [true, true, true, true] && asked == 0)
+        #expect(f.sent.isEmpty && f.answered.isEmpty && f.prepared.isEmpty)
+    }
+
+    @Test func aMessageJevFindsApprovingApprovesAndAnyOtherSendsTheMessageBack() async {
+        let (s, d, f) = setup()
+        holdForm(s, plan: "1. Do it")
+        var yes = 0.95
+        d.asker = { q, st in
+            #expect(q["approves"] != nil && st.values.contains { $0.contains("1. Do it") })
+            return ["approves": .noul(yes)]
+        }
+        let a = d.submit("that looks right, do it", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, a)
+        yes = 0.1
+        let b = d.submit("also add tests first", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, b)
+        // Unsure: sent back too, never approved on a guess.
+        yes = 0.5
+        let c = d.submit("hmm, why this order?", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, c)
+        #expect(f.planned.map(\.decision) == [.init(approve: true), .init(approve: false, feedback: "also add tests first"),
+                                              .init(approve: false, feedback: "hmm, why this order?")])
+        #expect(f.sent.isEmpty && f.prepared.isEmpty && f.answered.isEmpty, "a plan is decided, never also sent as text")
+    }
+
+    @Test func aPlanWithoutJevIsSentBackWithTheMessage() async {
+        let (s, d, f) = setup()
+        holdForm(s, plan: "1. Do it")
+        let id = d.submit("sounds fine to me", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, id)
+        #expect(f.planned.map(\.decision) == [.init(approve: false, feedback: "sounds fine to me")] && f.sent.isEmpty)
+    }
+
+    @Test func aFormAnsweredInYourOwnWordsGetsJevsPickPerQuestion() async {
+        let (s, d, f) = setup()
+        holdForm(s, questions: [db()])
+        d.asker = { q, _ in
+            #expect(q["q0"] != nil)
+            return ["q0": Self.pick("Postgres")]
+        }
+        let a = d.submit("the second one, the bigger database", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, a)
+        #expect(f.answered.map(\.answers) == [["Which database?": "Postgres"]] && f.prepared.isEmpty)
+        // Neither option: for a one-question form, your words are the answer.
+        d.asker = { _, _ in ["q0": Self.pick(RouterDispatcher.otherChoice)] }
+        let b = d.submit("DuckDB, it's analytics", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, b)
+        #expect(f.answered.last?.answers == ["Which database?": "DuckDB, it's analytics"])
+        // Unsure: the form stays for you, and the message goes as text as before.
+        d.asker = { _, _ in ["q0": .choice(.init(choice: "SQLite", confidence: 0.4, probabilities: ["SQLite": 0.4, "Postgres": 0.4, RouterDispatcher.otherChoice: 0.2]))] }
+        let c = d.submit("whatever is easiest", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, c)
+        #expect(f.answered.count == 2 && f.prepared == ["local_a"])
+    }
+
+    @Test func aTwoQuestionFormIsAnsweredOnlyWhenEveryQuestionIsClear() async {
+        let (s, d, f) = setup()
+        let editor = PendingForm.Question(question: "Which editor?", header: "Ed", multiSelect: true,
+                                          options: [.init(label: "Vim", description: ""), .init(label: "Zed", description: "")])
+        holdForm(s, questions: [db(), editor])
+        d.asker = { _, _ in ["q0": Self.pick("SQLite"), "q1o0": .noul(0.9), "q1o1": .noul(0.8)] }
+        let a = d.submit("sqlite, and both editors", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, a)
+        #expect(f.answered.map(\.answers) == [["Which database?": "SQLite", "Which editor?": "Vim, Zed"]])
+        // One question unclear or "other" among two: nothing is sent in part.
+        d.asker = { _, _ in ["q0": Self.pick(RouterDispatcher.otherChoice), "q1o0": .noul(0.9), "q1o1": .noul(0.1)] }
+        let b = d.submit("duckdb and vim", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, b)
+        d.asker = { _, _ in ["q0": Self.pick("SQLite"), "q1o0": .noul(0.1), "q1o1": .noul(0.1)] }
+        let c = d.submit("sqlite", context: RouterContext(replyTo: "local_a#w1"))
+        await finish(d, f, c)
+        #expect(f.answered.count == 1)
+    }
+
+    @Test func theSessionHalfOfACompoundMessageIsRoutedAsAMessageOfItsOwn() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
+        f.leftover = ["tell CI to rerun the flaky job"]
+        let id = d.submit("update the category and tell CI to rerun the flaky job")
+        await finish(d, f, id)
+        await waitUntil { s.router.decisions.contains { $0.splitFrom == id } }
+        let half = s.router.decisions.first { $0.splitFrom == id }
+        #expect(half != nil && half?.trigger == .you("tell CI to rerun the flaky job"))
+        await finish(d, f, half?.id)
+        #expect(f.ranks == 2, "the half is classified like any message")
+    }
+
+    @Test func aSplitHalfDoesNotSplitAgain() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
+        f.leftover = ["and also this"]
+        let id = d.submit("do two things")
+        await finish(d, f, id)
+        await waitUntil { s.router.decisions.contains { $0.splitFrom == id } }
+        let half = s.router.decisions.first { $0.splitFrom == id }
+        await finish(d, f, half?.id)
+        #expect(s.router.decisions.filter { $0.splitFrom != nil }.count == 1)
     }
 
     @Test func aFailureIsInTheEntryAndNothingIsLeftPending() async {

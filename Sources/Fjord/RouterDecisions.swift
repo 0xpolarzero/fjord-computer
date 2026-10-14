@@ -151,6 +151,8 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     /// The same message's session settings: what a session the Router starts for it is called and runs on. Nil for anything
     /// else, and in entries from before (the thing's line is the title then, on your defaults).
     var actionStart: ActionStart?
+    /// The decision whose compound message this one is the session half of (`RouterDispatcher.think`). Nil for anything else.
+    var splitFrom: UUID?
 
     struct ActionStart: Codable, Equatable {
         var title: String

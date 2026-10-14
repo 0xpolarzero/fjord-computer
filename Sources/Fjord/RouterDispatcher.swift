@@ -40,9 +40,13 @@ struct RouterContext: Equatable {
     /// Sent from the Router page's composer: its run shows as a pill over the composer, flying to where it went
     /// (`RouterFlights`), and an ask about it unfolds there rather than in Needs you.
     var flies = false
+    /// The decision this message was split from: the session half of a compound message (`RouterDispatcher.think`).
+    var splitFrom: UUID?
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
-         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = []) {
+         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = [],
+         splitFrom: UUID? = nil) {
+        self.splitFrom = splitFrom
         self.replyTo = replyTo
         self.projects = projects
         self.target = target
@@ -202,6 +206,12 @@ struct RouterAskBack: Identifiable, Equatable {
         var fork: @MainActor (RouterTools, SessionFork.Request) async throws -> Delivery = { _, _ in
             throw RouterTools.Failure("The Router isn't ready")
         }
+        /// A plan decided for a card (approved, or sent back with the message): what was done.
+        var answerPlan: @MainActor (RouterTools, _ card: String, PendingForm.PlanDecision) async throws -> String = { _, _, _ in
+            throw RouterTools.Failure("The Router isn't ready")
+        }
+        /// The parts of a compound message a run left for sessions (`RouterRun.Answer.leftover`, when it has it).
+        var leftovers: (RouterRun.Answer) -> [String] = { $0.sessionHalves }
     }
 
     /// Asks waiting for a pick, oldest first.
@@ -300,6 +310,7 @@ struct RouterAskBack: Identifiable, Equatable {
                                    links: .init(cards: context.replyTo.map { [$0] } ?? []))
         entry.mentions = context.mentions.isEmpty ? nil : context.mentions
         entry.fromAction = context.action?.origin
+        entry.splitFrom = context.splitFrom
         entry.actionStart = context.action.map { .init(title: $0.title, model: $0.model, effort: $0.effort) }
         let id = store.logDecision(entry)
         if context.flies, context.action == nil { flying.append(id) }
@@ -737,12 +748,29 @@ struct RouterAskBack: Identifiable, Equatable {
         let said = (try? Addressing.edit(job.text, pills: job.context.pills).text) ?? job.text
         let held = card.map { id in store.router.cards.filter { $0.id == id } }
             ?? store.routerShownOpenCards.filter { $0.sessionID == session && store.pendingForm(for: $0) != nil }
-        if held.count == 1, let c = held.first, let form = store.pendingForm(for: c),
-           let answers = Self.formAnswers(form, message: said) {
-            stage(job, "answering")
-            _ = try await effects.answer(job.tools, c.id, answers)
-            note(job, .answered(card: c.title), session: session, card: c.id)
-            return
+        if held.count == 1, let c = held.first, let form = store.pendingForm(for: c) {
+            if form.isPlan {
+                // A plan is approved or sent back, never sent as text it stays pending under.
+                stage(job, "reading your decision")
+                let decision = await Self.planDecision(form, message: said, ask: jev(job.tools))
+                try linked(job.context)
+                stage(job, decision.approve ? "approving" : "sending it back")
+                _ = try await effects.answerPlan(job.tools, c.id, decision)
+                note(job, .answered(card: c.title), session: session, card: c.id)
+                return
+            }
+            var answers = Self.formAnswers(form, message: said)
+            if answers == nil {
+                stage(job, "reading your answer")
+                answers = await Self.askFormAnswers(form, message: said, ask: jev(job.tools))
+                try linked(job.context)
+            }
+            if let answers {
+                stage(job, "answering")
+                _ = try await effects.answer(job.tools, c.id, answers)
+                note(job, .answered(card: c.title), session: session, card: c.id)
+                return
+            }
         }
         stage(job, "preparing")
         try linked(job.context)
@@ -1080,7 +1108,14 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.reply = reply.isEmpty ? nil : reply
             $0.note = done.isEmpty ? nil : done
         }
+        // What the run left for sessions is routed as messages of its own (not again from one of those: no chain).
+        guard intent == .compound, job.context.splitFrom == nil else { return }
+        for text in effects.leftovers(answer).map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }).filter({ !$0.isEmpty }).prefix(Self.maxSplit) {
+            submit(text, context: RouterContext(splitFrom: job.id))
+        }
     }
+    /// Session halves routed from one compound message, at most.
+    static let maxSplit = 3
 
     /// Acts on a target: a card or session gets the message, a project a new session, an intent a run.
     private func route(_ job: Job, to target: String) async throws {
@@ -1530,6 +1565,19 @@ extension RouterDispatcher.Effects {
                 let answer = object(try await tools.forkSession(store, request, ticket: tools.ticket()))
                 let project = store.claudeSessions[request.session].map { store.folderName($0.folderKey) } ?? ""
                 return try started(answer, tools, project: project, settings: nil)
+            },
+            answerPlan: { [weak dispatcher] tools, card, decision in
+                guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
+                let store = try store(dispatcher)
+                try tools.live(tools.ticket())
+                guard let c = store.router.cards.first(where: { $0.id == card }), c.isOpen,
+                      let form = store.guestPendingForm(for: c)?.form ?? store.pendingForm(for: c), form.isPlan else {
+                    throw RouterTools.Failure("That plan isn't waiting anymore")
+                }
+                switch await store.answerPlan(form, decision, card: card) {
+                case .success: return decision.approve ? "Approved “\(c.title)”" : "Sent “\(c.title)” back"
+                case .failure(let error): throw error
+                }
             })
     }
 }
