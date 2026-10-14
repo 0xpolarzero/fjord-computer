@@ -194,6 +194,7 @@ final class ComputersModel {
     var connectionsStatus: SiloWireConnectionsStatus?
     var connectionHealth: [String: SiloWireDeviceHealth] = [:]
     var connectionDevices: [SiloWireDevice] = []
+    private var unknownDeviceRefresh: Task<Void, Never>?
     var pendingViewer: SiloWireViewerOpenResult?
     var viewerScripts: [String: [ComputerViewerScriptCommand]] = [:]
     @ObservationIgnored var viewerOperationGate = ComputerViewerOperationGate()
@@ -479,7 +480,31 @@ final class ComputersModel {
     /// Every computer of every owner, This Mac first: the groups the Computers page lists.
     var ownerGroups: [ComputerOwnerInventory] { placementOwners }
 
-    /// The owner an event came from: a connected device, or This Mac (`nil`) for its own and unknown sources.
+    private static func sourceDevice(of event: EngineEvent) -> String? {
+        switch event {
+        case .computersChanged(_, let id), .checkpointsChanged(_, let id), .operationsQueueChanged(_, let id),
+             .jobProgress(_, let id), .jobFinished(_, let id): id
+        case .guestFilesChanged(let id, _): id
+        case .connectionsDevicesChanged, .settingsChanged, .exportsChanged, .viewerPage: nil
+        }
+    }
+
+    private func isKnownDevice(_ deviceId: String) -> Bool {
+        remoteOwnerInventories.contains { $0.deviceId == deviceId }
+            || unreachableOwners.contains { $0.device.id == deviceId }
+            || connectionDevices.contains { $0.id == deviceId }
+    }
+
+    private func refreshForUnknownDevice() {
+        guard unknownDeviceRefresh == nil else { return }
+        unknownDeviceRefresh = Task { @MainActor [weak self] in
+            await self?.refreshPlacementInventories()
+            await self?.resubscribeIfDevicesChanged()
+            self?.unknownDeviceRefresh = nil
+        }
+    }
+
+    /// The owner an event came from: a connected device, or This Mac (`nil`) for its own events (no `deviceId`).
     private func eventOwner(_ deviceId: String?) -> String? {
         guard let deviceId, remoteOwnerInventories.contains(where: { $0.deviceId == deviceId }) else { return nil }
         return deviceId
@@ -791,6 +816,11 @@ final class ComputersModel {
     }
 
     private func apply(_ event: EngineEvent) {
+        if let deviceId = Self.sourceDevice(of: event), !isKnownDevice(deviceId) {
+            // Another Mac we haven't loaded: never This Mac's state. Read the devices and the lists again instead.
+            refreshForUnknownDevice()
+            return
+        }
         switch event {
         case .computersChanged(let change, let deviceId):
             stateRevision &+= 1

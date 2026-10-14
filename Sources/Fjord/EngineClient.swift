@@ -1985,6 +1985,9 @@ final class MockEngineClient: EngineClient {
         publish(.checkpointsChanged(payload))
     }
 
+    /// Publishes an event as given (for tests that need a particular `deviceId`).
+    func publishForTests(_ event: EngineEvent) { publish(event) }
+
     private func publish(_ event: EngineEvent) {
         relay?(event)
         for id in Array(subscribers.keys) {

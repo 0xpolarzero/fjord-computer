@@ -101,6 +101,30 @@ import Testing
         #expect(model.inventory?.computer(MockEngineClient.devID)?.name == "dev")
     }
 
+    @Test func anEventFromAnUnknownDeviceNeverTouchesThisMacAndTriggersARead() async throws {
+        let (model, local, _) = try await rig()
+        let before = model.inventory
+        // A third Mac, not in the loaded list, with a computer that reuses This Mac's `dev` id.
+        var stranger = try #require(model.inventory?.macos)
+        for index in stranger.computers.indices where stranger.computers[index].id == MockEngineClient.devID {
+            stranger.computers[index].name = "stranger-dev"
+        }
+        local.publishForTests(.computersChanged(ComputersChangedPayload(macos: stranger), deviceId: "unknown-mac"))
+        #expect(model.inventory == before)
+        #expect(model.row(localMac)?.name == "dev")
+        #expect(model.row(remoteMac)?.name == "studio-dev")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(model.inventory == before)
+        #expect(model.row(localMac)?.name == "dev")
+        // An event with no deviceId is still This Mac's.
+        var renamed = stranger
+        for index in renamed.computers.indices where renamed.computers[index].id == MockEngineClient.devID {
+            renamed.computers[index].name = "dev-renamed"
+        }
+        local.publishForTests(.computersChanged(ComputersChangedPayload(macos: renamed)))
+        #expect(model.row(localMac)?.name == "dev-renamed")
+    }
+
     @Test func perComputerStateIsKeyedByOwner() async throws {
         let (model, _, _) = try await rig()
         await model.loadFiles(localLinux)
