@@ -1416,6 +1416,27 @@ import Testing
         #expect(f.ranks == 1)
     }
 
+    @Test func aProjectTagWithAnExistingGuestSessionDoesNotStartAnotherSession() {
+        let (store, _, _) = setup()
+        let source = "/code/remote-project"
+        let placement = ProjectPlacement.computer(deviceId: "owner-1", computerId: "computer-1", guestPath: "/workspace/repo")
+        store.setRunsOnPlacement(placement, for: source)
+        let project = store.runsOnProject(for: source)
+        let guestSession = ClaudeSession(id: "local_guest", title: "Guest task", folder: "/workspace/repo",
+            lastActivity: Date(), running: true, cliID: "cli-guest", sshHost: "ssh-computer-1")
+        store.claudeSessions[guestSession.id] = guestSession
+        store.router.pendingDesktopStarts = [PendingDesktopStart(projectID: project.id,
+            location: .computer(deviceId: "owner-1", computerId: "computer-1"), alias: "ssh-computer-1",
+            folder: "/workspace/repo", prompt: "start", state: .matched,
+            desktopSessionID: guestSession.id, guestSessionID: "cli-guest")]
+        store.router.cards = [RouterCard(id: "local_guest#w1", sessionID: guestSession.id, kind: .question,
+            title: "Guest task", folder: "/workspace/repo", text: "Need input", createdAt: Date())]
+
+        let plan = RouterDispatcher.plan(text: "Continue the work", context: RouterContext(projects: [source]), store: store)
+
+        #expect(plan == .classify)
+    }
+
     @Test func severalSessionsTaggedAreAllTheMessageCanGoTo() async {
         let (s, d, f) = setup()
         s.claudeSessions["local_c"] = ClaudeSession(id: "local_c", title: "Ship it", folder: "/code/ci", lastActivity: Date(), running: true)

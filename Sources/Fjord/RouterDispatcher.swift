@@ -646,8 +646,10 @@ struct RouterAskBack: Identifiable, Equatable {
         if tagged.count == 1 { return .route("session:\(tagged[0])") }
         if context.projects.count == 1, let folder = context.projects.first {
             if wantsNewSession(text, pills: context.pills) { return .start(folder: folder) }
-            let other = store.openRouterCards.contains { ($0.folder ?? "") == folder }
-                || store.claudeSessions.values.contains { !$0.isArchived && $0.folderKey == folder }
+            let other = store.openRouterCards.contains { store.routerCardMatchesProject($0, folder: folder) }
+                || store.claudeSessions.values.contains {
+                    !$0.isArchived && store.routerSessionMatchesProject($0.id, folder: folder)
+                }
             if !other { return .start(folder: folder) }
         }
         return .classify
