@@ -5,67 +5,95 @@ import path from "node:path";
 
 const [configPath] = process.argv.slice(2);
 if (!configPath || !path.isAbsolute(configPath)) fail("The guest run configuration path is invalid.");
-const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(config.runID)) fail("The run id is invalid.");
-if (!path.isAbsolute(config.home) || !path.isAbsolute(config.cwd) || !path.isAbsolute(config.videoPath) || !path.isAbsolute(config.manifestPath)) {
-  fail("The guest run paths must be absolute.");
-}
-await fs.mkdir(path.dirname(config.videoPath), { recursive: true, mode: 0o700 });
+await supervise(configPath);
 
-let recorder;
-let claude;
-let taskExitCode;
-const startedAt = new Date().toISOString();
+async function supervise(configPath) {
+  const cancellation = new AbortController();
+  let terminationSignal;
+  let config;
+  let recorder;
+  let claude;
+  let taskExitCode;
+  const startedAt = new Date().toISOString();
+  const cancel = signal => {
+    if (terminationSignal) return;
+    terminationSignal = signal;
+    process.exitCode = signal === "SIGINT" ? 130 : 143;
+    cancellation.abort();
+    if (claude?.exitCode === null) claude.kill("SIGTERM");
+  };
+  const onSIGTERM = () => cancel("SIGTERM");
+  const onSIGINT = () => cancel("SIGINT");
+  process.on("SIGTERM", onSIGTERM);
+  process.on("SIGINT", onSIGINT);
 
-try {
-  const taskEnvironment = claudeEnvironment();
-  await assertNoCompetingAuthentication(config.home, config.cwd);
-  if (config.recordProof) recorder = config.platform === "linux" ? await startLinuxRecorder(config) : await startMacRecorder(config);
-  claude = spawn(config.claude, claudeArgs(config), {
-    cwd: config.cwd,
-    env: taskEnvironment,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  claude.stdout.on("data", chunk => {
-    process.stdout.write(chunk);
-  });
-  claude.stderr.on("data", chunk => process.stderr.write(chunk));
-  claude.on("error", error => {
-    process.stderr.write(`Claude could not start: ${safeError(error)}\n`);
-    process.exitCode = 127;
-  });
-  const exitCode = await waitForClaude(claude);
-  taskExitCode = exitCode;
-  if (exitCode !== 0) {
-    process.exitCode = exitCode ?? 1;
-  }
-} catch (error) {
-  process.stderr.write(`Run failed: ${safeError(error)}\n`);
-  if (process.exitCode == null) process.exitCode = 1;
-} finally {
-  if (recorder) {
-    try {
-      const manifest = await recorder.stop();
-      manifest.runID = config.runID;
-      manifest.startedAt = startedAt;
-      manifest.finishedAt = new Date().toISOString();
-      manifest.taskExitCode = taskExitCode ?? process.exitCode ?? 1;
-      await atomicJSON(config.manifestPath, manifest);
-    } catch (error) {
-      process.stderr.write(`Proof recording could not be finalized: ${safeError(error)}\n`);
-      await atomicJSON(config.manifestPath, {
-        runID: config.runID,
-        videoPath: config.videoPath,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        taskExitCode: taskExitCode ?? process.exitCode ?? 1,
-        state: "failed",
-        error: safeError(error),
-      }).catch(manifestError => {
-        process.stderr.write(`Proof failure manifest could not be written: ${safeError(manifestError)}\n`);
-      });
-      if (process.exitCode == null) process.exitCode = taskExitCode ?? 0;
+  try {
+    config = JSON.parse(await fs.readFile(configPath, "utf8"));
+    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(config.runID)) {
+      throw new Error("The run id is invalid.");
     }
+    if (!path.isAbsolute(config.home) || !path.isAbsolute(config.cwd) || !path.isAbsolute(config.videoPath) || !path.isAbsolute(config.manifestPath)) {
+      throw new Error("The guest run paths must be absolute.");
+    }
+    throwIfAborted(cancellation.signal, terminationSignal);
+    await fs.mkdir(path.dirname(config.videoPath), { recursive: true, mode: 0o700 });
+    const taskEnvironment = claudeEnvironment();
+    await assertNoCompetingAuthentication(config.home, config.cwd);
+    throwIfAborted(cancellation.signal, terminationSignal);
+    if (config.recordProof) {
+      recorder = config.platform === "linux"
+        ? await startLinuxRecorder(config, cancellation.signal, () => terminationSignal)
+        : await startMacRecorder(config, cancellation.signal, () => terminationSignal);
+    }
+    throwIfAborted(cancellation.signal, terminationSignal);
+    claude = spawn(config.claude, claudeArgs(config), {
+      cwd: config.cwd,
+      env: taskEnvironment,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    claude.stdout.on("data", chunk => {
+      process.stdout.write(chunk);
+    });
+    claude.stderr.on("data", chunk => process.stderr.write(chunk));
+    claude.on("error", error => {
+      process.stderr.write(`Claude could not start: ${safeError(error)}\n`);
+      process.exitCode = 127;
+    });
+    const exitCode = await waitForClaude(claude);
+    taskExitCode = exitCode;
+    if (exitCode !== 0) {
+      process.exitCode = exitCode;
+    }
+  } catch (error) {
+    process.stderr.write(`Run failed: ${safeError(error)}\n`);
+    if (process.exitCode == null) process.exitCode = 1;
+  } finally {
+    if (recorder) {
+      try {
+        const manifest = await recorder.stop();
+        manifest.runID = config.runID;
+        manifest.startedAt = startedAt;
+        manifest.finishedAt = new Date().toISOString();
+        manifest.taskExitCode = taskExitCode ?? process.exitCode ?? 1;
+        await atomicJSON(config.manifestPath, manifest);
+      } catch (error) {
+        process.stderr.write(`Proof recording could not be finalized: ${safeError(error)}\n`);
+        await atomicJSON(config.manifestPath, {
+          runID: config.runID,
+          videoPath: config.videoPath,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          taskExitCode: taskExitCode ?? process.exitCode ?? 1,
+          state: "failed",
+          error: safeError(error),
+        }).catch(manifestError => {
+          process.stderr.write(`Proof failure manifest could not be written: ${safeError(manifestError)}\n`);
+        });
+        if (process.exitCode == null) process.exitCode = taskExitCode ?? 0;
+      }
+    }
+    process.off("SIGTERM", onSIGTERM);
+    process.off("SIGINT", onSIGINT);
   }
 }
 
@@ -138,7 +166,8 @@ async function assertNoCompetingAuthentication(home, cwd) {
   }
 }
 
-async function startLinuxRecorder(value) {
+async function startLinuxRecorder(value, signal, signalName) {
+  throwIfAborted(signal, signalName());
   const display = value.display || process.env.DISPLAY || ":1.0";
   if (!/^:\d+(?:\.\d+)?$/.test(display)) throw new Error("Silo returned an invalid Linux display name.");
   const xauthority = process.env.XAUTHORITY || "/run/silo-desktop/user/Xauthority";
@@ -150,10 +179,17 @@ async function startLinuxRecorder(value) {
       cwd: value.cwd,
       env: { ...process.env, DISPLAY: display, XAUTHORITY: xauthority },
       stdio: ["ignore", "ignore", "pipe"],
-    });
+  });
   const errors = [];
   child.stderr.on("data", chunk => { if (errors.join("").length < 2048) errors.push(chunk.toString("utf8")); });
-  await waitForChildReady(child, value.videoPath, 5_000, "ffmpeg", () => errors.join(""));
+  try {
+    await waitForChildReady(child, value.videoPath, 5_000, "ffmpeg", () => errors.join(""), signal, signalName);
+    throwIfAborted(signal, signalName());
+  } catch (error) {
+    if (child.exitCode === null) child.kill("SIGINT");
+    await waitForChild(child, 10_000).catch(() => {});
+    throw error;
+  }
   return {
     async stop() {
       if (child.exitCode === null) child.kill("SIGINT");
@@ -171,7 +207,7 @@ async function startLinuxRecorder(value) {
   };
 }
 
-async function startMacRecorder(value) {
+async function startMacRecorder(value, signal, signalName) {
   const home = process.env.HOME;
   const uid = process.getuid?.();
   if (!home || !uid || !path.isAbsolute(home)) throw new Error("The Aqua recorder account is unavailable.");
@@ -181,41 +217,63 @@ async function startMacRecorder(value) {
   const label = `com.fjord.guestruns.${value.runID}`;
   const plistPath = path.join(agentDir, `${label}.plist`);
   const binary = path.join(install, "Contents", "MacOS", "GuestRecorder");
-  await fs.mkdir(installRoot, { recursive: true, mode: 0o700 });
-  await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-  await execFile("/usr/bin/ditto", ["-x", "-k", value.recorderArchivePath, installRoot], 30_000);
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${xml(binary)}</string><string>--agent</string><string>${xml(path.dirname(value.videoPath))}</string><string>${xml(value.videoPath)}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><false/><key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>`;
-  await atomicText(plistPath, plist);
-  await execFile("/bin/launchctl", ["bootstrap", `gui/${uid}`, plistPath], 8_000);
-  await execFile("/bin/launchctl", ["kickstart", `gui/${uid}/${label}`], 8_000);
-  await waitForFile(path.join(path.dirname(value.videoPath), "recorder-ready.json"), 20_000);
-  const readiness = JSON.parse(await fs.readFile(path.join(path.dirname(value.videoPath), "recorder-ready.json"), "utf8"));
-  if (readiness.state !== "ready") throw new Error(readiness.error || "ScreenCaptureKit recorder did not become ready.");
-  return {
-    async stop() {
-      await atomicJSON(path.join(path.dirname(value.videoPath), "recorder-command.json"), { action: "stop", runID: value.runID });
-      await waitForFile(value.manifestPath, 30_000);
-      const manifest = JSON.parse(await fs.readFile(value.manifestPath, "utf8"));
-      await execFile("/bin/launchctl", ["bootout", `gui/${uid}/${label}`], 8_000).catch(() => {});
-      if (manifest.state !== "complete") throw new Error(manifest.error || "ScreenCaptureKit did not finalize the movie.");
-      return manifest;
-    },
+  let launchAgentMayBeLoaded = false;
+  const bootout = async () => {
+    if (!launchAgentMayBeLoaded) return;
+    launchAgentMayBeLoaded = false;
+    await execFile("/bin/launchctl", ["bootout", `gui/${uid}/${label}`], 8_000).catch(error => {
+      process.stderr.write(`Recorder LaunchAgent bootout failed: ${safeError(error)}\n`);
+    });
   };
+
+  try {
+    throwIfAborted(signal, signalName());
+    await fs.mkdir(installRoot, { recursive: true, mode: 0o700 });
+    await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+    await execFile("/usr/bin/ditto", ["-x", "-k", value.recorderArchivePath, installRoot], 30_000, signal);
+    throwIfAborted(signal, signalName());
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${xml(binary)}</string><string>--agent</string><string>${xml(path.dirname(value.videoPath))}</string><string>${xml(value.videoPath)}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><false/><key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>`;
+    await atomicText(plistPath, plist);
+    throwIfAborted(signal, signalName());
+    launchAgentMayBeLoaded = true;
+    await execFile("/bin/launchctl", ["bootstrap", `gui/${uid}`, plistPath], 8_000, signal);
+    throwIfAborted(signal, signalName());
+    await execFile("/bin/launchctl", ["kickstart", `gui/${uid}/${label}`], 8_000, signal);
+    throwIfAborted(signal, signalName());
+    await waitForFile(path.join(path.dirname(value.videoPath), "recorder-ready.json"), 20_000, signal, signalName);
+    throwIfAborted(signal, signalName());
+    const readiness = JSON.parse(await fs.readFile(path.join(path.dirname(value.videoPath), "recorder-ready.json"), "utf8"));
+    if (readiness.state !== "ready") throw new Error(readiness.error || "ScreenCaptureKit recorder did not become ready.");
+    return {
+      async stop() {
+        try {
+          await atomicJSON(path.join(path.dirname(value.videoPath), "recorder-command.json"), { action: "stop", runID: value.runID });
+          await waitForFile(value.manifestPath, 30_000);
+          const manifest = JSON.parse(await fs.readFile(value.manifestPath, "utf8"));
+          if (manifest.state !== "complete") throw new Error(manifest.error || "ScreenCaptureKit did not finalize the movie.");
+          return manifest;
+        } finally {
+          await bootout();
+        }
+      },
+    };
+  } catch (error) {
+    await bootout();
+    throw error;
+  }
 }
 
 function waitForClaude(child) {
   return new Promise((resolve, reject) => {
     child.once("error", reject);
-    child.once("close", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
-    const stop = () => { if (child.exitCode === null) child.kill("SIGTERM"); };
-    process.once("SIGTERM", stop);
-    process.once("SIGINT", stop);
+    child.once("close", (code, signal) => resolve(code ?? signalExitCode(signal) ?? 1));
   });
 }
 
-async function waitForChildReady(child, file, timeout, name, detail) {
+async function waitForChildReady(child, file, timeout, name, detail, signal, signalName) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
+    throwIfAborted(signal, signalName());
     if (child.exitCode !== null) throw new Error(`${name} exited before it was ready: ${detail()}`);
     try { if ((await fs.stat(file)).size > 0) return; } catch {}
     await delay(150);
@@ -232,28 +290,52 @@ async function waitForChild(child, timeout) {
   ]);
 }
 
-async function waitForFile(file, timeout) {
+async function waitForFile(file, timeout, signal, signalName = () => undefined) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
+    throwIfAborted(signal, signalName());
     try { await fs.access(file); return; } catch {}
     await delay(150);
   }
+  throwIfAborted(signal, signalName());
   throw new Error(`Recorder did not publish ${path.basename(file)} before the deadline.`);
 }
 
-function execFile(command, args, timeout) {
+function execFile(command, args, timeout, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("The operation was cancelled before it could start."));
+      return;
+    }
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "";
     child.stdout.on("data", part => { if (out.length < 8192) out += part.toString("utf8"); });
     child.stderr.on("data", part => { if (err.length < 8192) err += part.toString("utf8"); });
-    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`${path.basename(command)} timed out.`)); }, timeout);
-    child.once("error", error => { clearTimeout(timer); reject(error); });
-    child.once("close", code => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      if (code === 0) resolve(out);
-      else reject(new Error(`${path.basename(command)} exited with code ${code}: ${err.slice(0, 400)}`));
+      signal?.removeEventListener("abort", abort);
+      callback(value);
+    };
+    const abort = () => {
+      if (child.exitCode === null) child.kill("SIGTERM");
+      const forceKill = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 2_000);
+      forceKill.unref?.();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(reject, new Error(`${path.basename(command)} timed out.`));
+    }, timeout);
+    child.once("error", error => finish(reject, error));
+    child.once("close", code => {
+      if (signal?.aborted) finish(reject, new Error("The operation was cancelled before it completed."));
+      else if (code === 0) finish(resolve, out);
+      else finish(reject, new Error(`${path.basename(command)} exited with code ${code}: ${err.slice(0, 400)}`));
     });
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
   });
 }
 
@@ -272,6 +354,12 @@ async function atomicText(file, value) {
 }
 
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function throwIfAborted(signal, signalName) {
+  if (signal?.aborted) throw new Error(`Guest run cancelled${signalName ? ` by ${signalName}` : ""}.`);
+}
+function signalExitCode(signal) {
+  return ({ SIGHUP: 129, SIGINT: 130, SIGTERM: 143 })[signal];
+}
 function xml(value) { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;").replaceAll("'", "&apos;"); }
 function safeError(error) { return String(error?.message ?? error).replace(/\$MSB_[A-Z0-9_]+/g, "[secret-placeholder]").slice(0, 500); }
 function fail(message) { process.stderr.write(`${message}\n`); process.exit(2); }
