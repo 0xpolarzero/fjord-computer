@@ -26,6 +26,259 @@ import Testing
         #expect(ComputerQuitPrompt.make(inventory: inventory) == nil)
     }
 
+    @Test func creationLimitsComeFromHostCapacityAndMacTemplateDiskFloor() throws {
+        let facts = DeviceFacts(
+            deviceCapacity: DeviceCapacity(logicalCpus: 8, physicalMemoryBytes: 17_179_869_184, maxMemoryGib: 12),
+            macosHostLimits: MacosHostLimits(cpus: 8, memory_gib: 32), remoteLogin: .unknown)
+        let linux = try ComputerResourceLimits.linux(from: facts)
+        #expect(linux.maxCPUs == 8)
+        #expect(linux.maxMemoryGiB == 12)
+        #expect(linux.defaultCPUs == 2)
+        #expect(linux.defaultMemoryGiB == 4)
+
+        let macos = try ComputerResourceLimits.macos(from: facts, minimumDiskGiB: 64)
+        #expect(macos.minCPUs == 2)
+        #expect(macos.maxCPUs == 8)
+        #expect(macos.minMemoryGiB == 4)
+        #expect(macos.maxMemoryGiB == 28)
+        #expect(macos.minDiskGiB == 64)
+        #expect(macos.maxDiskGiB == 1024)
+        #expect(macos.defaultCPUs == 4)
+        #expect(macos.defaultMemoryGiB == 16)
+    }
+
+    @Test func automaticCheckpointRetentionCanBeTurnedOff() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        await model.loadSettings()
+
+        await model.updateAutomaticCheckpointRetention(7)
+        #expect(client.settingsSnapshot.settings.automaticCheckpointRetentionCount == 7)
+
+        await model.updateAutomaticCheckpointRetention(0)
+
+        #expect(client.settingsSnapshot.settings.automaticCheckpointRetentionCount == 0)
+        #expect(client.generatedCalls.contains("settings.update"))
+        #expect(model.actionError == nil)
+    }
+
+    @Test func settingsChangedEventRefreshesLoadedComputerDefaults() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+        await model.loadSettings()
+
+        var patch = SiloWireSettingsValues()
+        patch.automaticCheckpointRetentionCount = 9
+        _ = try await client.invoke(SiloGeneratedMethods.settingsUpdate(SiloWireSettingsUpdateParams(patch: patch)))
+
+        #expect(model.engineSettings?.settings.automaticCheckpointRetentionCount == 9)
+    }
+
+    @Test func modelCreationUsesHostDerivedLinuxAndMacLimits() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        await model.createLinuxComputer(name: "linux-host-limit", cpus: 16, memoryGiB: 64)
+        await model.createMacosComputer(name: "mac-host-limit", cpus: 16, memoryGiB: 60, diskGiB: 64)
+
+        #expect(client.createRequests.count == 2)
+        #expect(client.createRequests[0].configuration?.maxCPUs == 16)
+        #expect(client.createRequests[0].configuration?.maxMemoryGiB == 64)
+        #expect(client.createRequests[1].request?.cpus == 16)
+        #expect(client.createRequests[1].request?.memoryGiB == 60)
+        #expect(client.createRequests[1].request?.diskGiB == 64)
+        #expect(model.actionError == nil)
+    }
+
+    @Test func resourceEditStopsRunningLinuxComputerBeforeApplyingCpuAndMemory() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        await model.updateResources(for: MockEngineClient.linuxID, cpus: 3, memoryGiB: 10)
+
+        #expect(client.stopRequests == [MockEngineClient.linuxID])
+        #expect(client.inventory.computer(MockEngineClient.linuxID)?.resources == "3 CPU · 10 GB memory")
+        #expect(client.generatedCalls.contains("computers.configuration.change"))
+        #expect(model.actionError == nil)
+    }
+
+    @Test func resourceEditAppliesCpuAndMemoryToStoppedMacComputer() async throws {
+        var inventory = MockEngineClient.demoInventory
+        inventory.macos.computers = inventory.macos.computers.map { computer in
+            var computer = computer
+            computer.state = .stopped
+            computer.progress = nil
+            computer.detail = nil
+            computer.displayOpen = false
+            return computer
+        }
+        let client = MockEngineClient(inventory: inventory)
+        let model = ComputersModel(client: client, initialInventory: inventory)
+        try await model.connect()
+
+        await model.updateResources(for: MockEngineClient.devID, cpus: 6, memoryGiB: 20)
+
+        #expect(client.inventory.computer(MockEngineClient.devID)?.resources == "6 CPU · 20 GB memory")
+        #expect(client.generatedCalls.contains("computers.configuration.change"))
+        #expect(model.actionError == nil)
+    }
+
+    @Test func failedConnectedMacRemovalKeepsDeviceUntilKeyRevocationSucceeds() async {
+        let client = MockEngineClient()
+        let device = SiloWireDevice(address: "alice@studio.local", id: "owner-device", name: "Studio Mac")
+        client.connectedDevices = [device]
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        await model.loadConnections()
+        client.nextConnectionRemovalError = "The owner Mac is offline."
+
+        await model.removeDevice(id: device.id)
+
+        #expect(model.connectionDevices == [device])
+        #expect(client.revokedDeviceIDs.isEmpty)
+        #expect(model.actionError == "The owner Mac is offline.")
+    }
+
+    @Test func successfulConnectedMacRemovalRecordsKeyRevocation() async {
+        let client = MockEngineClient()
+        let device = SiloWireDevice(address: "alice@studio.local", id: "owner-device", name: "Studio Mac")
+        client.connectedDevices = [device]
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        await model.loadConnections()
+
+        await model.removeDevice(id: device.id)
+
+        #expect(client.revokedDeviceIDs == [device.id])
+        #expect(model.connectionDevices.isEmpty)
+    }
+
+    @Test func hiddenLinuxDesktopPortCannotBePublishedAndWildcardSecretsRequireAcknowledgment() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        await model.publishPort(computerId: MockEngineClient.linuxID, port: ComputerNetworkPolicy.hiddenDesktopPort)
+        #expect(!client.generatedCalls.contains("network.publish"))
+        #expect(model.actionError?.contains("stays private") == true)
+
+        await model.publishPort(computerId: "missing-computer", port: ComputerNetworkPolicy.hiddenDesktopPort)
+        #expect(!client.generatedCalls.contains("network.publish"))
+        #expect(model.actionError?.contains("no longer available") == true)
+
+        await model.saveSecret(id: nil, name: "BUILD_TOKEN", value: "secret-value",
+                               computerIds: [MockEngineClient.linuxID], allowedDomains: ["*"],
+                               allowAnyDestination: false)
+        #expect(!client.generatedCalls.contains("secrets.save"))
+        #expect(model.actionError?.contains("lowercase destination hosts") == true)
+
+        await model.saveSecret(id: nil, name: "BUILD_TOKEN", value: "secret-value",
+                               computerIds: [MockEngineClient.linuxID], allowedDomains: ["*"],
+                               allowAnyDestination: true)
+        #expect(client.generatedCalls.contains("secrets.save"))
+        #expect(model.actionError == nil)
+    }
+
+    @Test func repositoryPolicyAndComputerUseApprovalUseGeneratedMethods() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        await model.loadGitHubState()
+
+        await model.setGitHubRepositories(computerId: MockEngineClient.devID,
+                                          repositories: ["fjord/lookout"], allowPushes: true)
+        await model.setComputerUseApproval(computerId: MockEngineClient.devID, automatic: true)
+
+        #expect(model.githubState?.computers.first { $0.computerId == MockEngineClient.devID }?.repositories
+            == [SiloWireGitHubRepositoryPolicy(allowPushes: true, repository: "fjord/lookout")])
+        #expect(model.computerUseByComputer[MockEngineClient.devID]?.approval == .auto)
+        #expect(client.generatedCalls.contains("github.configuration.save"))
+        #expect(client.generatedCalls.contains("computerUse.approval"))
+    }
+
+    @Test func exportInspectionReturnsMockedArchiveValidityToTheModel() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        await model.inspectExportArchive(path: "/tmp/demo.silo-backup")
+
+        #expect(model.archiveInspection?.valid == true)
+        #expect(model.archiveInspection?.archive.computers == ["linux-1"])
+        #expect(client.generatedCalls.contains("exports.inspect"))
+        #expect(model.actionError == nil)
+    }
+
+    @Test func exportAndImportUseTheChosenDestinationAndInspectedComputer() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        await model.setExportDestination("/tmp/fjord-exports")
+        await model.exportComputer(computerId: MockEngineClient.linuxID)
+        let archive = try #require(model.exportState?.archives.first)
+        await model.inspectExportArchive(path: archive.archivePath)
+        await model.importComputer(archivePath: archive.archivePath, newName: "linux-copy", sourceName: "linux-1")
+
+        #expect(model.exportState?.destination == "/tmp/fjord-exports")
+        #expect(model.inventory?.allComputers.contains { $0.name == "linux-copy" } == true)
+        #expect(client.generatedCalls.contains("exports.create"))
+        #expect(client.generatedCalls.contains("exports.inspect"))
+        #expect(client.generatedCalls.contains("exports.import"))
+        #expect(client.acknowledgedJobs.count == 3)
+        #expect(model.actionError == nil)
+    }
+
+    @Test func exportResultCanBeMarkedSeenAndDismissedAgainstItsSnapshot() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        await model.setExportDestination("/tmp/fjord-exports")
+        await model.exportComputer(computerId: MockEngineClient.linuxID)
+        let result = try #require(model.exportState?.operation)
+        #expect(result.kind == .result)
+        #expect(model.exportState?.resultUnseen == true)
+
+        await model.acknowledgeExportResult()
+        #expect(model.exportState?.resultUnseen == false)
+        #expect(client.generatedCalls.contains("exports.acknowledge"))
+
+        await model.dismissExportOperation(result)
+        #expect(model.exportState?.operation == nil)
+        #expect(client.generatedCalls.contains("exports.dismiss"))
+        #expect(model.actionError == nil)
+    }
+
+    @Test func mockFileTransferShowsUploadsInThePagedBrowseState() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        await model.loadFiles(computerId: MockEngineClient.linuxID)
+        await model.uploadFiles(computerId: MockEngineClient.linuxID, directory: "/", paths: ["/tmp/notes.txt"])
+        await model.downloadFile(computerId: MockEngineClient.linuxID, path: "/notes.txt", destination: "/tmp/notes-copy.txt")
+
+        #expect(model.fileLists[MockEngineClient.linuxID]?.entries.contains { $0.name == "notes.txt" } == true)
+        #expect(client.generatedCalls.contains("files.list"))
+        #expect(client.generatedCalls.contains("files.upload"))
+        #expect(client.generatedCalls.contains("files.download"))
+        #expect(client.jobGetCallCount > 0)
+        #expect(client.acknowledgedJobs.count == 2)
+        #expect(model.actionError == nil)
+    }
+
+    @Test func logsFollowUsesSnapshotAndAppendsOnlyNewEntries() async {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        await model.loadLogs(computerId: MockEngineClient.linuxID, query: "ready", source: .runtime,
+                             since: "2026-10-01T00:00:00Z", until: "2026-10-14T00:00:00Z", aroundId: "anchor")
+        await model.loadLogs(computerId: MockEngineClient.linuxID, query: "ready", source: .runtime,
+                             since: "2026-10-01T00:00:00Z", until: "2026-10-14T00:00:00Z", aroundId: "anchor",
+                             follow: "mock-log-snapshot-1")
+
+        #expect(client.logFollowRequests == [nil, "mock-log-snapshot-1"])
+        #expect(model.logsByComputer[MockEngineClient.linuxID]?.entries.map(\.line) == ["Computer ready", "New output"])
+        #expect(model.logsByComputer[MockEngineClient.linuxID]?.snapshot == "mock-log-snapshot-2")
+    }
+
     @Test func normalQuitSkipsComputerInspectionWhenComputersAreOffOrEngineIsAbsent() {
         #expect(!AppTermination.shouldInspectComputers(computersEnabled: false, engineAvailable: true))
         #expect(!AppTermination.shouldInspectComputers(computersEnabled: true, engineAvailable: false))
@@ -232,10 +485,11 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         try await model.connect()
 
-        await model.createLinuxComputer()
-        await model.createLinuxComputer()
-        await model.createMacosComputer()
-        await model.createMacosComputer()
+        await model.createLinuxComputer(name: "linux-new", cpus: 2, memoryGiB: 4)
+        await model.createLinuxComputer(name: "linux-new", cpus: 2, memoryGiB: 4)
+        let minimumDisk = max(32, Int(clamping: client.inventory.macos.minDiskGiB))
+        await model.createMacosComputer(name: "macos-new", cpus: 2, memoryGiB: 4, diskGiB: minimumDisk)
+        await model.createMacosComputer(name: "macos-new", cpus: 2, memoryGiB: 4, diskGiB: minimumDisk)
 
         let linuxRequests = client.createRequests.compactMap(\.configuration)
         let macosRequests = client.createRequests.compactMap(\.request)
@@ -387,6 +641,8 @@ import Testing
         try await model.resolveQuit(.keepRunning, prompt: prompt)
         #expect(client.disconnected)
         #expect(client.stopRequests.isEmpty)
+        #expect(client.generatedCalls.contains("settings.flush"))
+        #expect(client.settingsSnapshot.revision == 2)
     }
 
     @Test func stopAndQuitWaitsForRunningComputersToStop() async throws {
@@ -398,6 +654,8 @@ import Testing
         try await model.resolveQuit(.stopAndQuit, prompt: prompt)
         #expect(Set(client.stopRequests) == Set(prompt.runningComputers.map(\.computerId)))
         #expect(client.disconnected)
+        #expect(client.generatedCalls.contains("settings.flush"))
+        #expect(client.settingsSnapshot.revision == 2)
         #expect(prompt.runningComputers.allSatisfy { model.inventory?.computer($0.computerId)?.displayState == .stopped })
     }
 

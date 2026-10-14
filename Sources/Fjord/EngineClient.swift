@@ -56,7 +56,7 @@ enum ComputerRow: Identifiable, Equatable {
     var canStop: Bool { displayState == .running }
     var canForceStop: Bool { kind == .macos && [.starting, .running, .stopping].contains(displayState) }
     var canDelete: Bool { [.stopped, .failed, .preparing, .copying, .downloading, .installing, .settingUp].contains(displayState) }
-    var canShowDisplay: Bool { kind == .macos && displayState == .running }
+    var canShowDisplay: Bool { displayState == .running }
 }
 
 enum ComputerDisplayState: Equatable {
@@ -368,6 +368,9 @@ enum EngineEvent: Equatable {
     case jobProgress(OperationJobProgress)
     case jobFinished(OperationJobFinished)
     case guestFilesChanged(deviceId: String, payload: SiloWireGuestFilesChangedPayload)
+    case settingsChanged(SiloWireSettingsSnapshot)
+    case exportsChanged(SiloWireBackupState)
+    case viewerPage(SiloWireViewerPageEvent)
 
     var name: String {
         switch self {
@@ -378,6 +381,9 @@ enum EngineEvent: Equatable {
         case .jobProgress: "operations.job.progress"
         case .jobFinished: "operations.job.finished"
         case .guestFilesChanged: "guest.files.changed"
+        case .settingsChanged: "settings.changed"
+        case .exportsChanged: "exports.changed"
+        case .viewerPage: "display.viewer.page"
         }
     }
 }
@@ -461,6 +467,9 @@ enum ComputerName {
 /// `computers.list`, because the spec embeds checkpoint records in each computer row and defines no `checkpoints.list` wire method.
 @MainActor
 protocol EngineClient {
+    func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
+        _ call: SiloGeneratedMethodCall<Params, Result>
+    ) async throws -> Result
     func deviceFactsRead(deviceId: String?) async throws -> DeviceFacts
     func computersList(deviceId: String?) async throws -> ComputerInventory
     func connectionsDevicesList() async throws -> [SiloWireDevice]
@@ -483,6 +492,14 @@ protocol EngineClient {
     func eventsUnsubscribe(subscription: String) async
     func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws
     func engineDisconnect() async throws
+}
+
+extension EngineClient {
+    func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
+        _ call: SiloGeneratedMethodCall<Params, Result>
+    ) async throws -> Result {
+        throw EngineClientError.unavailable
+    }
 }
 
 /// Keeps Computers unavailable in ordinary Fjord launches until a real Silo adapter is connected.
@@ -598,6 +615,32 @@ final class MockEngineClient: EngineClient {
     private(set) var acknowledgedJobs: [String] = []
     private(set) var checkpointListCallCount = 0
     var nextJobFailure: OperationJobError?
+    private(set) var generatedCalls: [String] = []
+    private(set) var revokedDeviceIDs: [String] = []
+    private(set) var logFollowRequests: [String?] = []
+    var nextConnectionRemovalError: String?
+    var settingsSnapshot = SiloWireSettingsSnapshot(
+        onboardingDraft: .null, revision: 1,
+        settings: SiloWireSettingsValues(automaticCheckpointRetentionCount: 3,
+                                         startComputersAtLaunch: false, startupComputerIds: []),
+        writeProtected: false)
+    private var mockGitHubState = SiloWireGitHubState(
+        accessEnabled: true, computerOperations: [], computers: [],
+        personalToken: SiloWireGitHubPersonalToken(saved: false, state: .disconnected),
+        policyRevision: 1, repositoryCatalog: ["fjord/lookout", "fjord/silo"],
+        repositoryCatalogStatus: SiloWireGitHubRepositoryCatalogStatus(status: .available), state: .connected)
+    private var mockSecrets: [SiloWireSecret] = [
+        SiloWireSecret(allowedDomains: ["api.github.com"], computerIds: [devID], id: "secret-demo",
+                       name: "GITHUB_TOKEN", pendingComputerIds: [], removing: false, state: .active)
+    ]
+    private var mockPorts: [String: [SiloWirePublishedPort]] = [:]
+    private var mockFileEntries: [String: [String: [SiloWireFileEntry]]] = [:]
+    private var mockComputerUse: [String: SiloWireComputerUseState] = [:]
+    private var mockExportDestination: String?
+    private var mockArchives: [SiloWireArchive] = []
+    var mockExportState = SiloWireBackupState(archives: [], availability: .available, snapshotId: "mock-exports")
+    private var mockSSHAccess: [String: SiloWireSSHAccessComputer] = [:]
+    private var mockConnectionsEnabled = true
 
     var activeSubscriptionCount: Int { subscribers.count }
 
@@ -917,6 +960,418 @@ final class MockEngineClient: EngineClient {
         updateMacos(reference.computerId) { $0.displayOpen = true }
     }
 
+    func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
+        _ call: SiloGeneratedMethodCall<Params, Result>
+    ) async throws -> Result {
+        generatedCalls.append(call.name)
+        switch call.name {
+        case "settings.read":
+            return try mockResult(settingsSnapshot, as: Result.self)
+        case "settings.update":
+            let request = try mockDecode(call.params, as: SiloWireSettingsUpdateParams.self)
+            var settings = settingsSnapshot.settings
+            if let value = request.patch.automaticCheckpointRetentionCount { settings.automaticCheckpointRetentionCount = value }
+            if let value = request.patch.startComputersAtLaunch { settings.startComputersAtLaunch = value }
+            if let value = request.patch.startupComputerIds { settings.startupComputerIds = value }
+            settingsSnapshot = SiloWireSettingsSnapshot(onboardingDraft: .null, revision: settingsSnapshot.revision + 1,
+                                                        settings: settings, writeProtected: false)
+            publish(.settingsChanged(settingsSnapshot))
+            return try mockResult(settingsSnapshot, as: Result.self)
+        case "settings.flush":
+            settingsSnapshot.revision &+= 1
+            publish(.settingsChanged(settingsSnapshot))
+            return try mockResult(SiloNull(), as: Result.self)
+        case "activity.setup.read":
+            let item = SiloWireComputerConfigurationProgress(computer: "dev", elapsedSeconds: 2, level: "info",
+                message: "Computer setup completed", phase: "setup-completed", requestId: "setup-demo",
+                safeForDisplay: true, schemaVersion: 1, step: "setup-completed", timestamp: 1,
+                type: "computer-configuration")
+            return try mockResult([item], as: Result.self)
+        case "checkpoints.usage":
+            let params = try mockDecode(call.params, as: SiloWireCheckpointUsageParams.self)
+            let checkpoints = inventory.computer(params.computerId)?.checkpoints ?? []
+            let entries = checkpoints.map {
+                SiloWireCheckpointUsageEntry(deleteBlocker: nil, id: $0.id, sizeBytes: $0.sizeBytes, usedBy: nil)
+            }
+            let total: UInt64? = entries.allSatisfy { $0.sizeBytes != nil }
+                ? entries.compactMap(\.sizeBytes).reduce(UInt64(0), +) : nil
+            return try mockResult(SiloWireCheckpointUsage(checkpoints: entries, totalBytes: total), as: Result.self)
+        case "checkpoints.abandonRestore":
+            let params = try mockDecode(call.params, as: SiloWireComputerTargetParams.self)
+            if case .linux? = inventory.computer(params.computerId) {
+                updateLinux(params.computerId) { $0.pendingCheckpointRestore = nil; $0.unfinishedRestore = nil }
+            } else if case .macos? = inventory.computer(params.computerId) {
+                updateMacos(params.computerId) { $0.pendingRestore = nil }
+            }
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "computers.configuration.change":
+            let data = try JSONEncoder().encode(call.params)
+            let object = (try JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let change = object?["change"] as? [String: Any]
+            let cpus = (change?["cpus"] as? NSNumber)?.uint64Value
+            let memory = (change?["memoryGiB"] as? NSNumber)?.uint64Value
+            if change?["kind"] as? String == "macosResources",
+               let id = change?["computerId"] as? String,
+               let cpus, let memory {
+                updateMacos(id) { $0.cpus = cpus; $0.memoryGiB = memory }
+            } else {
+                let params = try mockDecode(call.params, as: SiloWireComputerConfigurationChangeParams.self)
+                if let configuration = params.change.configuration,
+                   let index = inventory.linux.computers.firstIndex(where: { $0.id == configuration.id }) {
+                    if let expected = params.change.expected, inventory.linux.computers[index].configuration != expected {
+                        throw EngineClientError.invalidAction("This computer changed while the edit was waiting.")
+                    }
+                    updateLinux(configuration.id) { $0.configuration = configuration }
+                }
+            }
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "files.list":
+            let params = try mockDecode(call.params, as: SiloWireFileListParams.self)
+            let baseEntries: [SiloWireFileEntry]
+            if params.path == "/" || params.path == "" {
+                baseEntries = [SiloWireFileEntry(kind: .folder, name: "Roots", path: "/Roots"),
+                               SiloWireFileEntry(kind: .folder, name: "Downloads", path: "/Downloads")]
+            } else {
+                baseEntries = [SiloWireFileEntry(kind: .folder, name: "Projects", path: params.path + "/Projects"),
+                               SiloWireFileEntry(kind: .file, name: "README.md", path: params.path + "/README.md")]
+            }
+            let entries = baseEntries + (mockFileEntries[params.computerId]?[params.path] ?? [])
+            let start = min(Int(clamping: params.offset), entries.count)
+            let page = Array(entries.dropFirst(start))
+            return try mockResult(SiloWireFileListResult(entries: page, snapshotId: "mock-files"), as: Result.self)
+        case "files.upload":
+            let params = try mockDecode(call.params, as: SiloWireFileUploadParams.self)
+            let paths = (params.paths ?? []).map { localPath in
+                let name = URL(fileURLWithPath: localPath).lastPathComponent
+                let parent = params.directory == "/" ? "" : params.directory
+                return SiloWireFileEntry(kind: .file, name: name, path: parent + "/" + name)
+            }
+            var existing = mockFileEntries[params.computerId]?[params.directory] ?? []
+            for path in paths {
+                existing.removeAll { $0.path == path.path }
+                existing.append(path)
+            }
+            mockFileEntries[params.computerId, default: [:]][params.directory] = existing
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "files.download":
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "network.state":
+            let rows = inventory.allComputers.map { row in
+                SiloWireNetworkComputer(computer: row.name, computerId: row.id, host: "127.0.0.1",
+                                        ports: mockNetworkPorts(computerId: row.id))
+            }
+            return try mockResult(SiloWireNetworkState(computers: rows), as: Result.self)
+        case "network.publish":
+            let params = try mockDecode(call.params, as: SiloWireNetworkPublishParams.self)
+            guard let row = inventory.computer(params.computerId) else {
+                throw EngineClientError.notFound("This computer no longer exists.")
+            }
+            guard row.kind != .linux || params.port != 6901 else {
+                throw EngineClientError.invalidAction("The Linux desktop port stays private behind Open screen.")
+            }
+            var ports = mockPorts[params.computerId] ?? []
+            ports.removeAll { $0.port == params.port }
+            ports.append(SiloWirePublishedPort(configured: true, configuredHostPort: params.hostPort,
+                                               hostPort: params.hostPort ?? params.port, port: params.port,
+                                               scheme: params.scheme, state: .reachable))
+            mockPorts[params.computerId] = ports
+            return try mockResult(SiloWireNetworkState(computers: [SiloWireNetworkComputer(
+                computer: row.name, computerId: params.computerId, host: "127.0.0.1",
+                ports: mockNetworkPorts(computerId: params.computerId))]),
+                as: Result.self)
+        case "network.unpublish":
+            let params = try mockDecode(call.params, as: SiloWireNetworkUnpublishParams.self)
+            mockPorts[params.computerId, default: []].removeAll { $0.port == params.port }
+            let row = inventory.computer(params.computerId)
+            return try mockResult(SiloWireNetworkState(computers: [SiloWireNetworkComputer(
+                computer: row?.name ?? params.computerId, computerId: params.computerId,
+                host: "127.0.0.1", ports: mockNetworkPorts(computerId: params.computerId))]), as: Result.self)
+        case "network.open":
+            let params = try mockDecode(call.params, as: SiloWireNetworkOpenParams.self)
+            guard let port = mockPorts[params.computerId]?.first(where: { $0.port == params.port }),
+                  port.state == .reachable else {
+                throw EngineClientError.invalidAction("This service is not reachable.")
+            }
+            guard let scheme = port.scheme else {
+                throw EngineClientError.invalidAction("This TCP service is not configured as a website.")
+            }
+            return try mockResult(SiloWireNetworkOpenResult(url: "\(scheme.rawValue)://127.0.0.1:\(port.hostPort ?? port.port)"),
+                                  as: Result.self)
+        case "github.state", "github.repositories.refresh", "github.configuration.save", "github.access.set",
+             "github.configuration.retry":
+            if call.name == "github.configuration.save" {
+                let params = try mockDecode(call.params, as: SiloWireGitHubConfigurationSaveParams.self)
+                mockGitHubState.computers = params.configuration.computers
+                mockGitHubState.policyRevision &+= 1
+            } else if call.name == "github.access.set" {
+                let params = try mockDecode(call.params, as: SiloWireGitHubAccessSetParams.self)
+                mockGitHubState.accessEnabled = params.enabled
+            } else if call.name == "github.configuration.retry" {
+                let params = try mockDecode(call.params, as: SiloWireGitHubConfigurationRetryParams.self)
+                mockGitHubState.computerOperations.removeAll { $0.computerId == params.computerId }
+            }
+            return try mockResult(mockGitHubState, as: Result.self)
+        case "github.connect":
+            let jobId = nextJobId()
+            mockGitHubState.state = .connecting
+            mockGitHubState.pendingAuthorizationUrl = "https://github.com/login/device"
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(180))
+                guard let self else { return }
+                self.mockGitHubState.state = .connected
+                self.mockGitHubState.account = "dev@example.test"
+                self.mockGitHubState.pendingAuthorizationUrl = nil
+                self.finish(jobId)
+            }
+            return try mockResult(SiloWireJobStartResult(jobId: jobId), as: Result.self)
+        case "github.connect.reopen":
+            return try mockResult(SiloWireGitHubRepositoriesManageResult(url: "https://github.com/login"), as: Result.self)
+        case "github.repositories.manage":
+            return try mockResult(SiloWireGitHubRepositoriesManageResult(url: "https://github.com/settings/installations"), as: Result.self)
+        case "github.disconnect":
+            mockGitHubState.state = .disconnected
+            mockGitHubState.account = nil
+            return try mockResult(mockGitHubState, as: Result.self)
+        case "github.personalToken.save":
+            let params = try mockDecode(call.params, as: SiloWireGitHubPersonalTokenSaveParams.self)
+            mockGitHubState.personalToken = SiloWireGitHubPersonalToken(account: params.token.isEmpty ? nil : "dev@example.test",
+                saved: !params.token.isEmpty, state: params.token.isEmpty ? .disconnected : .connected)
+            if !params.token.isEmpty {
+                mockGitHubState.state = .connected
+                mockGitHubState.account = "dev@example.test"
+            }
+            return try mockResult(mockGitHubState, as: Result.self)
+        case "github.personalToken.remove":
+            mockGitHubState.personalToken = SiloWireGitHubPersonalToken(saved: false, state: .disconnected)
+            mockGitHubState.state = .disconnected
+            mockGitHubState.account = nil
+            return try mockResult(mockGitHubState, as: Result.self)
+        case "secrets.list":
+            return try mockResult(mockSecrets, as: Result.self)
+        case "secrets.save":
+            let params = try mockDecode(call.params, as: SiloWireSecretsSaveParams.self)
+            let request = params.request
+            let id = request.id ?? UUID().uuidString.lowercased()
+            let previous = mockSecrets.first { $0.id == id }
+            mockSecrets.removeAll { $0.id == id }
+            mockSecrets.append(SiloWireSecret(allowedDomains: request.allowedDomains, computerIds: request.computerIds,
+                id: id, name: request.name, pendingComputerIds: [], removing: false,
+                state: previous?.state ?? .active))
+            return try mockResult(mockSecrets, as: Result.self)
+        case "secrets.remove":
+            let params = try mockDecode(call.params, as: SiloWireSecretIdParams.self)
+            mockSecrets.removeAll { $0.id == params.id }
+            return try mockResult(mockSecrets, as: Result.self)
+        case "secrets.retry":
+            return try mockResult(mockSecrets, as: Result.self)
+        case "computerUse.state":
+            let params = try mockDecode(call.params, as: SiloWireComputerUseStateParams.self)
+            let state = mockComputerUse[params.computerId]
+                ?? SiloWireComputerUseState(appliedApproval: .ask, approval: .ask, state: .ready)
+            return try mockResult(state, as: Result.self)
+        case "computerUse.approval":
+            let params = try mockDecode(call.params, as: SiloWireComputerUseApprovalParams.self)
+            let state = SiloWireComputerUseState(appliedApproval: params.mode == .auto ? .auto : .ask,
+                                                approval: params.mode == .auto ? .auto : .ask,
+                                                approvalApply: .applied, state: .ready)
+            mockComputerUse[params.computerId] = state
+            return try mockResult(state, as: Result.self)
+        case "computerUse.setup":
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "logs.query":
+            let params = try mockDecode(call.params, as: SiloWireLogsQueryParams.self)
+            let row = inventory.computer(params.computerId)
+            logFollowRequests.append(params.follow)
+            let index = logFollowRequests.count
+            let entry = SiloWireLogEntry(computerId: params.computerId, computerName: row?.name ?? params.computerId,
+                deviceId: Self.devID, deviceName: "Fjord Mac", id: "log-\(index)",
+                line: index == 1 ? "Computer ready" : "New output",
+                occurredAt: ISO8601DateFormatter().string(from: Date()), source: "guest")
+            return try mockResult(SiloWireLogPage(entries: [entry], newestAvailableTimestamp: entry.occurredAt,
+                snapshot: "mock-log-snapshot-\(index)", timestampEstimated: false,
+                totalMatches: UInt64(index)), as: Result.self)
+        case "logs.export":
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "storage.read":
+            return try mockResult(SiloWireStorageState(checkpointCount: 2, history: [],
+                runtimeHostBytes: 8_589_934_592, workspaceCapacityBytes: 68_719_476_736,
+                workspaceHostBytes: 3_221_225_472, workspaceUsedBytes: 10_737_418_240), as: Result.self)
+        case "storage.reclaim":
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "exports.state":
+            mockExportState.archives = mockArchives
+            mockExportState.destination = mockExportDestination
+            return try mockResult(mockExportState, as: Result.self)
+        case "exports.destination.set":
+            let params = try mockDecode(call.params, as: SiloWireExportDestinationSetParams.self)
+            mockExportDestination = params.path
+            mockExportState.destination = params.path
+            return try mockResult(SiloWireExportDestinationResult(destination: params.path), as: Result.self)
+        case "exports.inspect":
+            let params = try mockDecode(call.params, as: SiloWireExportInspectParams.self)
+            let archive = SiloWireArchive(archivePath: params.archivePath, completedLabel: "Export archive",
+                computers: ["linux-1"], destination: URL(fileURLWithPath: params.archivePath).deletingLastPathComponent().path,
+                name: URL(fileURLWithPath: params.archivePath).lastPathComponent, size: "1.2 GB")
+            let inspection = SiloWireArchiveInspectionResult(archive: archive, valid: true)
+            return try mockResult(mockFeatureJob(result: try mockValue(inspection)), as: Result.self)
+        case "exports.create":
+            let params = try mockDecode(call.params, as: SiloWireExportCreateParams.self)
+            let names = params.computerIds.compactMap { inventory.computer($0)?.name }
+            let archiveName = "fjord-export-\(UUID().uuidString.prefix(8)).silo-backup"
+            mockArchives.insert(SiloWireArchive(archivePath: URL(fileURLWithPath: params.destination)
+                .appendingPathComponent(archiveName).path,
+                completedLabel: "Exported \(names.joined(separator: ", "))",
+                computers: names, destination: params.destination, name: archiveName, size: "1.2 GB"), at: 0)
+            if let archive = mockArchives.first {
+                storeMockExportResult(archive: archive, operation: .backup, names: names,
+                                      title: "Export complete", message: "The archive is ready.")
+            }
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "exports.import":
+            let params = try mockDecode(call.params, as: SiloWireExportImportParams.self)
+            if let source = inventory.allComputers.first(where: { $0.name == params.sourceName })
+                ?? inventory.allComputers.first {
+                switch source {
+                case .linux(var computer):
+                    computer.configuration.id = UUID().uuidString.lowercased()
+                    computer.configuration.name = params.newName
+                    computer.state = .stopped
+                    computer.stateDetail = "Stopped"
+                    computer.checkpoints = []
+                    computer.pendingCheckpointRestore = nil
+                    computer.unfinishedRestore = nil
+                    inventory.linux.computers.append(computer)
+                    publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
+                case .macos(var computer):
+                    computer.id = UUID().uuidString.lowercased()
+                    computer.name = params.newName
+                    computer.state = .stopped
+                    computer.progress = nil
+                    computer.detail = nil
+                    computer.displayOpen = false
+                    computer.checkpoints = []
+                    computer.checkpointOperation = nil
+                    computer.pendingRestore = nil
+                    inventory.macos.computers.append(computer)
+                    publish(.computersChanged(ComputersChangedPayload(macos: inventory.macos)))
+                }
+            }
+            let archive = mockArchives.first { $0.archivePath == params.archivePath }
+                ?? SiloWireArchive(archivePath: params.archivePath, completedLabel: "Imported archive",
+                                   computers: [params.sourceName ?? "linux-1"], destination: URL(fileURLWithPath: params.archivePath).deletingLastPathComponent().path,
+                                   name: URL(fileURLWithPath: params.archivePath).lastPathComponent, size: "1.2 GB")
+            storeMockExportResult(archive: archive, operation: .restore, names: [params.newName],
+                                  title: "Import complete", message: "\(params.newName) is ready.")
+            return try mockResult(mockFeatureJob(), as: Result.self)
+        case "exports.acknowledge":
+            let params = try mockDecode(call.params, as: SiloWireExportAcknowledgeParams.self)
+            let acknowledged = mockExportState.operationId == params.expectedOperationId
+                && mockExportState.resultUnseen == true
+            if acknowledged {
+                mockExportState.resultUnseen = false
+                mockExportState.snapshotId = UUID().uuidString
+                publish(.exportsChanged(mockExportState))
+            }
+            return try mockResult(acknowledged, as: Result.self)
+        case "exports.dismiss":
+            let params = try mockDecode(call.params, as: SiloWireExportDismissParams.self)
+            let matchesId = params.expectedOperationId == nil || params.expectedOperationId == mockExportState.operationId
+            let dismissed = matchesId && mockExportState.operation == params.expectedOperation.operationClass
+                && params.expectedOperation.kind == .result
+            if dismissed {
+                mockExportState.operation = nil
+                mockExportState.operationId = nil
+                mockExportState.resultUnseen = nil
+                mockExportState.snapshotId = UUID().uuidString
+                publish(.exportsChanged(mockExportState))
+            }
+            return try mockResult(dismissed, as: Result.self)
+        case "connections.status":
+            return try mockResult(mockConnectionsStatus(), as: Result.self)
+        case "connections.devices.list":
+            return try mockResult(connectedDevices, as: Result.self)
+        case "connections.devices.health":
+            let rows = connectedDevices.map { SiloWireDeviceHealth(busy: false, connected: true,
+                deviceId: $0.id, lastSeen: ISO8601DateFormatter().string(from: Date())) }
+            return try mockResult(SiloWireDeviceHealthResult(devices: rows), as: Result.self)
+        case "connections.devices.connect":
+            let params = try mockDecode(call.params, as: SiloWireConnectDeviceParams.self)
+            if let existing = connectedDevices.first(where: {
+                $0.address.caseInsensitiveCompare(params.address) == .orderedSame
+            }) {
+                guard params.replace == true else {
+                    throw EngineClientError.invalidAction("A Mac is already saved at \(existing.address).")
+                }
+                connectedDevices.removeAll { $0.id == existing.id }
+                ownerInventories[existing.id] = nil
+            }
+            let device = SiloWireDevice(address: params.address, id: UUID().uuidString.lowercased(),
+                                        name: params.address.split(separator: "@").last.map(String.init) ?? params.address)
+            connectedDevices.append(device)
+            ownerInventories[device.id] = inventory
+            return try mockResult(device, as: Result.self)
+        case "connections.devices.remove":
+            let params = try mockDecode(call.params, as: SiloWireDeviceIdParams.self)
+            if let error = nextConnectionRemovalError {
+                nextConnectionRemovalError = nil
+                throw EngineClientError.invalidAction(error)
+            }
+            revokedDeviceIDs.append(params.deviceId)
+            connectedDevices.removeAll { $0.id == params.deviceId }
+            ownerInventories[params.deviceId] = nil
+            return try mockResult(SiloNull(), as: Result.self)
+        case "connections.setEnabled":
+            let params = try mockDecode(call.params, as: SiloWireConnectionsSetEnabledParams.self)
+            mockConnectionsEnabled = params.enabled
+            return try mockResult(mockConnectionsStatus(enabled: params.enabled), as: Result.self)
+        case "connections.ssh.authorizationCommand":
+            let params = try mockDecode(call.params, as: SiloWireSSHAddressParams.self)
+            return try mockResult(SiloWireSSHCommandResult(command: "ssh -o StrictHostKeyChecking=ask -o BatchMode=no -- \(mockShellQuote(params.address)) true"), as: Result.self)
+        case "connections.ssh.keySetupCommand":
+            let params = try mockDecode(call.params, as: SiloWireSSHAddressParams.self)
+            return try mockResult(SiloWireSSHCommandResult(command: "ssh -- \(mockShellQuote(params.address)) 'install-silo-remote-key'"), as: Result.self)
+        case "sshAccess.state":
+            let computers = inventory.allComputers.map { row in
+                mockSSHAccess[row.id] ?? SiloWireSSHAccessComputer(addresses: [], bindAddress: "127.0.0.1",
+                    computer: row.name, computerId: row.id, deviceName: "Fjord Mac", enabled: false,
+                    keys: [], port: 2222, state: .disabled, user: "dev")
+            }
+            return try mockResult(SiloWireSSHAccessState(computers: computers), as: Result.self)
+        case "sshAccess.save":
+            let params = try mockDecode(call.params, as: SiloWireSSHAccessSaveParams.self)
+            let row = inventory.computer(params.computerId)
+            let state = SiloWireSSHAccessComputer(addresses: params.enabled ? ["127.0.0.1"] : [],
+                bindAddress: params.bindAddress, computer: row?.name ?? params.computerId,
+                computerId: params.computerId, deviceName: "Fjord Mac", enabled: params.enabled,
+                keys: params.keys ?? [], port: params.port, state: params.enabled ? .listening : .disabled, user: "dev")
+            mockSSHAccess[params.computerId] = state
+            return try mockResult(SiloWireSSHAccessState(computers: inventory.allComputers.map {
+                mockSSHAccess[$0.id] ?? SiloWireSSHAccessComputer(addresses: [], bindAddress: "127.0.0.1",
+                    computer: $0.name, computerId: $0.id, deviceName: "Fjord Mac", enabled: false,
+                    keys: [], port: 2222, state: .disabled, user: "dev")
+            }), as: Result.self)
+        case "sshAccess.connection":
+            let params = try mockDecode(call.params, as: SiloWireSSHAccessConnectionParams.self)
+            guard mockSSHAccess[params.computerId]?.enabled == true else {
+                throw EngineClientError.invalidAction("Enable SSH access first.")
+            }
+            let address = params.network == true ? "192.0.2.10" : "127.0.0.1"
+            return try mockResult("ssh -i '/tmp/mock-silo-key' -o IdentitiesOnly=yes -p 2222 dev@\(address)",
+                                  as: Result.self)
+        case "display.viewer.open":
+            let params = try mockDecode(call.params, as: SiloWireComputerTargetParams.self)
+            let row = inventory.computer(params.computerId)
+            return try mockResult(SiloWireViewerOpenResult(connectionId: "viewer-\(params.computerId)",
+                cookie: SiloWireViewerCookie(domain: "127.0.0.1", httpOnly: true, name: "silo-viewer",
+                                             path: "/", value: "demo"), initScript: "", name: row?.name ?? "Linux computer",
+                url: "http://127.0.0.1:5099/"), as: Result.self)
+        case "display.viewer.close":
+            return try mockResult(SiloNull(), as: Result.self)
+        default:
+            throw EngineClientError.unsupported("The mock doesn't implement \(call.name).")
+        }
+    }
+
     func operationsList(deviceId: String? = nil) async throws -> OperationsList {
         operationsListCallCount += 1
         var snapshot = operationQueue
@@ -1053,6 +1508,45 @@ final class MockEngineClient: EngineClient {
         }
     }
 
+    private func mockDecode<Encoded: Encodable, Value: Decodable>(_ encoded: Encoded, as type: Value.Type) throws -> Value {
+        let data = try JSONEncoder().encode(encoded)
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    private func mockResult<Encoded: Encodable, Value: Decodable>(_ encoded: Encoded, as type: Value.Type) throws -> Value {
+        let data = try JSONEncoder().encode(encoded)
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    private func mockValue<Value: Encodable>(_ value: Value) throws -> SiloJSONValue {
+        try JSONDecoder().decode(SiloJSONValue.self, from: JSONEncoder().encode(value))
+    }
+
+    private func mockShellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func mockFeatureJob(result: SiloJSONValue? = nil) -> SiloWireJobStartResult {
+        let jobId = nextJobId()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(40))
+            self?.finish(jobId, result: result)
+        }
+        return SiloWireJobStartResult(jobId: jobId)
+    }
+
+    private func mockConnectionsStatus(enabled: Bool? = nil) -> SiloWireConnectionsStatus {
+        SiloWireConnectionsStatus(address: "fjord@fjord-mac.local",
+            addresses: [SiloWireDeviceAddress(address: "fjord@fjord-mac.local", kind: .name)],
+            deviceId: Self.devID, enabled: enabled ?? mockConnectionsEnabled, name: "Fjord Mac")
+    }
+
+    private func mockNetworkPorts(computerId: String) -> [SiloWirePublishedPort] {
+        let configured = mockPorts[computerId] ?? []
+        guard !configured.contains(where: { $0.port == 3000 }) else { return configured }
+        return [SiloWirePublishedPort(configured: false, port: 3000, state: .unpublished)] + configured
+    }
+
     private func nextJobId() -> String {
         defer { nextJob += 1 }
         return "job:\(nextJob)"
@@ -1099,8 +1593,8 @@ final class MockEngineClient: EngineClient {
         publish(.jobProgress(event))
     }
 
-    private func finish(_ jobId: String) {
-        let event = OperationJobFinished(jobId: jobId, result: nil, error: nextJobFailure)
+    private func finish(_ jobId: String, result: JSONValue? = nil) {
+        let event = OperationJobFinished(jobId: jobId, result: result, error: nextJobFailure)
         nextJobFailure = nil
         finished[jobId] = event
         if currentProgress?.jobId == jobId { currentProgress = nil }
@@ -1142,6 +1636,19 @@ final class MockEngineClient: EngineClient {
             subscribers[id] = subscriber
             subscriber.handler(.event(sequence: subscriber.sequence, event: event))
         }
+    }
+
+    private func storeMockExportResult(archive: SiloWireArchive, operation: SiloWireBackupOperationKind,
+                                       names: [String], title: String, message: String) {
+        let result = SiloWireOperationClass(archive: archive, kind: .result, operation: operation,
+            runningNames: names, detail: message, message: message, outcome: .success, title: title)
+        mockExportState.archives = mockArchives
+        mockExportState.destination = mockExportDestination
+        mockExportState.operation = result
+        mockExportState.operationId = UUID().uuidString
+        mockExportState.resultUnseen = true
+        mockExportState.snapshotId = UUID().uuidString
+        publish(.exportsChanged(mockExportState))
     }
 
     private func deliver(_ event: EngineEvent, to subscription: String) {

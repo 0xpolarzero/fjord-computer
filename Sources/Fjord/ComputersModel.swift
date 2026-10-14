@@ -36,7 +36,7 @@ enum ComputerQuitChoice: Equatable { case cancel, keepRunning, stopAndQuit }
 @MainActor
 @Observable
 final class ComputersModel {
-    private let client: any EngineClient
+    let client: any EngineClient
     private(set) var inventory: ComputerInventory?
     private(set) var remoteOwnerInventories: [ComputerOwnerInventory] = []
     private(set) var placementError: String?
@@ -44,10 +44,10 @@ final class ComputersModel {
         (inventory.map { [ComputerOwnerInventory.local($0)] } ?? []) + remoteOwnerInventories
     }
     var placementOptions: [ComputerPlacementOption] { placementOwners.flatMap(\.options) }
-    private(set) var checkpointUsage: [String: CheckpointUsage] = [:]
+    var checkpointUsage: [String: CheckpointUsage] = [:]
     private(set) var isLoading = false
     private(set) var error: String?
-    private(set) var actionError: String?
+    var actionError: String?
     private(set) var activeJob: OperationJobProgress?
     private(set) var finishedJobs: [String: OperationJobFinished] = [:]
     private(set) var operationQueue = OperationsList.empty
@@ -55,11 +55,33 @@ final class ComputersModel {
     private(set) var quitPrompt: ComputerQuitPrompt?
     private(set) var quitError: String?
     private(set) var isQuitWorking = false
+    var selectedDetailSection: ComputerDetailSection = .overview
+    var createSheetKind: ComputerKind?
+    var isCreatePresented = false
+    var hostFacts: DeviceFacts?
+    var engineSettings: SiloWireSettingsSnapshot?
+    var setupActivity: [SiloWireComputerConfigurationProgress] = []
+    var fileLists: [String: SiloWireFileListResult] = [:]
+    var filePaths: [String: String] = [:]
+    var networkByComputer: [String: SiloWireNetworkComputer] = [:]
+    var sshAccessByComputer: [String: SiloWireSSHAccessComputer] = [:]
+    var githubState: SiloWireGitHubState?
+    var secrets: [SiloWireSecret] = []
+    var computerUseByComputer: [String: SiloWireComputerUseState] = [:]
+    var logsByComputer: [String: SiloWireLogPage] = [:]
+    var storageByComputer: [String: SiloWireStorageState] = [:]
+    var exportState: SiloWireBackupState?
+    var archiveInspection: SiloWireArchiveInspectionResult?
+    var connectionsStatus: SiloWireConnectionsStatus?
+    var connectionHealth: [String: SiloWireDeviceHealth] = [:]
+    var connectionDevices: [SiloWireDevice] = []
+    var pendingViewer: SiloWireViewerOpenResult?
+    var viewerScripts: [String: String] = [:]
 
     @ObservationIgnored private var subscription: String?
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
     @ObservationIgnored private var quitResolutionTask: Task<Void, Never>?
-    @ObservationIgnored private var jobActions: [String: String] = [:]
+    @ObservationIgnored var jobActions: [String: String] = [:]
     @ObservationIgnored private var presentedJobOutcomes: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Error>?
     @ObservationIgnored private var connectionAttemptID: UUID?
@@ -71,7 +93,7 @@ final class ComputersModel {
     @ObservationIgnored private var recoveryRevision: UInt64 = 0
     @ObservationIgnored private var stateRevision: UInt64 = 0
     @ObservationIgnored private var bufferedEvents: [(UInt64, EngineEvent)] = []
-    @ObservationIgnored private var reservedNames: Set<String> = []
+    @ObservationIgnored var reservedNames: Set<String> = []
     @ObservationIgnored private var isRecovering = false
     @ObservationIgnored private var wantsConnection = false
     @ObservationIgnored private var ownerRefreshID: UUID?
@@ -113,7 +135,7 @@ final class ComputersModel {
             self.sequence = 0
             self.hasSequence = true
             self.eventStreamID = attemptID
-            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "checkpoints.*", "operations.*", "connections.devices.changed"]) { [weak self] event in
+            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "checkpoints.*", "operations.*", "connections.devices.changed", "settings.changed", "exports.changed", "display.viewer.page"]) { [weak self] event in
                 self?.receive(event, stream: attemptID)
             }
             guard self.wantsConnection, self.connectionAttemptID == attemptID else {
@@ -278,6 +300,7 @@ final class ComputersModel {
         case .cancel:
             return
         case .keepRunning:
+            try await flushEngineSettings()
             try await client.engineDisconnect()
         case .stopAndQuit:
             guard prompt.inspectionError == nil else {
@@ -289,8 +312,13 @@ final class ComputersModel {
                 if let failure = finished.error { throw EngineClientError.jobFailed(failure.message) }
             }
             try await waitUntilStopped(Set(prompt.runningComputers.map(\.computerId)))
+            try await flushEngineSettings()
             try await client.engineDisconnect()
         }
+    }
+
+    private func flushEngineSettings() async throws {
+        let _: SiloNull = try await client.invoke(SiloGeneratedMethods.settingsFlush(SiloWireEmptyParams()))
     }
 
     func start(_ computerId: String) async { await perform("Start") { try await self.client.computersStart(ComputerReference(computerId: computerId)) } }
@@ -324,50 +352,6 @@ final class ComputersModel {
         let name = "Manual checkpoint · \(Date.now.formatted(.dateTime.month(.abbreviated).day()))"
         await perform("Create checkpoint") { try await self.client.checkpointsCreate(CheckpointCreateRequest(computerId: computerId, name: name, kind: .manual)) }
     }
-    func createLinuxComputer() async {
-        do {
-            let facts = try await client.deviceFactsRead(deviceId: nil)
-            guard let capacity = facts.deviceCapacity else {
-                throw EngineClientError.invalidAction("Host CPU and memory capacity are unavailable.")
-            }
-            let current = try await inventoryForCreation()
-            let cpuLimit = min(capacity.logicalCpus, max(1, capacity.logicalCpus / 2))
-            let memoryLimit = min(capacity.maxMemoryGib, Int(capacity.physicalMemoryBytes / 1_073_741_824)) / 2
-            guard cpuLimit > 0, memoryLimit > 0 else {
-                throw EngineClientError.invalidAction("This device does not have enough available capacity to create a Linux computer.")
-            }
-            let name = reserveName("linux-new", in: current)
-            defer { reservedNames.remove(name.lowercased()) }
-            let id = UUID().uuidString.lowercased()
-            let configuration = ComputerConfiguration(id: id, name: name, cpus: min(2, cpuLimit), maxCPUs: cpuLimit,
-                                                      memoryGiB: min(4, memoryLimit), maxMemoryGiB: memoryLimit,
-                                                      workspaceStorageGiB: 64, runtimeStorageGiB: 32)
-            await perform("Create Linux computer") {
-                try await self.client.computersCreate(.linux(configuration, requestId: id))
-            }
-        } catch { actionError = error.localizedDescription }
-    }
-    func createMacosComputer() async {
-        do {
-            let facts = try await client.deviceFactsRead(deviceId: nil)
-            guard let limits = facts.macosHostLimits else {
-                throw EngineClientError.invalidAction("macOS host limits are unavailable.")
-            }
-            let current = try await inventoryForCreation()
-            let cpuLimit = max(limits.cpus, 2)
-            let memoryLimit = max(limits.memory_gib - 4, 4)
-            let minimumDisk = max(32, Int(clamping: current.macos.minDiskGiB))
-            guard minimumDisk <= 1024 else {
-                throw EngineClientError.invalidAction("The macOS template requires more disk space than this computer can create.")
-            }
-            let name = reserveName("macos-new", in: current)
-            defer { reservedNames.remove(name.lowercased()) }
-            let request = MacosComputerCreateRequest(name: name, cpus: max(2, cpuLimit / 2),
-                                                     memoryGiB: min(memoryLimit, max(4, limits.memory_gib / 2)),
-                                                     diskGiB: minimumDisk)
-            await perform("Create macOS computer") { try await self.client.computersCreate(.macos(request)) }
-        } catch { actionError = error.localizedDescription }
-    }
     func restoreCheckpoint(_ checkpointId: String, computerId: String) async {
         await perform("Restore checkpoint") { try await self.client.checkpointsRestore(CheckpointRestoreRequest(computerId: computerId, checkpointId: checkpointId)) }
     }
@@ -387,23 +371,25 @@ final class ComputersModel {
     }
 
     @discardableResult
-    private func perform<T>(_ label: String, _ action: () async throws -> T) async -> Bool {
+    func perform<T>(_ label: String, _ action: () async throws -> T) async -> Bool {
         actionError = nil
         do {
             let accepted = try await action()
             let jobId: String? = if let job = accepted as? ComputerJob { job.jobId }
                 else if let job = accepted as? ComputerCreateResult { job.jobId }
+                else if let job = accepted as? SiloWireJobStartResult { job.jobId }
                 else { nil }
             guard let jobId else { return false }
             jobActions[jobId] = label
             let outcome = try await waitForFinish(jobId)
             presentJobOutcome(outcome, action: label)
+            if outcome.error == nil { try await acknowledgeConsumedJob(jobId) }
             return outcome.error == nil
         }
         catch { actionError = error.localizedDescription; return false }
     }
 
-    private func inventoryForCreation() async throws -> ComputerInventory {
+    func inventoryForCreation() async throws -> ComputerInventory {
         let revision = stateRevision
         let latest = try await client.computersList(deviceId: nil)
         guard stateRevision == revision else { return inventory ?? latest }
@@ -413,14 +399,14 @@ final class ComputersModel {
         return latest
     }
 
-    private func reserveName(_ base: String, in inventory: ComputerInventory) -> String {
+    func reserveName(_ base: String, in inventory: ComputerInventory) -> String {
         let existing = inventory.allComputers.map(\.name) + Array(reservedNames)
         let name = ComputerName.unique(base, among: existing)
         reservedNames.insert(name.lowercased())
         return name
     }
 
-    private func reserveForkName(from sourceName: String, in inventory: ComputerInventory) -> String {
+    func reserveForkName(from sourceName: String, in inventory: ComputerInventory) -> String {
         let existing = inventory.allComputers.map(\.name) + Array(reservedNames)
         let name = ComputerName.uniqueFork(from: sourceName, among: existing)
         reservedNames.insert(name.lowercased())
@@ -437,6 +423,13 @@ final class ComputersModel {
         } catch {
             actionError = error.localizedDescription
         }
+    }
+
+    func acknowledgeConsumedJob(_ jobId: String) async throws {
+        try await client.operationsJobAcknowledge(jobId: jobId, deviceId: nil)
+        finishedJobs[jobId] = nil
+        jobActions[jobId] = nil
+        if jobAwaitingAcknowledgement == jobId { jobAwaitingAcknowledgement = nil }
     }
 
     func cancelJob(_ jobId: String) async {
@@ -522,6 +515,12 @@ final class ComputersModel {
             recordFinished(result)
         case .guestFilesChanged:
             break
+        case .viewerPage(let page):
+            viewerScripts[page.connectionId] = page.script
+        case .settingsChanged(let snapshot):
+            engineSettings = snapshot
+        case .exportsChanged(let snapshot):
+            exportState = snapshot
         }
     }
 
@@ -540,14 +539,14 @@ final class ComputersModel {
         }
     }
 
-    private func presentJobOutcome(_ result: OperationJobFinished, action: String) {
+    func presentJobOutcome(_ result: OperationJobFinished, action: String) {
         guard presentedJobOutcomes.insert(result.jobId).inserted else { return }
         guard let failure = result.error else { return }
         actionError = "\(action) failed: \(failure.message)"
         jobAwaitingAcknowledgement = result.jobId
     }
 
-    private func waitForFinish(_ jobId: String) async throws -> OperationJobFinished {
+    func waitForFinish(_ jobId: String) async throws -> OperationJobFinished {
         while true {
             if let finished = finishedJobs[jobId] { return finished }
             let snapshot = try await client.operationsJobGet(jobId: jobId, deviceId: nil)
@@ -586,10 +585,15 @@ final class ComputersModel {
                 guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
                 let operationsSnapshot = try await client.operationsList(deviceId: nil)
                 guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
+                let settingsSnapshot: SiloWireSettingsSnapshot?
+                if engineSettings == nil { settingsSnapshot = nil }
+                else { settingsSnapshot = try? await client.invoke(SiloGeneratedMethods.settingsRead(SiloWireEmptyParams())) }
+                guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
                 guard revision == recoveryRevision else { continue }
 
                 inventory = inventorySnapshot
                 operationQueue = operationsSnapshot
+                if let settingsSnapshot { engineSettings = settingsSnapshot }
                 stateRevision &+= 1
                 error = nil
                 let events = bufferedEvents.sorted { $0.0 < $1.0 }

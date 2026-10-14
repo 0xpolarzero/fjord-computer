@@ -80,6 +80,73 @@ enum AppWindowShots {
         Shot(name: "computer-detail", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
             store.setTool(.computers, on: true)
         }),
+        Shot(name: "computer-overview", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .overview
+        }),
+        Shot(name: "computer-files", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .files
+        }),
+        Shot(name: "computer-network", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .network
+        }),
+        Shot(name: "computer-access", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .access
+        }),
+        Shot(name: "computer-activity", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .activity
+        }),
+        Shot(name: "computer-storage", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .storage
+            let destination = "/Users/fjord/Exports"
+            let archive = SiloWireArchive(archivePath: destination + "/dev.silo-backup",
+                completedLabel: "Exported dev", computers: ["dev"], destination: destination,
+                name: "dev.silo-backup", size: "1.2 GB")
+            let operation = SiloWireOperationClass(archive: archive, kind: .result, operation: .backup,
+                runningNames: ["dev"], detail: "The archive is ready.", message: "The archive is ready.",
+                outcome: .success, title: "Export complete")
+            let exports = SiloWireBackupState(archives: [archive], availability: .available,
+                destination: destination, operation: operation, operationId: "export-shot",
+                resultUnseen: true, snapshotId: "export-shot")
+            (store.engineClient as? MockEngineClient)?.mockExportState = exports
+            store.computers.exportState = exports
+        }),
+        Shot(name: "computer-viewer", destination: { _ in .computerDetail(MockEngineClient.linuxID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.pendingViewer = SiloWireViewerOpenResult(connectionId: "viewer-shot",
+                cookie: SiloWireViewerCookie(domain: "127.0.0.1", httpOnly: true, name: "silo-viewer", path: "/", value: "demo"),
+                initScript: "", name: "linux-1", url: "http://127.0.0.1:5099/")
+        }),
+        Shot(name: "computer-create-linux", destination: { _ in .computers }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.createSheetKind = .linux
+            store.computers.isCreatePresented = true
+        }),
+        Shot(name: "computer-create-macos", destination: { _ in .computers }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.createSheetKind = .macos
+            store.computers.isCreatePresented = true
+        }),
+        Shot(name: "settings-computers", destination: { _ in .settings }, size: CGSize(width: 1280, height: 1600), prepare: { store in
+            store.setTool(.computers, on: true)
+            let settings = SiloWireSettingsSnapshot(onboardingDraft: .null, revision: 1,
+                settings: SiloWireSettingsValues(automaticCheckpointRetentionCount: 3,
+                    startComputersAtLaunch: true, startupComputerIds: [MockEngineClient.devID]), writeProtected: false)
+            (store.engineClient as? MockEngineClient)?.settingsSnapshot = settings
+            store.computers.engineSettings = settings
+            let device = SiloWireDevice(address: "dev@studio.local", id: "device-shot", name: "Studio Mac")
+            (store.engineClient as? MockEngineClient)?.connectedDevices = [device]
+            store.computers.connectionsStatus = SiloWireConnectionsStatus(address: "dev@studio.local", addresses: [],
+                deviceId: "local-shot", enabled: true, name: "Fjord Mac")
+            store.computers.connectionDevices = [device]
+            store.computers.connectionHealth = [device.id: SiloWireDeviceHealth(busy: false, connected: true,
+                deviceId: device.id, lastSeen: "Just now")]
+        }),
         Shot(name: "computers-quit-dialog", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
             if let prompt = ComputerQuitPrompt.make(inventory: MockEngineClient.demoInventory) {
@@ -504,7 +571,8 @@ enum AppWindowShots {
     /// The content as drawn (the title bar and its toolbar belong to the window server, which a CLI can't ask for the
     /// window without screen-recording permission).
     private static func capture(_ window: NSWindow, to path: String) {
-        guard let view = window.contentView else { return }
+        let captureWindow = window.attachedSheet ?? window
+        guard let view = captureWindow.contentView else { return }
         view.layoutSubtreeIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)

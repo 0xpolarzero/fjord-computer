@@ -27,6 +27,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
                     tools
+                    if store.computersOn { ComputerHostSettings(store: store) }
                     if store.triageOn { account }
                     notifications.id(Self.notificationsID)
                     // The Router's own sections read the Router's state in views of their own: what changes with every read of

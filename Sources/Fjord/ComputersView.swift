@@ -11,8 +11,14 @@ struct ComputersView: View {
         AppPage(title: "Computers", subtitle: rows.isEmpty ? "" : plural(rows.count, "computer"), leadingInset: leadingInset,
                 column: (880, 20)) {
             Menu {
-                Button("Linux computer") { Task { await model.createLinuxComputer() } }
-                Button("macOS computer") { Task { await model.createMacosComputer() } }
+                Button("Linux computer") {
+                    model.createSheetKind = .linux
+                    model.isCreatePresented = true
+                }
+                Button("macOS computer") {
+                    model.createSheetKind = .macos
+                    model.isCreatePresented = true
+                }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .semibold))
@@ -59,6 +65,11 @@ struct ComputersView: View {
             }
             .scrollIndicators(.never)
         }
+        .sheet(isPresented: Binding(get: { model.isCreatePresented }, set: { model.isCreatePresented = $0 })) {
+            if let kind = model.createSheetKind {
+                ComputerCreationSheet(store: store, kind: kind)
+            }
+        }
     }
 }
 
@@ -87,12 +98,37 @@ struct ComputerDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let row {
-                        ComputerOverview(row: row, model: model)
+                        Picker("Computer section", selection: Binding(get: { model.selectedDetailSection },
+                            set: { model.selectedDetailSection = $0 })) {
+                            ForEach(ComputerDetailSection.allCases) { section in
+                                Text(section.rawValue).tag(section)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
                         ComputerOperationQueue(model: model, computerId: row.id)
                         if let job = model.activeJob, job.computerId == row.id {
                             ComputerJobCard(job: job, inventory: model.inventory)
                         }
-                        ComputerCheckpointSection(row: row, model: model)
+                        switch model.selectedDetailSection {
+                        case .overview:
+                            ComputerOverview(row: row, model: model)
+                            ComputerResourcesPanel(row: row, model: model)
+                            ComputerCheckpointSection(row: row, model: model)
+                            ComputerUsePanel(row: row, model: model)
+                        case .files:
+                            ComputerFilesPanel(row: row, model: model)
+                        case .network:
+                            ComputerNetworkPanel(row: row, model: model)
+                        case .access:
+                            ComputerGitHubPanel(row: row, model: model)
+                            ComputerSecretsPanel(row: row, model: model)
+                        case .activity:
+                            ComputerActivityPanel(row: row, model: model)
+                        case .storage:
+                            ComputerStoragePanel(row: row, model: model)
+                            ComputerExportPanel(row: row, model: model)
+                        }
                     } else if model.isLoading {
                         ProgressView().frame(maxWidth: .infinity).padding(.vertical, 44)
                     } else {
@@ -106,6 +142,38 @@ struct ComputerDetailView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.never)
+            .task(id: "\(computerId)-\(model.selectedDetailSection.rawValue)") {
+                switch model.selectedDetailSection {
+                case .overview:
+                    await model.loadComputerUse(computerId: computerId)
+                    await model.loadCheckpointUsage(computerId: computerId)
+                case .files:
+                    await model.loadFiles(computerId: computerId)
+                case .network:
+                    await model.loadNetwork(computerId: computerId)
+                    await model.loadSSHAccess(computerId: computerId)
+                case .access:
+                    await model.loadGitHubState()
+                    await model.loadSecrets()
+                    await model.loadComputerUse(computerId: computerId)
+                case .activity:
+                    await model.loadSetupActivity()
+                    await model.loadLogs(computerId: computerId)
+                case .storage:
+                    await model.loadStorage(computerId: computerId)
+                    await model.loadExportState()
+                }
+            }
+        }
+        .sheet(isPresented: Binding(get: { model.pendingViewer != nil }, set: { presented in
+            if !presented, model.pendingViewer != nil { Task { await model.closeScreen() } }
+        })) {
+            if let viewer = model.pendingViewer {
+                ComputerViewerSheet(viewer: viewer, script: model.viewerScripts[viewer.connectionId],
+                                    mockPreview: model.client is MockEngineClient) {
+                    Task { await model.closeScreen() }
+                }
+            }
         }
     }
 
@@ -195,7 +263,7 @@ private struct ComputerOverview: View {
                         ActionButton("Force stop") { Task { await model.forceStop(row.id) } }
                     }
                     if row.canShowDisplay {
-                        ActionButton("Show display") { Task { await model.showDisplay(row.id) } }
+                        ActionButton("Open screen") { Task { await model.openScreen(for: row.id) } }
                     }
                     if row.canDelete {
                         ActionButton("Delete") { Task { await model.delete(row.id) } }
@@ -220,6 +288,9 @@ private struct ComputerCheckpointSection: View {
             ActionButton("Create checkpoint") { Task { await model.createCheckpoint(for: row.id) } }
                 .disabled(row.displayState != .running && row.displayState != .stopped)
         }) {
+            if let usage = model.checkpointUsage[row.id] {
+                SettingsNote("\(usage.checkpoints.count) checkpoints · \(usage.totalBytes.map(byteCount) ?? "size unavailable")")
+            }
             if row.checkpoints.isEmpty {
                 SettingsNote("No checkpoints yet")
             } else {
@@ -230,7 +301,23 @@ private struct ComputerCheckpointSection: View {
                     }
                 }
             }
+            if hasPendingRestore {
+                SettingsDivider().padding(.vertical, 6)
+                ComputerNotice(text: "A checkpoint restore needs attention. Abandoning it clears the pending restore; it does not restore files.", tone: .warning)
+                ActionButton("Abandon pending restore") { Task { await model.abandonRestore(computerId: row.id) } }
+            }
         }
+    }
+
+    private var hasPendingRestore: Bool {
+        switch row {
+        case .linux(let value): value.pendingCheckpointRestore != nil || value.unfinishedRestore != nil
+        case .macos(let value): value.pendingRestore != nil
+        }
+    }
+
+    private func byteCount(_ value: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file)
     }
 }
 
@@ -361,7 +448,7 @@ private struct ComputerOperationQueueRow: View {
     }
 }
 
-private struct ComputerPanel<Content: View, Action: View>: View {
+struct ComputerPanel<Content: View, Action: View>: View {
     let title: String
     @ViewBuilder var action: () -> Action
     @ViewBuilder var content: () -> Content
@@ -396,13 +483,13 @@ private extension ComputerCheckpoint {
     }
 }
 
-private extension ComputerPanel where Action == EmptyView {
+extension ComputerPanel where Action == EmptyView {
     init(title: String, @ViewBuilder content: @escaping () -> Content) {
         self.init(title: title, action: { EmptyView() }, content: content)
     }
 }
 
-private struct ComputerNotice: View {
+struct ComputerNotice: View {
     enum Tone { case warning, danger }
     let text: String
     let tone: Tone

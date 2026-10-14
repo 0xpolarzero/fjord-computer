@@ -558,7 +558,7 @@ final class SocketEngineClient: EngineClient {
         let _: SiloNull = try await invokeGuest(SiloGeneratedMethods.guestSshAliasRemove(params))
     }
 
-    private func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
+    func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
         _ call: SiloGeneratedMethodCall<Params, Result>
     ) async throws -> Result {
         do {
@@ -836,6 +836,15 @@ final class SocketEngineClient: EngineClient {
         case .guestFilesChanged:
             guard let value = try? decoder.decode(SiloWireGuestFilesChangedPayload.self, from: data) else { return nil }
             return .guestFilesChanged(deviceId: envelope.deviceId, payload: value)
+        case .settingsChanged:
+            guard let value = try? decoder.decode(SiloWireSettingsSnapshot.self, from: data) else { return nil }
+            return .settingsChanged(value)
+        case .exportsChanged:
+            guard let value = try? decoder.decode(SiloWireBackupState.self, from: data) else { return nil }
+            return .exportsChanged(value)
+        case .displayViewerPage:
+            guard let value = try? decoder.decode(SiloWireViewerPageEvent.self, from: data) else { return nil }
+            return .viewerPage(value)
         default:
             return nil
         }
