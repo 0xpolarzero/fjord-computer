@@ -533,6 +533,13 @@ final class MockEngineClient: EngineClient {
     private var nextJob = 1
     private var finished: [String: OperationJobFinished] = [:]
     private var subscribers: [String: Subscriber] = [:]
+    var suspendNextSubscription = false
+    private var subscriptionContinuation: CheckedContinuation<Void, Never>?
+    private var subscriptionWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var subscribeCallCount = 0
+    private(set) var unsubscribeCallCount = 0
+
+    var activeSubscriptionCount: Int { subscribers.count }
 
     private struct Subscriber {
         var events: [String]
@@ -786,6 +793,15 @@ final class MockEngineClient: EngineClient {
     }
 
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String {
+        subscribeCallCount += 1
+        if suspendNextSubscription {
+            suspendNextSubscription = false
+            await withCheckedContinuation { continuation in
+                subscriptionContinuation = continuation
+                subscriptionWaiters.forEach { $0.resume() }
+                subscriptionWaiters.removeAll()
+            }
+        }
         let subscription = UUID().uuidString
         subscribers[subscription] = Subscriber(events: events, handler: handler)
         if let currentProgress, Self.matches("operations.job.progress", requested: events) {
@@ -794,7 +810,21 @@ final class MockEngineClient: EngineClient {
         return subscription
     }
 
-    func eventsUnsubscribe(subscription: String) async { subscribers[subscription] = nil }
+    func eventsUnsubscribe(subscription: String) async {
+        unsubscribeCallCount += 1
+        subscribers[subscription] = nil
+    }
+
+    func waitForSuspendedSubscription() async {
+        if subscriptionContinuation != nil { return }
+        await withCheckedContinuation { subscriptionWaiters.append($0) }
+    }
+
+    func resumeSuspendedSubscription() {
+        let continuation = subscriptionContinuation
+        subscriptionContinuation = nil
+        continuation?.resume()
+    }
 
     func engineDisconnect() async throws {
         disconnected = true

@@ -296,6 +296,18 @@ struct AppContent: View {
         // Under the window's top bar only, where it has a ground of its own (before macOS 26): the header shows it.
         .background { CDS.Surface.s1.padding(.top, Self.groundTop) }
         .clipped()
+        .task(id: navigator.selection) {
+            switch navigator.selection {
+            case .computers:
+                await store.computers.activate()
+            case .computerDetail(let id):
+                await store.computers.activate()
+                await store.computers.loadCheckpoints(for: id)
+            default:
+                await store.computers.deactivate()
+            }
+        }
+        .onDisappear { Task { await store.computers.deactivate() } }
     }
 
     /// Where the page's own ground starts: under the top bar before macOS 26, at the top on 26, where the page runs under

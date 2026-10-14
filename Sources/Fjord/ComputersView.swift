@@ -57,8 +57,6 @@ struct ComputersView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.never)
-            .task { await model.activate() }
-            .onDisappear { Task { await model.deactivate() } }
         }
     }
 }
@@ -106,11 +104,6 @@ struct ComputerDetailView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.never)
-            .task {
-                await model.activate()
-                await model.loadCheckpoints(for: computerId)
-            }
-            .onDisappear { Task { await model.deactivate() } }
         }
     }
 

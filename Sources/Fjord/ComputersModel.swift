@@ -50,6 +50,9 @@ final class ComputersModel {
     @ObservationIgnored private var subscription: String?
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
     @ObservationIgnored private var finishWaiters: [String: [CheckedContinuation<OperationJobFinished, Never>]] = [:]
+    @ObservationIgnored private var connectionTask: Task<Void, Error>?
+    @ObservationIgnored private var connectionAttemptID: UUID?
+    @ObservationIgnored private var wantsConnection = false
 
     init(client: any EngineClient, initialInventory: ComputerInventory? = nil) {
         self.client = client
@@ -57,27 +60,57 @@ final class ComputersModel {
     }
 
     func connect() async throws {
+        wantsConnection = true
+        if let connectionTask {
+            try await connectionTask.value
+            return
+        }
         guard subscription == nil else {
             try await refresh()
             return
         }
+        let attemptID = UUID()
+        connectionAttemptID = attemptID
         isLoading = true
-        defer { isLoading = false }
-        inventory = try await client.computersList(deviceId: nil)
-        subscription = try await client.eventsSubscribe(events: ["computers.*", "operations.*"]) { [weak self] event in
-            self?.receive(event)
+        let task = Task { @MainActor in
+            defer {
+                if self.connectionAttemptID == attemptID {
+                    self.connectionAttemptID = nil
+                    self.connectionTask = nil
+                    self.isLoading = false
+                }
+            }
+            let firstRead = try await self.client.computersList(deviceId: nil)
+            if self.inventory == nil { self.inventory = firstRead }
+            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "operations.*"]) { [weak self] event in
+                self?.receive(event)
+            }
+            guard self.wantsConnection, self.connectionAttemptID == attemptID else {
+                await self.client.eventsUnsubscribe(subscription: newSubscription)
+                return
+            }
+            self.subscription = newSubscription
+            // Close the read/subscribe race; sequenced state updates prevent a stale read from winning.
+            let secondRead = try await self.client.computersList(deviceId: nil)
+            guard self.wantsConnection, self.connectionAttemptID == attemptID else { return }
+            self.inventory = secondRead
+            self.error = nil
         }
-        // Close the read/subscribe race; events after this read carry sequenced state updates.
-        inventory = try await client.computersList(deviceId: nil)
-        error = nil
+        connectionTask = task
+        try await task.value
     }
 
     func activate() async {
         do { try await connect() }
-        catch { self.error = error.localizedDescription }
+        catch { if wantsConnection { self.error = error.localizedDescription } }
     }
 
     func deactivate() async {
+        wantsConnection = false
+        connectionAttemptID = nil
+        connectionTask?.cancel()
+        connectionTask = nil
+        isLoading = false
         guard let subscription else { return }
         self.subscription = nil
         await client.eventsUnsubscribe(subscription: subscription)

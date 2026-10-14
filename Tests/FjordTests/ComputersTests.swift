@@ -97,6 +97,24 @@ import Testing
         }
     }
 
+    @Test func overlappingActivationsAndTeardownLeaveNoLateSubscription() async {
+        let client = MockEngineClient()
+        client.suspendNextSubscription = true
+        let model = ComputersModel(client: client)
+        let listActivation = Task { await model.activate() }
+        await client.waitForSuspendedSubscription()
+        let detailActivation = Task { await model.activate() }
+        await Task.yield()
+        await model.deactivate()
+        client.resumeSuspendedSubscription()
+        await listActivation.value
+        await detailActivation.value
+
+        #expect(client.subscribeCallCount == 1)
+        #expect(client.activeSubscriptionCount == 0)
+        #expect(client.unsubscribeCallCount == 1)
+    }
+
     @Test func stateMappingCoversLinuxAndMacOSStates() throws {
         let inventory = MockEngineClient.demoInventory
         #expect(try #require(inventory.computer(MockEngineClient.linuxID)).displayState == .running)
