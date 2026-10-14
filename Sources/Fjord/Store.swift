@@ -336,6 +336,9 @@ final class Store {
             updateRouterTasks()
         }
     }
+    /// Guest execution observations keyed by the Desktop session that owns the SSH mirror. Local reads can refresh
+    /// title, folder, and timestamps, but must not replace this guest-owned execution state.
+    @ObservationIgnored var guestExecutionStates: [String: GuestExecutionState] = [:]
     /// Bumped on every change to `claudeSessions`: a cheap memo key for what is worked out from them (unobserved).
     @ObservationIgnored private(set) var claudeSessionsRevision = 0
     /// Bumped on every change to what the window shows of Claude besides the inbox and the Router (the sessions, their

@@ -290,6 +290,21 @@ enum Claude {
         return result
     }
 
+    /// Whether the last assistant entry ends the turn. Presence can stay live while Claude waits for another message,
+    /// so process liveness alone cannot determine the Desktop session's running state.
+    static func transcriptEndedTurn(tail: Data) -> Bool {
+        for line in tail.split(separator: UInt8(ascii: "\n")).reversed() {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                  let type = object["type"] as? String else { continue }
+            if type == "user" { return false }
+            guard type == "assistant" else { continue }
+            guard let message = object["message"] as? [String: Any],
+                  let reason = message["stop_reason"] as? String else { return false }
+            return reason == "end_turn" || reason == "stop_sequence"
+        }
+        return false
+    }
+
     static func describe(tool name: String, input: [String: Any]) -> String {
         func file(_ key: String = "file_path") -> String {
             (input[key] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? "a file"

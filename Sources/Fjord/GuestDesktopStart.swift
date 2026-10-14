@@ -67,6 +67,17 @@ struct GuestSessionEvidence: Equatable, Sendable {
     var transcript: GuestTranscriptSnapshot? = nil
 }
 
+/// Guest execution is authoritative for the session body; the local SSH mirror supplies only Desktop metadata.
+struct GuestExecutionState: Equatable {
+    enum Availability: Equatable { case live, dead, inaccessible }
+
+    var cliSessionID: String
+    var availability: Availability
+    /// `nil` means an inaccessible guest has not supplied enough evidence to replace the last known value.
+    var isRunning: Bool?
+    var activity: ClaudeActivity?
+}
+
 struct DesktopSSHSession: Equatable, Sendable {
     var id: String
     var alias: String

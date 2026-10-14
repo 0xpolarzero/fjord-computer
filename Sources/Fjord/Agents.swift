@@ -456,8 +456,24 @@ extension Store {
             claudeReadOnce = true
             routingMayBeReady()
         }
-        if let next = snapshot.activity, next != claudeActivity { claudeActivity = next }
-        if let next = snapshot.tasks, next != claudeTasks { claudeTasks = next }
+        if let next = snapshot.activity {
+            var merged = next
+            for (id, guest) in guestExecutionStates {
+                if guest.availability == .inaccessible {
+                    merged[id] = claudeActivity[id]
+                } else {
+                    merged[id] = guest.activity
+                }
+            }
+            if merged != claudeActivity { claudeActivity = merged }
+        }
+        if let next = snapshot.tasks {
+            var merged = next
+            for (id, guest) in guestExecutionStates {
+                merged[id] = guest.availability == .dead ? nil : claudeTasks[id]
+            }
+            if merged != claudeTasks { claudeTasks = merged }
+        }
         if let inventory = snapshot.taskInventory { claudeTaskInventory = inventory }
         if snapshot.sessions != nil || snapshot.activity != nil || snapshot.tasks != nil { feedRouter() }
         if snapshot.sessions != nil { pickIcons() }
@@ -468,7 +484,14 @@ extension Store {
     func ingest(_ sessions: [ClaudeSession], appUnread: Set<String>?, claudeFrontmost: Bool, now: Date = Date()) {
         var state = agents
         let live = sessions.filter { !$0.isArchived }
-        let byID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let byID = Dictionary(live.map { incoming -> (String, ClaudeSession) in
+            var session = incoming
+            if let guest = guestExecutionStates[session.id] {
+                session.cliID = guest.cliSessionID
+                if let isRunning = guest.isRunning { session.running = isRunning }
+            }
+            return (session.id, session)
+        }, uniquingKeysWith: { a, _ in a })
         let muted = Set(state.mutedFolders)
         let previousDots = state.appUnread.map(Set.init)
         // The session shown in the app right now: the most recently focused one, if the app is in front.

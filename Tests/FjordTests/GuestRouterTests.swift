@@ -404,6 +404,79 @@ private actor GuestRelayStateRecorder {
         #expect(try await GuestSessionObserver(client: guest).read(computer: computer, paths: paths, guestNowMs: start + 10_000).isEmpty)
     }
 
+    @MainActor @Test func guestTurnCompletionAndIdentitySurviveLocalMirrorRefresh() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        store.agents.enabled = true
+        let desktopID = "local_desktop-guest-state"
+        let cliID = "guest-cli-1"
+        let opened = Date(timeIntervalSince1970: 1_800_000_000)
+        store.claudeSessions[desktopID] = ClaudeSession(id: desktopID, title: "Widget", folder: "/workspace/repo",
+            lastActivity: opened, running: true, cliID: "mirror-cli")
+        store.router.pendingDesktopStarts = [PendingDesktopStart(projectID: UUID(),
+            location: .computer(deviceId: computer.deviceId, computerId: computer.computerId),
+            alias: "ssh-computer-1", folder: "/workspace/repo", prompt: "Fix it", openedAt: opened,
+            state: .matched, desktopSessionID: desktopID, guestSessionID: cliID)]
+
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let key = String(repeating: "ab", count: 32)
+        let start: Int64 = 1_800_000_000_000
+        try await guest.filesWrite(.init(computer: computer, path: paths.key, data: Data(key.utf8), mode: 0o600))
+        let presence = try JSONSerialization.data(withJSONObject: [
+            "state": "live", "sessionId": cliID, "pid": 42, "startedAt": 123,
+            "keyId": ClaudePlugin.keyID(of: key), "renewedAt": start, "capabilities": [ClaudePlugin.inboxCapability],
+        ])
+        try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.presence, cliID), data: presence, mode: 0o600))
+        let registry = try JSONSerialization.data(withJSONObject: [
+            "hostSessionId": desktopID, "sessionId": cliID, "pid": 42, "startedAt": 123,
+        ])
+        try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.registry, "42.json"), data: registry, mode: 0o600))
+        let final = try JSONSerialization.data(withJSONObject: [
+            "type": "assistant", "uuid": "final-1", "cwd": "/workspace/repo", "timestamp": "2026-12-15T16:00:10.000Z",
+            "message": ["role": "assistant", "content": [["type": "text", "text": "Done" ]], "stop_reason": "end_turn"],
+        ], options: [.sortedKeys]) + Data("\n".utf8)
+        try await guest.filesWrite(.init(computer: computer,
+            path: GuestRouterPaths.join(GuestRouterPaths.join(paths.projects, "workspace-repo"), "\(cliID).jsonl"),
+            data: final, mode: 0o600))
+        let clockArgv = [account.nodeExecutable, "-e", "process.stdout.write(String(Date.now()))"]
+        await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data(String(start + 1_000).utf8), stderr: Data()), argv: clockArgv)
+
+        try await GuestRouterRuntime.shared.startWatching(store: store, client: guest, computer: computer)
+
+        #expect(store.claudeSessions[desktopID]?.running == false)
+        #expect(store.claudeSessions[desktopID]?.cliID == cliID)
+        #expect(store.claudeActivity[desktopID]?.text == "Writing")
+        #expect(store.guestExecutionStates[desktopID]?.availability == .live)
+        #expect(store.guestExecutionStates[desktopID]?.isRunning == false)
+
+        var mirror = ClaudeSession(id: desktopID, title: "Widget", folder: "/workspace/repo", lastActivity: opened,
+                                  running: true, cliID: "mirror-cli")
+        mirror.completedTurns = 0
+        var snapshot = ClaudeSnapshot()
+        snapshot.sessions = [mirror]
+        snapshot.activity = [desktopID: ClaudeActivity(text: "Reading stale mirror", since: opened)]
+        store.applyClaude(snapshot)
+
+        #expect(store.claudeSessions[desktopID]?.running == false)
+        #expect(store.claudeSessions[desktopID]?.cliID == cliID)
+        #expect(store.claudeActivity[desktopID]?.text == "Writing")
+
+        await guest.failNextRead(computer: computer, path: paths.key, with: .unavailable("temporary read failure"))
+        _ = try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.presence, cliID),
+                                              data: presence, mode: 0o600))
+        await waitUntil { store.guestExecutionStates[desktopID]?.availability == .inaccessible }
+        store.applyClaude(snapshot)
+        #expect(store.claudeSessions[desktopID]?.running == false)
+        #expect(store.claudeActivity[desktopID]?.text == "Writing")
+
+        _ = try await guest.filesRemove(computer: computer, paths: [GuestRouterPaths.join(paths.presence, cliID)])
+        await waitUntil { store.guestExecutionStates[desktopID]?.availability == .dead }
+        #expect(store.claudeSessions[desktopID]?.running == false)
+        #expect(store.claudeActivity[desktopID] == nil)
+    }
+
     @Test func signedGuestRelayUsesGuestKeyAndPersistsDeliveryState() async throws {
         let guest = client()
         let paths = try GuestRouterPaths(home: account.home)

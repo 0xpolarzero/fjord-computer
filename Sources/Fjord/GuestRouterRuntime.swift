@@ -42,7 +42,10 @@ import Foundation
             for await _ in watch.events {
                 guard !Task.isCancelled, let self, let store else { return }
                 do { try await self.refresh(computer: computer, client: client, paths: paths) }
-                catch { store.routerHookError = "Guest Router refresh failed on \(computer.computerId): \(error.localizedDescription)" }
+                catch {
+                    self.markGuestExecutionInaccessible(computer)
+                    store.routerHookError = "Guest Router refresh failed on \(computer.computerId): \(error.localizedDescription)"
+                }
             }
         }
         leaseChecks[computer.key] = Task { [weak self, weak store] in
@@ -50,7 +53,10 @@ import Foundation
                 try? await Task.sleep(for: .seconds(10))
                 guard !Task.isCancelled, let self, let store else { return }
                 do { try await self.refresh(computer: computer, client: client, paths: paths) }
-                catch { store.routerHookError = "Guest Router lease check failed on \(computer.computerId): \(error.localizedDescription)" }
+                catch {
+                    self.markGuestExecutionInaccessible(computer)
+                    store.routerHookError = "Guest Router lease check failed on \(computer.computerId): \(error.localizedDescription)"
+                }
             }
         }
     }
@@ -223,22 +229,44 @@ import Foundation
         guard let store else { return }
         var sessions = store.claudeSessions
         var activities = store.claudeActivity
+        var tasks = store.claudeTasks
         var changedSessions = false
         var changedActivities = false
+        var changedTasks = false
         for pending in store.router.pendingDesktopStarts where pending.state == .matched {
-            guard let desktopID = pending.desktopSessionID, let cli = pending.guestSessionID,
-                  let evidence = evidence[pending.location.key]?.first(where: {
+            guard let desktopID = pending.desktopSessionID, let cli = pending.guestSessionID else { continue }
+            guard let evidence = evidence[pending.location.key]?.first(where: {
                       $0.hostSessionID == desktopID && $0.cliSessionID == cli
-                  }) else { continue }
+                  }) else {
+                store.guestExecutionStates[desktopID] = GuestExecutionState(cliSessionID: cli,
+                    availability: .dead, isRunning: false, activity: nil)
+                if var session = sessions[desktopID], session.running || session.cliID != cli {
+                    session.running = false
+                    session.cliID = cli
+                    sessions[desktopID] = session
+                    changedSessions = true
+                }
+                if activities[desktopID] != nil { activities[desktopID] = nil; changedActivities = true }
+                if tasks[desktopID] != nil { tasks[desktopID] = nil; changedTasks = true }
+                continue
+            }
+            guard let transcript = evidence.transcript else {
+                store.guestExecutionStates[desktopID] = inaccessibleState(for: desktopID, cliID: cli, in: store)
+                continue
+            }
+            let activity = transcript.activity
+            let running = !Claude.transcriptEndedTurn(tail: transcript.tail)
+            store.guestExecutionStates[desktopID] = GuestExecutionState(cliSessionID: cli,
+                availability: .live, isRunning: running, activity: activity)
             if var session = sessions[desktopID] {
-                if !session.running || session.cliID != cli {
-                    session.running = true
+                if session.running != running || session.cliID != cli {
+                    session.running = running
                     session.cliID = cli
                     sessions[desktopID] = session
                     changedSessions = true
                 }
             }
-            if let activity = evidence.transcript?.activity {
+            if let activity {
                 if activities[desktopID] != activity { activities[desktopID] = activity; changedActivities = true }
             } else if activities[desktopID] != nil {
                 activities[desktopID] = nil
@@ -247,7 +275,23 @@ import Foundation
         }
         if changedSessions { store.claudeSessions = sessions }
         if changedActivities { store.claudeActivity = activities }
-        if changedSessions || changedActivities { store.feedRouter() }
+        if changedTasks { store.claudeTasks = tasks }
+        if changedSessions || changedActivities || changedTasks { store.feedRouter() }
+    }
+
+    private func markGuestExecutionInaccessible(_ computer: GuestReference) {
+        guard let store else { return }
+        for pending in store.router.pendingDesktopStarts where pending.state == .matched && pending.location.key == computer.key {
+            guard let desktopID = pending.desktopSessionID, let cliID = pending.guestSessionID else { continue }
+            store.guestExecutionStates[desktopID] = inaccessibleState(for: desktopID, cliID: cliID, in: store)
+        }
+    }
+
+    private func inaccessibleState(for desktopID: String, cliID: String, in store: Store) -> GuestExecutionState {
+        let previous = store.guestExecutionStates[desktopID]
+        return GuestExecutionState(cliSessionID: cliID, availability: .inaccessible,
+            isRunning: previous?.isRunning ?? store.claudeSessions[desktopID]?.running,
+            activity: previous?.activity ?? store.claudeActivity[desktopID])
     }
 
     private func clearPendingDisable(_ computer: GuestReference) {
