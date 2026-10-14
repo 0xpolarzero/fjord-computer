@@ -1,0 +1,10 @@
+{
+  "sourceRepository": "Silo",
+  "sourceCommit": "7a0591f9e9934f0e39fc430b24770363185ca1d5",
+  "sourcePath": "app/SiloUI/api/schema/silo-api.schema.json",
+  "schemaSha256": "58952de063cac013365277515775d7ef20c7800187a44198a60c89f9f28740eb",
+  "dialect": "https://json-schema.org/draft/2020-12/schema",
+  "quicktypeCore": "26.0.0",
+  "methodCount": 146,
+  "jobResultCount": 29
+}

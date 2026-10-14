@@ -110,10 +110,22 @@ Pretends to be version 0.1.0: checks for, downloads and verifies the latest rele
 | --- | --- |
 | `scripts/build-app.sh` | Builds `build/Fjord.app` (see [Build and run](#build-and-run)). |
 | `scripts/test.sh` | The test suite as CI runs it, output in `test.log`. |
+| `scripts/generate-engine-client.sh --check` | Recreates the Swift types and canonical method wrappers from the checked-in Silo schema and fails if generated files drift. |
 | `scripts/idle-cpu.sh` | Checks the release build's CPU stays under its limit at rest and with the window kept open, on the right edge and along the top, on demo data. Puts the bar on screen for minutes. |
 | `scripts/motion-trace.sh` | Records the release build with `xctrace` while it plays a motion script, then reports hitches and signpost latencies; `--baseline FILE` stores or compares against a baseline. Takes the screen while it runs. Options are documented at the top of the script. |
 | `swift scripts/make-icon.swift [--preview DIR]` | Draws `Resources/AppIcon.icns` and the layers of `Resources/AppIcon.icon`. |
 | `scripts/migrate-to-fjord.sh` | A one-off for the owner's machine: moves Lookout's data, preferences, Keychain items and Claude Code setup over to Fjord. Not for users. |
+
+### Regenerate the Silo client
+
+`schemas/silo-api/schema.json` is copied from the canonical `silo-api` crate at the commit and SHA-256 recorded in `schemas/silo-api/manifest.json`. Update that snapshot and manifest together when Silo publishes a new API schema. The pinned quicktype renderer validates the schema dialect, integer formats, method metadata and typed method contracts before it writes generated Swift.
+
+```sh
+scripts/generate-engine-client.sh --check
+scripts/generate-engine-client.sh --write
+```
+
+The first command checks the checked-in output. The second regenerates `Sources/Fjord/Generated/SiloAPI.swift` and `SiloMethods.swift`. `npm ci` uses the committed lockfile; Node and npm are generation-time tooling only.
 
 ## Releasing
 
