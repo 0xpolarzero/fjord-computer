@@ -166,6 +166,14 @@ import Testing
         try await engine.engineDisconnect()
     }
 
+    @Test func execInputAndDisplayResizeParamsCarryTheOwnerDeviceId() throws {
+        let input = SiloWireGuestExecInputParams(close: true, data: nil, deviceId: "owner-1", jobId: "job:7")
+        let inputJSON = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(input)) as? [String: Any])
+        #expect(inputJSON["deviceId"] as? String == "owner-1")
+        #expect(inputJSON["jobId"] as? String == "job:7")
+        #expect(SiloGeneratedMethods.guestExecInput(input).name == "guest.exec.input")
+    }
+
     @Test func remoteErrorCodesBecomeCodedClientErrors() async throws {
         let server = try FakeSiloUnixServer { request, socket in
             switch request.method {

@@ -2744,11 +2744,13 @@ enum SiloWireGuestExecState: String, Codable, Equatable, Sendable {
 struct SiloWireGuestExecInputParams: Codable, Equatable, Sendable {
     var close: Bool? = nil
     var data: [Int]? = nil
+    var deviceId: String? = nil
     var jobId: String
 
     enum CodingKeys: String, CodingKey {
         case close = "close"
         case data = "data"
+        case deviceId = "deviceId"
         case jobId = "jobId"
     }
 }
@@ -3486,11 +3488,15 @@ struct SiloWireMacosDisplayConnectResult: Codable, Equatable, Sendable {
 // MARK: - SiloWireMacosDisplayResizeParams
 struct SiloWireMacosDisplayResizeParams: Codable, Equatable, Sendable {
     var computerId: String
+    /// The device that owns the computer. Absent or this engine's own device resizes here;
+    /// another device forwards the resize to its owner.
+    var deviceId: String? = nil
     var heightPx: UInt64
     var widthPx: UInt64
 
     enum CodingKeys: String, CodingKey {
         case computerId = "computerId"
+        case deviceId = "deviceId"
         case heightPx = "heightPx"
         case widthPx = "widthPx"
     }
@@ -6296,6 +6302,8 @@ enum SiloWireMethodName: String, Codable, Equatable, Sendable {
 // MARK: - SiloWireParams
 struct SiloWireParams: Codable, Equatable, Sendable {
     var computerId: String? = nil
+    /// The device that owns the computer. Absent or this engine's own device resizes here;
+    /// another device forwards the resize to its owner.
     var deviceId: String? = nil
     var kind: SiloWireParamsKind? = nil
     var name: String? = nil
