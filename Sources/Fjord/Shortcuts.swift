@@ -497,7 +497,7 @@ extension Shortcut {
 
 /// CDS Shortcut's keycaps (forms-buttons.md §4.6), with the keys' own names as written (CDSShortcut capitalises them): 18pt
 /// caps 2 apart, caption 12, a 1pt border at 22% of the ink, radius 4; a word gets 3 in either side.
-private struct Keycaps: View {
+struct Keycaps: View {
     let caps: [String]
     let ink: Color
 
