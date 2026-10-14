@@ -31,6 +31,10 @@ P3-guest (`guest.exec`/`guest.files`/`guest.sshAlias`) · P3-checkpoints (automa
 
 Computers tool, complete · Router "Runs on" (sshConfigs, plugin and hook installed in the guest, delivery over `guest.files`) · Triage "Run in a computer" (headless runs, an automatic checkpoint first, proof recordings) · bundling `silod` and registering the LaunchAgent
 
+## Push policy
+
+Owner, 2026-10-14: push Silo `main` to GitHub only once everything is merged. Fjord's release build needs the pinned Silo commit to be published.
+
 ## API amendments queued (for the dispatch phase)
 
 - `computers.configuration.change`: a `macosResources` variant (`computerId`, `expected {cpus, memoryGiB, diskGiB}`, `cpus`, `memoryGiB`, `requestId`). Source: reports/p4-triage-computers-fixes.md.
