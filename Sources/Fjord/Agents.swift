@@ -568,7 +568,10 @@ extension Store {
             agents = state
         }
         // Only on change: the views observing these redraw on every assignment.
+        let firstSessions = claudeSessions.isEmpty && !byID.isEmpty
         if claudeSessions != byID { claudeSessions = byID }
+        // The sessions coming in the first time isn't news for the Brief's watch: it compares with them.
+        if firstSessions { routerDigester.rebaseline(store: self) }
         claudeSessionsListed = Dictionary(sessions.map { ($0.id, $0.lastActivity) }, uniquingKeysWith: { a, b in max(a, b) })
     }
 

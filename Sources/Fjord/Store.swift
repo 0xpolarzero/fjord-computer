@@ -1033,6 +1033,8 @@ final class Store {
         // Once the login, marks and actions' records are in: carried during the load, a cached rating or Done was lost.
         loading = false
         carryAssignmentStamps(seenBefore: things)
+        // The Brief's watch compares with the state as loaded, not as the Store was before it.
+        routerDigester.rebaseline(store: self)
     }
 
     /// The saved state as decoded from what the file held; nil when it doesn't decode.

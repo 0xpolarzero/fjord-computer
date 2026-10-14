@@ -25,7 +25,10 @@ enum Demo {
         store.persists = false
         // A demo's state isn't news for the Brief.
         store.routerDigester.suspended = true
-        defer { store.routerDigester.suspended = false }
+        defer {
+            store.routerDigester.suspended = false
+            store.routerDigester.rebaseline(store: store)
+        }
         // Both tools, picked: the demo shows everything.
         store.settings.triage = true
         store.settings.toolsPicked = true

@@ -24,17 +24,23 @@ import os
         case you(String, sessions: [String])
         /// Which sessions run changed.
         case running(Set<String>)
-        /// Sessions whose state changed without a card doing it (background tasks ended, or the board moved while a rewrite
-        /// was being made).
-        case refresh(Set<String>)
+        /// Sessions whose state changed without a card doing it (background tasks ended, a session matched to another
+        /// project, or the board moved while a rewrite was being made), and the projects they were in and are in now (a
+        /// session that stopped is on no board, so its project can't be found from it).
+        case refresh(Set<String>, projects: Set<String>)
 
         /// The sessions it is about, whose projects it touches.
         var sessions: [String] {
             switch self {
             case .card(let s, _), .handled(let s, _, _): [s]
             case .you(_, let sessions): sessions
-            case .running(let ids), .refresh(let ids): ids.sorted()
+            case .running(let ids), .refresh(let ids, _): ids.sorted()
             }
+        }
+
+        /// The projects it names itself, besides those of its sessions.
+        var projects: Set<String> {
+            if case .refresh(_, let projects) = self { projects } else { [] }
         }
     }
 
@@ -46,7 +52,10 @@ import os
     @ObservationIgnored private var firstPending: Date?
     @ObservationIgnored private(set) var timer: Task<Void, Never>?
     @ObservationIgnored private var watch: Task<Void, Never>?
-    @ObservationIgnored private var watched: [String: DigestMarkup.Kind]?
+    @ObservationIgnored private var watched: [String: Board.Mark]?
+    /// Where the board and the time come from (tests give their own).
+    @ObservationIgnored var boardOf: @MainActor (Store) -> Board = { Board.make($0) }
+    @ObservationIgnored var clock: () -> Date = { Date() }
     @ObservationIgnored private var runningTold = Date.distantPast
     /// Set while the Store loads its saved state or a demo is set up: what changes then isn't something that happened.
     @ObservationIgnored var suspended = false
@@ -149,6 +158,8 @@ import os
 
     private func startWatch(store: Store) {
         guard watch == nil, !UnderTest.isRunning else { return }
+        // What there is now is what the first tick is compared with: a change in the first minute is not lost.
+        watched = boardOf(store).marks
         watch = Task { [weak self, weak store] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.runningCheck)
@@ -158,23 +169,55 @@ import os
         }
     }
 
-    /// Compares what each session is at with the last look. A session that started or stopped needing you or being worth a
-    /// look (background tasks ended, a note come out of hiding) is noted at once; running ones coming and going wait for
-    /// `runningEvery`.
+    /// The store has loaded what it was saved with or its sessions have come in: that is the state to compare with, not the
+    /// half-loaded one the watch started on.
+    func rebaseline(store: Store) {
+        if watched != nil { watched = boardOf(store).marks }
+    }
+
+    /// Compares what each session is at (and which project it is in) with the last look. A session that started or stopped
+    /// needing you or being worth a look (background tasks ended, a note come out of hiding), or went to another project,
+    /// is noted at once; running ones coming and going wait for `runningEvery`, and stay unseen by the baseline until then.
     func look(_ store: Store) {
-        let now = Board.make(store).kinds
-        guard let was = watched else { watched = now; return }
-        guard now != was else { return }
-        let changed = Set(now.keys).union(was.keys).filter { now[$0] != was[$0] }
-        let matters = changed.filter { [now[$0], was[$0]].contains { $0 == .need || $0 == .look } }
-        if !matters.isEmpty {
-            watched = now
-            note([.refresh(matters)], store: store)
-        } else if Date().timeIntervalSince(runningTold) >= Self.runningEvery {
-            watched = now
-            runningTold = Date()
-            note([.running(changed)], store: store)
+        let current = boardOf(store).marks
+        guard let was = watched else { watched = current; return }
+        let (urgent, runOnly) = Self.differences(was, current)
+        if !urgent.isEmpty {
+            advance(urgent, to: current)
+            note([.refresh(urgent, projects: Self.projects(of: urgent, was, current))], store: store)
         }
+        if !runOnly.isEmpty, clock().timeIntervalSince(runningTold) >= Self.runningEvery {
+            advance(runOnly, to: current)
+            runningTold = clock()
+            note([.running(runOnly)], store: store)
+        }
+    }
+
+    /// The sessions that differ between two looks: those that matter at once (one needing you or worth a look on either
+    /// side, or one that changed project), and those only running or not.
+    nonisolated static func differences(_ old: [String: Board.Mark], _ new: [String: Board.Mark]) -> (urgent: Set<String>, runOnly: Set<String>) {
+        var urgent = Set<String>(), runOnly = Set<String>()
+        for id in Set(old.keys).union(new.keys) where old[id] != new[id] {
+            let moved = old[id] != nil && new[id] != nil && old[id]?.project != new[id]?.project
+            if moved || [old[id], new[id]].contains(where: { $0 != nil && $0?.kind != .run }) {
+                urgent.insert(id)
+            } else {
+                runOnly.insert(id)
+            }
+        }
+        return (urgent, runOnly)
+    }
+
+    /// The projects those sessions were in and are in now.
+    nonisolated static func projects(of ids: Set<String>, _ old: [String: Board.Mark], _ new: [String: Board.Mark]) -> Set<String> {
+        Set(ids.flatMap { [old[$0]?.project, new[$0]?.project] }.compactMap { $0 })
+    }
+
+    /// The baseline moved forward for those sessions only: the rest stays pending until it is let through.
+    private func advance(_ ids: Set<String>, to current: [String: Board.Mark]) {
+        guard var marks = watched else { return }
+        for id in ids { marks[id] = current[id] }
+        watched = marks
     }
 
     private func canWrite(_ store: Store) -> Bool {
@@ -192,7 +235,7 @@ import os
         let events = pending
         pending = []
         firstPending = nil
-        let board = Board.make(store)
+        let board = boardOf(store)
         let current = store.routerDigest
         // The projects the events touch (all of them for the first brief), and those whose sessions are gone from it.
         var keys: [String]
@@ -200,6 +243,7 @@ import os
             keys = board.projects.map(\.key)
         } else {
             let touched = Set(events.flatMap(\.sessions).compactMap { s in board.projectOf[s] ?? current.flatMap { Self.project(of: s, in: $0) } })
+                .union(events.flatMap(\.projects))
             let shown = Set(current?.projects.map(\.folder) ?? [])
             let fresh = Set(board.projects.map(\.key)).subtracting(shown)
             let emptied = shown.subtracting(board.projects.map(\.key))
@@ -228,12 +272,17 @@ import os
         await store.motionGate.still()
         guard generation == self.generation, store.router.enabled else { return }
         let now = Date()
-        let latest = Board.make(store)
+        let latest = boardOf(store)
         let next = Self.apply(read, to: store.routerDigest, rewriting: keys, board: latest, events: events, now: now)
         if next != store.routerDigest { store.routerDigest = next }
-        // The board moved while the answer was being made: the prose is corrected by another rewrite.
-        let moved = Set(latest.kinds.keys).union(board.kinds.keys).filter { latest.kinds[$0] != board.kinds[$0] }
-        if !moved.isEmpty { note([.refresh(moved)], store: store) }
+        // The board moved while the answer was being made: the prose is corrected by another rewrite. Only what matters at
+        // once (a card, a project); running sessions coming and going are left to the watch and its `runningEvery`, or a
+        // board that changes under every call would keep the writer calling.
+        let (urgent, _) = Self.differences(board.marks, latest.marks)
+        if !urgent.isEmpty {
+            advance(urgent, to: latest.marks)
+            note([.refresh(urgent, projects: Self.projects(of: urgent, board.marks, latest.marks))], store: store)
+        }
     }
 
     nonisolated private static func project(of session: String, in digest: RouterDigest) -> String? {
@@ -367,11 +416,13 @@ import os
             let id: String
             let title: String
             let kind: DigestMarkup.Kind
-            /// "Needs your OK", "Question", "Waiting on CI", "Working"…
+            /// "Needs your OK", "Question", "Waiting", "Working"…
             let state: String
             /// What it says, in plain words (its card's brief, else its text; a running one's activity or summary).
             let text: String
             let asks: [String]
+            /// What a waiting session waits on: it can hold another session's title, so it is fenced and bounded.
+            var waitingOn: String = ""
         }
 
         struct Project: Equatable, Sendable {
@@ -386,6 +437,16 @@ import os
         var projectOf: [String: String] = [:]
         var kinds: [String: DigestMarkup.Kind] = [:]
         var titles: [String: String] = [:]
+        /// What a session is at and where, as the watch compares it.
+        struct Mark: Equatable, Sendable {
+            let kind: DigestMarkup.Kind
+            let project: String?
+        }
+
+        var marks: [String: Mark] {
+            Dictionary(uniqueKeysWithValues: kinds.map { ($0.key, Mark(kind: $0.value, project: projectOf[$0.key])) })
+        }
+
         /// Every session that needs you, and every one worth a look, across the projects.
         var needs: [String] = []
         var looks: [String] = []
@@ -430,7 +491,7 @@ import os
                 return Session(id: c.sessionID, title: c.title, kind: .look, state: "Worth a look", text: c.brief ?? c.text, asks: asks(c))
             case .waiting(let c):
                 let on = c.triage?.watch?.label ?? "something"
-                return Session(id: c.sessionID, title: c.title, kind: .run, state: "Waiting on \(on)", text: c.brief ?? c.text, asks: [])
+                return Session(id: c.sessionID, title: c.title, kind: .run, state: "Waiting", text: c.brief ?? c.text, asks: [], waitingOn: on)
             case .working(let row):
                 let doing = row.activity?.text ?? page.summaries[row.id]?.text ?? ""
                 return Session(id: row.id, title: row.session.title, kind: .run, state: "Working", text: doing, asks: [])
@@ -512,6 +573,7 @@ enum DigestPrompt {
             out.append("## project \(clip(project.name, 120)) key=\(oneLine(project.key))")
             for s in project.sessions {
                 var line = "- id=\(s.id) \(clip(s.title, 120)): \(s.state)"
+                if !s.waitingOn.isEmpty { line += " on " + clip(s.waitingOn, 120) }
                 if !s.text.isEmpty { line += " " + SessionFence.fence(String(s.text.prefix(400))) }
                 if !s.asks.isEmpty { line += " asks: " + SessionFence.fence(s.asks.joined(separator: " | ")) }
                 out.append(line)
@@ -564,7 +626,7 @@ enum DigestPrompt {
             return "the user said" + to + ": " + clip(text, 300)
         case .running(let ids):
             return "sessions started or stopped running: " + ids.sorted().map { "id=\($0) \(title($0))" }.joined(separator: ", ")
-        case .refresh(let ids):
+        case .refresh(let ids, _):
             return "sessions whose state changed: " + ids.sorted().map { "id=\($0) \(title($0))" }.joined(separator: ", ")
         }
     }
