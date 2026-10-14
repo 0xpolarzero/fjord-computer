@@ -340,16 +340,16 @@ enum AppWindowShots {
             model.pickLanes()
         }, appearance: .aqua),
         // The Brief (a prototype): the day written as prose, at rest, a highlight hovered, one opened, dark, narrow.
-        Shot(name: "router-brief", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340),
+        Shot(name: "router-brief", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1420),
              compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .aqua),
-        Shot(name: "router-brief-dark", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340),
+        Shot(name: "router-brief-dark", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1420),
              compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .darkAqua),
-        Shot(name: "router-brief-hover", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340),
+        Shot(name: "router-brief-hover", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1420),
              compose: { model, store in
                  Demo.routerDigest(store); model.pickBrief()
-                 model.digest.hoverSession = "local_demo-api"
+                 model.digest.hovered = "/Users/me/code/silo#local_demo-silo-guest"
              }, appearance: .aqua),
-        Shot(name: "router-brief-open", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1700),
+        Shot(name: "router-brief-open", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1800),
              compose: { model, store in
                  Demo.routerDigest(store); model.pickBrief()
                  model.digest.open = "/Users/me/code/microsandbox#local_demo-api"
@@ -357,7 +357,7 @@ enum AppWindowShots {
                      model.select(card.id, store: store, reveal: false)
                  }
              }, appearance: .aqua),
-        Shot(name: "router-brief-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 1500),
+        Shot(name: "router-brief-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 1640),
              compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .aqua),
         Shot(name: "router-canvas-lanesdata", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1000), compose: { model, store in
             Demo.routerLanes(store)
