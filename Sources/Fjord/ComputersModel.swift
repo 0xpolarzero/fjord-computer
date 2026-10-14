@@ -33,6 +33,28 @@ struct ComputerQuitPrompt: Equatable {
 
 enum ComputerQuitChoice: Equatable { case cancel, keepRunning, stopAndQuit }
 
+struct ComputerUploadContext: Equatable {
+    var computerId: String
+    var directory: String
+    var paths: [String]
+}
+
+struct ComputerUploadConflict: Equatable, Identifiable {
+    var jobId: String
+    var computerId: String
+    var directory: String
+    var paths: [String]
+    var names: [String]
+    var id: String { jobId }
+}
+
+struct ComputerUploadNotice: Equatable, Identifiable {
+    var jobId: String
+    var computerId: String
+    var message: String
+    var id: String { jobId }
+}
+
 @MainActor
 @Observable
 final class ComputersModel {
@@ -52,6 +74,8 @@ final class ComputersModel {
     private(set) var finishedJobs: [String: OperationJobFinished] = [:]
     private(set) var operationQueue = OperationsList.empty
     private(set) var jobAwaitingAcknowledgement: String?
+    var uploadConflicts: [ComputerUploadConflict] = []
+    var uploadNotices: [ComputerUploadNotice] = []
     private(set) var quitPrompt: ComputerQuitPrompt?
     private(set) var quitError: String?
     private(set) var isQuitWorking = false
@@ -82,6 +106,7 @@ final class ComputersModel {
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
     @ObservationIgnored private var quitResolutionTask: Task<Void, Never>?
     @ObservationIgnored var jobActions: [String: String] = [:]
+    @ObservationIgnored var uploadContexts: [String: ComputerUploadContext] = [:]
     @ObservationIgnored private var presentedJobOutcomes: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Error>?
     @ObservationIgnored private var connectionAttemptID: UUID?
@@ -383,8 +408,14 @@ final class ComputersModel {
             jobActions[jobId] = label
             let outcome = try await waitForFinish(jobId)
             presentJobOutcome(outcome, action: label)
-            if outcome.error == nil { try await acknowledgeConsumedJob(jobId) }
-            return outcome.error == nil
+            let hasUnresolvedUploadOutcome = label == "Upload files"
+                && (uploadConflicts.contains { $0.jobId == jobId } || uploadNotices.contains { $0.jobId == jobId })
+            if outcome.error == nil && !hasUnresolvedUploadOutcome {
+                try await acknowledgeConsumedJob(jobId)
+                uploadContexts[jobId] = nil
+            }
+            let uploadWasCancelled = label == "Upload files" && uploadNotices.contains { $0.jobId == jobId }
+            return outcome.error == nil && !hasUnresolvedUploadOutcome && !uploadWasCancelled
         }
         catch { actionError = error.localizedDescription; return false }
     }
@@ -430,6 +461,16 @@ final class ComputersModel {
         finishedJobs[jobId] = nil
         jobActions[jobId] = nil
         if jobAwaitingAcknowledgement == jobId { jobAwaitingAcknowledgement = nil }
+    }
+
+    var pendingUploadConflict: ComputerUploadConflict? { uploadConflicts.first }
+
+    func uploadConflict(for computerId: String) -> ComputerUploadConflict? {
+        uploadConflicts.first { $0.computerId == computerId }
+    }
+
+    func uploadNotice(for computerId: String) -> ComputerUploadNotice? {
+        uploadNotices.first { $0.computerId == computerId }
     }
 
     func cancelJob(_ jobId: String) async {
@@ -541,9 +582,44 @@ final class ComputersModel {
 
     func presentJobOutcome(_ result: OperationJobFinished, action: String) {
         guard presentedJobOutcomes.insert(result.jobId).inserted else { return }
+        if action == "Upload files", result.error == nil, let upload = decodeUploadOutcome(result.result) {
+            switch upload.status {
+            case .conflict:
+                if let context = uploadContexts[result.jobId] {
+                    uploadConflicts.removeAll { $0.jobId == result.jobId }
+                    uploadConflicts.append(ComputerUploadConflict(jobId: result.jobId,
+                        computerId: context.computerId, directory: context.directory, paths: context.paths,
+                        names: upload.names ?? []))
+                    actionError = nil
+                } else {
+                    if let names = upload.names, !names.isEmpty {
+                        actionError = "Upload paused because these files already exist: \(names.joined(separator: ", "))."
+                    } else {
+                        actionError = "Upload paused because files with those names already exist."
+                    }
+                }
+            case .cancelled:
+                if let context = uploadContexts[result.jobId] {
+                    uploadNotices.removeAll { $0.jobId == result.jobId }
+                    uploadNotices.append(ComputerUploadNotice(jobId: result.jobId,
+                        computerId: context.computerId, message: "Upload cancelled."))
+                    actionError = nil
+                } else {
+                    actionError = "Upload cancelled."
+                }
+            case .done:
+                break
+            }
+            return
+        }
         guard let failure = result.error else { return }
         actionError = "\(action) failed: \(failure.message)"
         jobAwaitingAcknowledgement = result.jobId
+    }
+
+    private func decodeUploadOutcome(_ value: JSONValue?) -> SiloWireUploadOutcome? {
+        guard let value, let data = try? JSONEncoder().encode(value) else { return nil }
+        return try? JSONDecoder().decode(SiloWireUploadOutcome.self, from: data)
     }
 
     func waitForFinish(_ jobId: String) async throws -> OperationJobFinished {

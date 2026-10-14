@@ -285,14 +285,55 @@ extension ComputersModel {
         } catch { actionError = error.localizedDescription }
     }
 
-    func uploadFiles(computerId: String, directory: String, paths: [String]) async {
+    func uploadFiles(computerId: String, directory: String, paths: [String],
+                     conflict: SiloWireConflictPolicy = .ask) async {
         guard !paths.isEmpty else { return }
-        let params = SiloWireFileUploadParams(computerId: computerId, conflict: .ask, directory: directory,
-                                               origin: .client, paths: paths, transferId: UUID().uuidString)
+        let transferId = UUID().uuidString
+        let jobId = "transfer:\(transferId)"
+        uploadContexts[jobId] = ComputerUploadContext(computerId: computerId, directory: directory, paths: paths)
+        let params = SiloWireFileUploadParams(computerId: computerId, conflict: conflict, directory: directory,
+                                               origin: .client, paths: paths, transferId: transferId)
         await perform("Upload files") {
             try await self.client.invoke(SiloGeneratedMethods.filesUpload(params))
         }
         await loadFiles(computerId: computerId, path: directory)
+    }
+
+    func resolveUploadConflict(jobId: String, policy: SiloWireConflictPolicy) async {
+        guard let index = uploadConflicts.firstIndex(where: { $0.jobId == jobId }) else { return }
+        let conflict = uploadConflicts[index]
+        do {
+            try await acknowledgeConsumedJob(jobId)
+        } catch {
+            actionError = error.localizedDescription
+            return
+        }
+        uploadConflicts.remove(at: index)
+        uploadContexts[jobId] = nil
+        await uploadFiles(computerId: conflict.computerId, directory: conflict.directory,
+                          paths: conflict.paths, conflict: policy)
+    }
+
+    func dismissUploadConflict(jobId: String) async {
+        guard let index = uploadConflicts.firstIndex(where: { $0.jobId == jobId }) else { return }
+        do {
+            try await acknowledgeConsumedJob(jobId)
+            uploadConflicts.remove(at: index)
+            uploadContexts[jobId] = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    func dismissUploadNotice(jobId: String) async {
+        guard let index = uploadNotices.firstIndex(where: { $0.jobId == jobId }) else { return }
+        do {
+            try await acknowledgeConsumedJob(jobId)
+            uploadNotices.remove(at: index)
+            uploadContexts[jobId] = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
     }
 
     func downloadFile(computerId: String, path: String, destination: String) async {

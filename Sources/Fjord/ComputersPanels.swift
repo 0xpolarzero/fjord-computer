@@ -234,6 +234,31 @@ struct ComputerFilesPanel: View {
                         Text(path).font(CDS.sans(10).monospaced()).foregroundStyle(CDS.Text.muted).lineLimit(1)
                     }
                     .padding(.bottom, 10)
+                    if let conflict = model.uploadConflict(for: row.id) {
+                        VStack(alignment: .leading, spacing: 9) {
+                            ComputerNotice(text: "Upload paused. Existing files: \(conflict.names.joined(separator: ", ")).",
+                                           tone: .warning)
+                            HStack(spacing: 7) {
+                                ActionButton("Replace") {
+                                    Task { await model.resolveUploadConflict(jobId: conflict.jobId, policy: .replace) }
+                                }
+                                ActionButton("Keep both") {
+                                    Task { await model.resolveUploadConflict(jobId: conflict.jobId, policy: .keepBoth) }
+                                }
+                                ActionButton("Dismiss") {
+                                    Task { await model.dismissUploadConflict(jobId: conflict.jobId) }
+                                }
+                            }
+                        }
+                        .padding(.bottom, 10)
+                    }
+                    if let notice = model.uploadNotice(for: row.id) {
+                        HStack(spacing: 8) {
+                            ComputerNotice(text: notice.message, tone: .warning)
+                            ActionButton("Dismiss") { Task { await model.dismissUploadNotice(jobId: notice.jobId) } }
+                        }
+                        .padding(.bottom, 10)
+                    }
                     if let listing {
                         ForEach(listing.entries, id: \.path) { entry in
                             HStack(spacing: 9) {

@@ -635,6 +635,8 @@ final class MockEngineClient: EngineClient {
     ]
     private var mockPorts: [String: [SiloWirePublishedPort]] = [:]
     private var mockFileEntries: [String: [String: [SiloWireFileEntry]]] = [:]
+    private(set) var uploadRequests: [SiloWireFileUploadParams] = []
+    var nextUploadOutcome: SiloWireUploadOutcome?
     private var mockComputerUse: [String: SiloWireComputerUseState] = [:]
     private var mockExportDestination: String?
     private var mockArchives: [SiloWireArchive] = []
@@ -1041,18 +1043,24 @@ final class MockEngineClient: EngineClient {
             return try mockResult(SiloWireFileListResult(entries: page, snapshotId: "mock-files"), as: Result.self)
         case "files.upload":
             let params = try mockDecode(call.params, as: SiloWireFileUploadParams.self)
+            uploadRequests.append(params)
             let paths = (params.paths ?? []).map { localPath in
                 let name = URL(fileURLWithPath: localPath).lastPathComponent
                 let parent = params.directory == "/" ? "" : params.directory
                 return SiloWireFileEntry(kind: .file, name: name, path: parent + "/" + name)
             }
-            var existing = mockFileEntries[params.computerId]?[params.directory] ?? []
-            for path in paths {
-                existing.removeAll { $0.path == path.path }
-                existing.append(path)
+            let outcome = nextUploadOutcome ?? SiloWireUploadOutcome(names: paths.map(\.name), status: .done)
+            nextUploadOutcome = nil
+            if outcome.status == .done {
+                var existing = mockFileEntries[params.computerId]?[params.directory] ?? []
+                for path in paths {
+                    existing.removeAll { $0.path == path.path }
+                    existing.append(path)
+                }
+                mockFileEntries[params.computerId, default: [:]][params.directory] = existing
             }
-            mockFileEntries[params.computerId, default: [:]][params.directory] = existing
-            return try mockResult(mockFeatureJob(), as: Result.self)
+            return try mockResult(mockFeatureJob(result: try mockValue(outcome),
+                                                 jobId: "transfer:\(params.transferId)"), as: Result.self)
         case "files.download":
             return try mockResult(mockFeatureJob(), as: Result.self)
         case "network.state":
@@ -1526,8 +1534,8 @@ final class MockEngineClient: EngineClient {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func mockFeatureJob(result: SiloJSONValue? = nil) -> SiloWireJobStartResult {
-        let jobId = nextJobId()
+    private func mockFeatureJob(result: SiloJSONValue? = nil, jobId explicitJobId: String? = nil) -> SiloWireJobStartResult {
+        let jobId = explicitJobId ?? nextJobId()
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(40))
             self?.finish(jobId, result: result)
