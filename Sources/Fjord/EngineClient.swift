@@ -345,6 +345,25 @@ struct CheckpointDeleteRequest: Codable, Equatable {
     var checkpointId: String
 }
 
+struct CheckpointUsageEntry: Codable, Equatable {
+    var id: String
+    var sizeBytes: Int64? = nil
+    var usedBy: [String]? = nil
+    var deleteBlocker: String? = nil
+}
+
+struct CheckpointUsage: Codable, Equatable {
+    var totalBytes: Int64?
+    var checkpoints: [CheckpointUsageEntry]
+}
+
+/// Full checkpoint-domain state carried by `checkpoints.changed` (05 catalogue, 20 §4.3).
+struct CheckpointsChangedPayload: Codable, Equatable {
+    var linux: ApplicationSource? = nil
+    var macos: MacosComputersState? = nil
+    var usage: [String: CheckpointUsage]? = nil
+}
+
 enum JobProgressSource: String, Codable { case setup, lifecycle, transfer, backup, push, macos, update }
 
 /// The source-specific `data` fields from `operations.job.progress` (05 §4.2 E).
@@ -410,12 +429,14 @@ struct OperationJobFinished: Codable, Equatable {
 
 enum EngineEvent: Equatable {
     case computersChanged(ComputersChangedPayload)
+    case checkpointsChanged(CheckpointsChangedPayload)
     case jobProgress(OperationJobProgress)
     case jobFinished(OperationJobFinished)
 
     var name: String {
         switch self {
         case .computersChanged: "computers.changed"
+        case .checkpointsChanged: "checkpoints.changed"
         case .jobProgress: "operations.job.progress"
         case .jobFinished: "operations.job.finished"
         }
@@ -552,6 +573,7 @@ final class MockEngineClient: EngineClient {
     private(set) var subscribeCallCount = 0
     private(set) var unsubscribeCallCount = 0
     private(set) var acknowledgedJobs: [String] = []
+    private(set) var checkpointListCallCount = 0
     var nextJobFailure: OperationJobError?
 
     var activeSubscriptionCount: Int { subscribers.count }
@@ -714,6 +736,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func checkpointsList(computerId: String, deviceId: String? = nil) async throws -> [ComputerCheckpoint] {
+        checkpointListCallCount += 1
         guard let row = inventory.computer(computerId) else { throw EngineClientError.notFound("This computer no longer exists.") }
         return row.checkpoints
     }
@@ -728,10 +751,7 @@ final class MockEngineClient: EngineClient {
         appendCheckpoint(checkpoint, to: request.computerId)
         setProgress(jobId: jobId, computerId: request.computerId, state: "running", progress: 0.65,
                     detail: "Saving checkpoint")
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(350))
-            self?.finish(jobId)
-        }
+        scheduleCheckpointFinish(jobId, computerId: request.computerId, after: .milliseconds(350))
         return ComputerJob(jobId: jobId)
     }
 
@@ -753,7 +773,7 @@ final class MockEngineClient: EngineClient {
                 $0.pendingRestore = MacosPendingRestore(checkpointId: request.checkpointId, memory: false)
             }
         }
-        scheduleFinish(jobId, after: .milliseconds(400))
+        scheduleCheckpointFinish(jobId, computerId: request.computerId, after: .milliseconds(400))
         return ComputerJob(jobId: jobId)
     }
 
@@ -779,6 +799,7 @@ final class MockEngineClient: EngineClient {
                 try? await Task.sleep(for: .milliseconds(500))
                 guard let self else { return }
                 self.updateMacos(fork.id) { $0.state = .stopped; $0.progress = nil; $0.detail = nil; $0.setupComplete = true; $0.needsPersonalizing = false }
+                self.publishCheckpointChange(for: request.computerId)
                 self.finish(jobId)
             }
         case .linux(let computer):
@@ -790,7 +811,7 @@ final class MockEngineClient: EngineClient {
                                            freshness: "fresh", checkpoints: [])
             inventory.linux.computers.append(fork)
             publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
-            scheduleFinish(jobId, after: .milliseconds(400))
+            scheduleCheckpointFinish(jobId, computerId: request.computerId, after: .milliseconds(400))
         }
         return ComputerJob(jobId: jobId)
     }
@@ -802,7 +823,7 @@ final class MockEngineClient: EngineClient {
         }
         let jobId = nextJobId()
         removeCheckpoint(request.checkpointId, from: request.computerId)
-        scheduleFinish(jobId, after: .milliseconds(250))
+        scheduleCheckpointFinish(jobId, computerId: request.computerId, after: .milliseconds(250))
         return ComputerJob(jobId: jobId)
     }
 
@@ -892,11 +913,31 @@ final class MockEngineClient: EngineClient {
         publish(.jobFinished(event))
     }
 
-    private func scheduleFinish(_ jobId: String, after duration: Duration) {
+    private func scheduleCheckpointFinish(_ jobId: String, computerId: String, after duration: Duration) {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: duration)
-            self?.finish(jobId)
+            guard let self else { return }
+            self.publishCheckpointChange(for: computerId)
+            self.finish(jobId)
         }
+    }
+
+    private func publishCheckpointChange(for computerId: String) {
+        guard let row = inventory.computer(computerId) else { return }
+        let checkpoints = row.checkpoints
+        let sizes = checkpoints.map(\.sizeBytes)
+        let total = sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(Int64(0), +) : nil
+        let usage = CheckpointUsage(totalBytes: total, checkpoints: checkpoints.map {
+            CheckpointUsageEntry(id: $0.id, sizeBytes: $0.sizeBytes)
+        })
+        let payload: CheckpointsChangedPayload
+        switch row {
+        case .linux:
+            payload = CheckpointsChangedPayload(linux: inventory.linux, usage: [computerId: usage])
+        case .macos:
+            payload = CheckpointsChangedPayload(macos: inventory.macos, usage: [computerId: usage])
+        }
+        publish(.checkpointsChanged(payload))
     }
 
     private func publish(_ event: EngineEvent) {

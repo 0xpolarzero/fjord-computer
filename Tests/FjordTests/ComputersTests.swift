@@ -83,6 +83,35 @@ import Testing
         #expect(model.jobAwaitingAcknowledgement == nil)
     }
 
+    @Test func completedCheckpointJobsApplyDelayedCheckpointEvents() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+        let linuxID = MockEngineClient.failedID
+
+        await model.createCheckpoint(for: linuxID)
+        var checkpoints = try #require(model.inventory?.computer(linuxID)?.checkpoints)
+        #expect(checkpoints.count == 1)
+        let checkpointID = try #require(checkpoints.first?.id)
+        #expect(model.checkpointUsage[linuxID]?.checkpoints.map(\.id) == [checkpointID])
+
+        await model.restoreCheckpoint(checkpointID, computerId: linuxID)
+        guard case .linux(let restored)? = model.inventory?.computer(linuxID) else {
+            Issue.record("The Linux computer should remain in the inventory after restore.")
+            return
+        }
+        #expect(restored.pendingCheckpointRestore?.checkpointId == checkpointID)
+
+        await model.forkCheckpoint(checkpointID, computerId: linuxID, computerName: "linux-source")
+        #expect(model.inventory?.allComputers.contains(where: { $0.name == "linux-source-fork" }) == true)
+
+        await model.deleteCheckpoint(checkpointID, computerId: linuxID)
+        checkpoints = try #require(model.inventory?.computer(linuxID)?.checkpoints)
+        #expect(checkpoints.isEmpty)
+        #expect(model.checkpointUsage[linuxID]?.checkpoints.isEmpty == true)
+        #expect(client.checkpointListCallCount == 0)
+    }
+
     @Test func cancelLeavesEngineConnectedAndDoesNotStopComputers() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client)

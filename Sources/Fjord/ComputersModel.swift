@@ -38,6 +38,7 @@ enum ComputerQuitChoice: Equatable { case cancel, keepRunning, stopAndQuit }
 final class ComputersModel {
     private let client: any EngineClient
     private(set) var inventory: ComputerInventory?
+    private(set) var checkpointUsage: [String: CheckpointUsage] = [:]
     private(set) var isLoading = false
     private(set) var error: String?
     private(set) var actionError: String?
@@ -85,7 +86,7 @@ final class ComputersModel {
             }
             let firstRead = try await self.client.computersList(deviceId: nil)
             if self.inventory == nil { self.inventory = firstRead }
-            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "operations.*"]) { [weak self] event in
+            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "checkpoints.*", "operations.*"]) { [weak self] event in
                 self?.receive(event)
             }
             guard self.wantsConnection, self.connectionAttemptID == attemptID else {
@@ -214,7 +215,6 @@ final class ComputersModel {
     func createCheckpoint(for computerId: String) async {
         let name = "Manual checkpoint · \(Date.now.formatted(.dateTime.month(.abbreviated).day()))"
         await perform("Create checkpoint") { try await self.client.checkpointsCreate(CheckpointCreateRequest(computerId: computerId, name: name, kind: .manual)) }
-        await loadCheckpoints(for: computerId)
     }
     func createLinuxComputer() async {
         let id = UUID().uuidString.lowercased()
@@ -238,7 +238,6 @@ final class ComputersModel {
     }
     func deleteCheckpoint(_ checkpointId: String, computerId: String) async {
         await perform("Delete checkpoint") { try await self.client.checkpointsDelete(CheckpointDeleteRequest(computerId: computerId, checkpointId: checkpointId)) }
-        await loadCheckpoints(for: computerId)
     }
 
     private func perform<T>(_ label: String, _ action: () async throws -> T) async {
@@ -272,6 +271,11 @@ final class ComputersModel {
         case .computersChanged(let change):
             if let inventory { self.inventory = inventory.applying(change) }
             error = nil
+        case .checkpointsChanged(let change):
+            if let inventory {
+                self.inventory = inventory.applying(ComputersChangedPayload(linux: change.linux, macos: change.macos))
+            }
+            if let usage = change.usage { checkpointUsage.merge(usage) { _, next in next } }
         case .jobProgress(let progress):
             activeJob = progress
         case .jobFinished(let result):
