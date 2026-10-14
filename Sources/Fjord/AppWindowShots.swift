@@ -68,6 +68,9 @@ enum AppWindowShots {
         Shot(name: "done") { _ in .done },
         computerRunResultShot(name: "triage-computer-run-result-light", appearance: .aqua),
         computerRunResultShot(name: "triage-computer-run-result-dark", appearance: .darkAqua),
+        computerRunResultShot(name: "triage-computer-run-result-long-min", appearance: .aqua,
+            size: CGSize(width: AppWindowController.minSize.width, height: AppWindowController.minSize.height),
+            summary: String(repeating: "The reconnect path clears the stale cache before it restores the current session. ", count: 24)),
         Shot(name: "computers", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
         }),
@@ -426,10 +429,12 @@ enum AppWindowShots {
         Shot(name: "category-narrow", destination: { $0.shownCategories[0].id.asCategory }, size: CGSize(width: 1000, height: 640)),
     ]
 
-    private static func computerRunResultShot(name: String, appearance: NSAppearance.Name) -> Shot {
+    private static func computerRunResultShot(name: String, appearance: NSAppearance.Name,
+                                              size: CGSize = CGSize(width: 1180, height: 820),
+                                              summary: String? = nil) -> Shot {
         Shot(name: name, destination: { _ in
             .computerRun(UUID(uuidString: "80000000-0000-4000-8000-000000000001")!)
-        }, size: CGSize(width: 1180, height: 820), prepare: { store in
+        }, size: size, prepare: { store in
             store.setTool(.triage, on: true)
             let id = UUID(uuidString: "80000000-0000-4000-8000-000000000001")!
             let settings = RunInComputerSettings(deviceID: nil, computerID: MockEngineClient.linuxID,
@@ -445,7 +450,7 @@ enum AppWindowShots {
             record.checkpointID = "checkpoint-run-shot"
             record.execJobID = "guest-job-run-shot"
             record.exitCode = 0
-            record.summary = "The reconnect path now clears the stale cache before it restores the current session. Added a regression test for the reconnect sequence."
+            record.summary = summary ?? "The reconnect path now clears the stale cache before it restores the current session. Added a regression test for the reconnect sequence."
             record.pullRequestURL = URL(string: "https://github.com/fjord/lookout/pull/42")
             record.summaryUnverified = true
             record.proofState = .complete

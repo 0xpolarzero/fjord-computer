@@ -285,9 +285,10 @@ enum ComputerRunResultParser {
     }
 }
 
-@MainActor
-struct LocalComputerRunArtifactStore {
+actor LocalComputerRunArtifactStore {
     var root: URL? = nil
+
+    init(root: URL? = nil) { self.root = root }
 
     func saveVideo(_ data: Data, runID: UUID) throws -> URL {
         let base = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -626,7 +627,7 @@ final class ComputerRunCoordinator {
                 if record.proofRequested {
                     let target = GuestReference(deviceId: record.deviceID, computerId: record.computerID)
                     if let artifact = try? await readProofArtifact(record, target: target),
-                       let localVideo = try? artifacts.saveVideo(artifact.bytes, runID: record.id) {
+                       let localVideo = try? await artifacts.saveVideo(artifact.bytes, runID: record.id) {
                         record.localVideoPath = localVideo.path
                         record.proofState = .partial
                         record.videoDurationSeconds = artifact.duration
@@ -652,7 +653,7 @@ final class ComputerRunCoordinator {
             let target = GuestReference(deviceId: record.deviceID, computerId: record.computerID)
             do {
                 let artifact = try await readProofArtifact(record, target: target)
-                let localVideo = try artifacts.saveVideo(artifact.bytes, runID: record.id)
+                let localVideo = try await artifacts.saveVideo(artifact.bytes, runID: record.id)
                 record.localVideoPath = localVideo.path
                 record.proofState = .complete
                 record.videoDurationSeconds = artifact.duration
