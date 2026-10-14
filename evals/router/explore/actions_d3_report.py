@@ -4,6 +4,7 @@ alongside, the bar grid (dev only), the mark-seen check on explicit requests vs 
 shortlist's recall with and without named cards, the 611 bench moments, failures and cost.
 
 python3 -m explore.actions_d3_report [--split dev|calib] [--params JSON] [--grid]
+python3 -m explore.actions_d3_report --all [--split dev|calib] [--grid]   D3-all(-split2) against D3-final and shipped
 Only gitignored data is read (v2/data/exp/out/actions_d3); messages printed are cut short."""
 import argparse
 import collections
@@ -22,8 +23,9 @@ from v2.run import compare as C  # noqa: E402
 
 OUT = D.OUT
 SETS = ["written_ack", "written_stop", "written_configure", "mined", "relabel_real"]
-SYSTEMS = ["shipped", "shipped-repeat", "D3", "D3-placebo", "D3-same", "D3-w2", "D3-final"]
-CANDS = ["D3", "D3-placebo", "D3-same", "D3-w2", "D3-final"]
+SYSTEMS = ["shipped", "shipped-repeat", "D3", "D3-placebo", "D3-same", "D3-w2", "D3-final", "D3-all", "D3-all-split2"]
+CANDS = ["D3", "D3-placebo", "D3-same", "D3-w2", "D3-final", "D3-all", "D3-all-split2"]
+ALL = ["D3-all", "D3-all-split2"]
 ACTS = {"ack", "stop", "interrupt", "archive"}
 EXPLICIT = re.compile(r"\b(mark|marque[rz]?)\b|\bclear (it|that card|the card)\b", re.I)
 TRAP_FAMILIES = {"negation", "quoted", "to-session", "seen-then-do", "reply-needs-you", "stop-using", "stop-button",
@@ -281,8 +283,183 @@ def ptag(p):
             f"instead {b['instead']} t_lead {p['t_lead']}{extra}")
 
 
+def pct(xs, q):
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return float("nan")
+    return xs[min(len(xs) - 1, int(math.ceil(q * len(xs))) - 1)]
+
+
+def calls_of(evs):
+    """→ per checks call (n, tokens, latency), and per submit the wall latency (the parallel calls' max)."""
+    per, wall = [], []
+    for ev in evs:
+        cc = ev.get("checks_calls")
+        if not cc:
+            continue
+        per += [(c["n"], c["tokens"], c["latency"]) for c in cc]
+        wall.append(max(c["latency"] or 0 for c in cc))
+    return per, wall
+
+
+def cost_line(evs):
+    per, wall = calls_of(evs)
+    if not per:
+        return "-"
+    n = [x[0] for x in per]
+    tok = [x[1] or 0 for x in per]
+    lat = [x[2] for x in per if x[2] is not None]
+    return (f"{len(per)} calls; checks/call mean {sum(n) / len(n):.1f} max {max(n)}; tokens/call mean "
+            f"{sum(tok) / len(tok):.0f} max {max(tok)} (per submit {sum(tok) / len(wall):.0f}); latency/call p50 "
+            f"{pct(lat, .5):.2f}s p95 {pct(lat, .95):.2f}s ({len(lat)} timed); wall p50 {pct(wall, .5):.2f}s "
+            f"p95 {pct(wall, .95):.2f}s")
+
+
+def all_recall(eps_by_set):
+    """Gold card among the dismiss checks, gold session among the stop checks (archive / stop / interrupt gold)."""
+    rows = collections.Counter()
+    for name, eps in eps_by_set.items():
+        for e, ev in submits(eps):
+            info = ev.get("d3")
+            ia = ev["gold"].get("intended_action") or ""
+            v = A.verb(ia)
+            if not info or v not in ("archive", "stop", "interrupt") or ia.endswith("*"):
+                continue
+            if v == "archive":
+                card = ia.split(":", 2)[2]
+                hit = any(c[0] == "dismiss" and c[1] == card for c in info["checks"])
+            else:
+                hit = any(c[0] == "stop" and c[2] == A.target_session(ia) for c in info["checks"])
+            rows[(v, "n")] += 1
+            rows[(v, "hit")] += hit
+    return rows
+
+
+def all_section(data, params, split, bootstrap, do_grid):
+    """D3-all and D3-all-split2 against D3-final (and shipped)."""
+    alls = [s for s in ALL if any(data[s][n] for n in SETS)]
+    systems = ["shipped", "D3-final"] + alls
+    names = [n for n in SETS if data["D3-final"][n] and all(data[s][n] for s in alls)]
+    print(f"# D3-all: every open card / running session checked, split {split}; params {ptag(params)}\n")
+    print("## Per action (owner reading for bare acks)\n")
+    tabs = {s: per_role([r for n in names if data[s][n] for r in scored(data[s][n], True)]) for s in systems}
+    roles = list(dict.fromkeys(r for t in tabs.values() for r in t))
+    for ro in roles:
+        print(f"- **{ro}**")
+        base = tabs["D3-final"].get(ro)
+        for s in systems:
+            c = tabs[s].get(ro)
+            if not c:
+                continue
+            dl = f", Δloss vs D3-final {(c['loss'] - base['loss']) / c['n']:+.2f}/submit" if base and s in alls else ""
+            print(f"    - {s}: {fmt_role(c, ro)}{dl}")
+    print()
+
+    print("## Paired against D3-final and shipped (loss/submit, owner reading; group bootstrap 95% CI; McNemar)\n")
+    print("| set | base | system | base loss/submit | system | Δ [95% CI] | wrong all | McNemar (base-only, sys-only, p) |")
+    print("|---|---|---|---|---|---|---|---|")
+    groups = {"written (ack+stop+configure)": ["written_ack", "written_stop", "written_configure"], "mined": ["mined"],
+              "relabel_real": ["relabel_real"]}
+    for gname, gn in groups.items():
+        for b in ("D3-final", "shipped"):
+            base = [e for n in gn if data[b][n] for e in data[b][n]]
+            for s in alls:
+                cand = [e for n in gn if data[s][n] for e in data[s][n]]
+                if not base or len(cand) != len(base):
+                    continue
+                r = paired(base, cand, gname.startswith("written"), bootstrap)
+                print(f"| {gname} | {b} | {s} | {r['base_lps']:.3f} | {r['cand_lps']:.3f} | {r['d_loss_ps']:+.3f} "
+                      f"[{r['ci'][0]:+.3f}, {r['ci'][1]:+.3f}] | {100 * r['wrong_base']:.1f}% → {100 * r['wrong_cand']:.1f}% | "
+                      f"{r['mcnemar'][0]}, {r['mcnemar'][1]}, p={r['mcnemar'][2]:.3f} |")
+    print()
+
+    print("## Candidate recall (gold card among dismiss checks / gold session among stop checks)\n")
+    for s in ["D3-final"] + alls:
+        rc = all_recall({n: data[s][n] for n in names if data[s][n]})
+        print(f"- {s}: " + "; ".join(f"{v} {rc[(v, 'hit')]}/{rc[(v, 'n')]}" for v in ("archive", "stop", "interrupt")
+                                      if rc[(v, "n")]))
+    print()
+
+    print("## False fires (actions on traps/unmet and on real moments; all submits)\n")
+    for s in ["D3-final"] + alls:
+        trap = [r for n in names if n != "relabel_real" for r in scored(data[s][n], True)
+                if r["role"] in ("trap", "unmet") and r["verb"] in ACTS]
+        real = [r for r in scored(data[s]["relabel_real"]) if r["verb"] in ACTS] if data[s]["relabel_real"] else []
+        print(f"- {s}: traps/unmet acting {len(trap)}; relabel_real acting {len(real)}")
+        for r in trap:
+            print(f"    trap | {r['msg'][:60]} | {r['act']} | gold {r['gold']}")
+        for r in real:
+            print(f"    real | {r['msg'][:40].replace(chr(10), ' ')}… | {r['act']}")
+    print()
+
+    print("## Second call: size, tokens, latency\n")
+    mx = 0
+    for s in ["D3-final"] + alls:
+        evs = [ev for n in names if data[s][n] for e, ev in submits(data[s][n])]
+        print(f"- {s}: {cost_line(evs)}")
+        mx = max([mx] + [ev.get("n_board_cards") or 0 for ev in evs])
+    print(f"- largest board (open cards seen by the checks): {mx}{' — the 60 cap was hit' if mx >= 60 else ''}")
+    print()
+
+    print("## bench.py 611 real moments (no-harm: every action is false)\n")
+    for s in ["D3-final"] + ALL:
+        p = OUT / f"bench.{s}.jsonl"
+        if not p.exists():
+            continue
+        rows = [json.loads(line) for line in open(p)]
+        dec = [D.decide(r["d3"], params) for r in rows]
+        acts = [(r["message"][:40].replace("\n", " ") + "…", d["act"], d["why"]) for r, d in zip(rows, dec) if d["decision"] == "act"]
+        turned = [r for r, d in zip(rows, dec) if d["decision"] == "ask" and r["d3"]["routing"]["decision"] == "send"]
+        right = sum((r["d3"]["routing"]["target"] or "")[8:] in r["gold"]["to"] for r in turned)
+        evs = [{"checks_calls": r.get("checks_calls")} for r in rows]
+        print(f"- {s}: n={len(rows)}; actions {len(acts)}; sends turned into asks {len(turned)} ({right} were right sends); "
+              f"max board {max(r.get('n_board_cards') or 0 for r in rows) if rows[0].get('n_board_cards') is not None else '?'}; "
+              f"{cost_line(evs)}")
+        for x in acts:
+            print(f"    {x}")
+    print()
+
+    if do_grid:
+        print("## Grid (dev only; re-decided offline). Cell: written+mined loss (owner) / w wrong / t traps acting / "
+              "i irreversible wrong / r relabel_real actions / rl relabel_real loss\n")
+        print("| params | " + " | ".join(["D3-final"] + alls) + " |")
+        print("|---|" + "---|" * (1 + len(alls)))
+        for p in all_grid():
+            cells = []
+            for s in ["D3-final"] + alls:
+                tot = trap = irrev = wrong = 0
+                for n in names:
+                    if n == "relabel_real":
+                        continue
+                    rows = scored(redecide(data[s][n], p), owner=True)
+                    tot += sum(r["loss"] for r in rows)
+                    wrong += sum(r["wrong"] for r in rows)
+                    trap += sum(r["verb"] in ACTS for r in rows if r["role"] in ("trap", "unmet"))
+                    irrev += sum(r["irreversible_wrong"] for r in rows)
+                rr = scored(redecide(data[s]["relabel_real"], p)) if data[s]["relabel_real"] else []
+                cells.append(f"{tot:.0f} / w{wrong:.0f} / t{trap} / i{irrev:.0f} / r{sum(r['verb'] in ACTS for r in rr)} / "
+                             f"rl{sum(r['loss'] for r in rr):.0f}")
+            print(f"| {ptag(p)} lead {p['lead']} ask_lo {p['ask_lo']} | " + " | ".join(cells) + " |")
+        print()
+
+
+def all_grid():
+    out = []
+    for stop in (0.9, 0.95):
+        for card in (0.85, 0.9):
+            for lead in (0.2, 0.4, 0.6):
+                for t_lead in (0.2, 0.4):
+                    for lo in (0.5, 0.6, 0.7):
+                        p = copy.deepcopy(D.PARAMS)
+                        p["bars"].update(stop=stop, dismiss=card)
+                        p.update(lead=lead, t_lead=t_lead, ask_lo=lo)
+                        out.append(p)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--all", action="store_true", help="the D3-all section only")
     ap.add_argument("--split", default="dev")
     ap.add_argument("--params", help="JSON overrides of D.PARAMS (bars merged)")
     ap.add_argument("--grid", action="store_true")
@@ -299,6 +476,9 @@ def main():
         for n in SETS:
             if data[s][n] is not None:
                 data[s][n] = redecide(data[s][n], params)
+    if a.all:
+        all_section(data, params, a.split, a.bootstrap, a.grid)
+        return
     print(f"# Stage 1 actions, split {a.split}; D3 params: {ptag(params)}\n")
 
     print("## Per action (strict gold / owner reading for bare acks)\n")

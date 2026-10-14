@@ -22,8 +22,15 @@ unclear, or a standing-out check on another session than a clear T) → ask; the
 unsure action(s) first, then today's target and card mapped to actions. Else today's outcome, mapped to the action the
 live app takes (a send to a session holding a form answers it; else say).
 
+D3-all: D3-final with no shortlist and no word logic: `dismiss<i>` on every open card on the board (any kind, board order;
+the adapter's 60-card cap was never reached, max 25) and `stop<i>` on every running session not waiting on you (board
+order, no cap), plus urgent and instead, in the same one second call. D3-all-split2: the same checks in two parallel
+calls (dismiss; stop + urgent + instead). Same decide() and PARAMS. Each run records per checks call its size, input
+tokens and latency (`checks_calls`).
+
 python3 -m explore.actions_d3 run SYSTEM SET [--split dev|calib] [--workers 6] [--max-calls N]
-   SYSTEM: shipped, shipped-repeat (the same request asked again, sample 1: Jev's own noise), D3, D3-placebo, D3-same
+   SYSTEM: shipped, shipped-repeat (the same request asked again, sample 1: Jev's own noise), D3, D3-placebo, D3-same,
+           D3-w2, D3-final, D3-all, D3-all-split2
    SET: written_ack, written_stop, written_configure, mined, relabel_real
 python3 -m explore.actions_d3 bench SYSTEM [--max-calls N]     D3's checks on bench.py's 611 real moments
 Only gitignored data is read or written (v2/data/actions, v2/data/exp/out/actions_d3, v2/run/cache, cache)."""
@@ -34,7 +41,7 @@ import math
 import os
 import pathlib
 import sys
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 os.environ["JEV_ORDERED"] = "1"
 HERE = pathlib.Path(__file__).resolve().parents[1]
@@ -74,7 +81,7 @@ WORDING2 = {
 # D3-final: the frozen choice after dev (D3's wording without markseen, which never reached an explicit request).
 FINAL = {k: v for k, v in WORDING.items() if k != "markseen"}
 WORDINGS = {"D3": (WORDING, False), "D3-same": (WORDING, False), "D3-placebo": (PLACEBO, True), "D3-w2": (WORDING2, False),
-            "D3-final": (FINAL, False)}
+            "D3-final": (FINAL, False), "D3-all": (FINAL, False), "D3-all-split2": (FINAL, False)}
 
 # Frozen on dev (explore/actions_d3_report.py --grid): the bars, t_lead .2 (T's check leads the same kind elsewhere),
 # markseen off. The runs record every check, so the report re-decides any other setting offline.
@@ -91,26 +98,59 @@ def session_info(s):
     return {"title": s["title"], "project": s.get("project", ""), "now": "working: " + (s.get("activity") or "")}
 
 
-def extras(case, wording=WORDING, placebo=False):
-    """→ (questions, mapping {key: (kind, card, session, named_only)})."""
+def all_cards(case):
+    """Every open card on the board (any kind), in board order: no ranking, no words."""
+    by = sessions_by_id(case)
+    return [c for c in case["board"]["cards"] if c["session"] in by]
+
+
+def stoppable(case, mode="short"):
+    """Running sessions not waiting on you: ≤6 most recent (D3), or all of them in board order (D3-all)."""
+    if mode == "all":
+        return [s for s in case["board"]["sessions"] if s.get("running") and not s.get("waits_on_you")]
+    return working(case, waiting_too=False)[:6]
+
+
+def extras(case, wording=WORDING, placebo=False, mode="short", only=None):
+    """→ (questions, mapping {key: (kind, card, session, named_only)}). mode "all": dismiss on every open card, stop on
+    every running session. only: a set of kinds to ask (D3-all-split2's two calls)."""
     qs, m = [], {}
-    short = shortlist(case)
-    named = [c for c in named_cards(case) if c not in short]
+    if mode == "all":
+        short, named = all_cards(case), []
+    else:
+        short = shortlist(case)
+        named = [c for c in named_cards(case) if c not in short]
     for i, c in enumerate(short if "markseen" in wording else []):
         qs.append((f"markseen{i}", {"type": "noul", "instructions": {"question": wording["markseen"], "card": card_info(case, c)}}))
         m[f"markseen{i}"] = ("markseen", c["id"], c["session"], False)
     for i, c in enumerate(short + named):
         qs.append((f"dismiss{i}", {"type": "noul", "instructions": {"question": wording["dismiss"], "card": card_info(case, c)}}))
         m[f"dismiss{i}"] = ("dismiss", c["id"], c["session"], c in named)
-    for i, s in enumerate(working(case, waiting_too=False)[:6]):
+    for i, s in enumerate(stoppable(case, mode)):
         qs.append((f"stop{i}", {"type": "noul", "instructions": {"question": wording["stop"], "session": session_info(s)}}))
         m[f"stop{i}"] = ("stop", None, s["id"], False)
     for k in ("urgent", "instead"):
         qs.append((k, {"type": "noul", "instructions": {"question": wording[k]}}))
         m[k] = (k, None, None, False)
+    if only is not None:
+        qs = [q for q in qs if m[q[0]][0] in only]
+        m = {k: v for k, v in m.items() if v[0] in only}
     if placebo:
         qs = qs[::-1]
     return dict(qs), m
+
+
+# D3-all-split2: the dismiss checks in one call; the stop checks with urgent and instead in another, in parallel.
+SPLIT2 = ({"dismiss"}, {"stop", "urgent", "instead"})
+
+
+def check_calls(system, case):
+    """→ [(questions, mapping)] for the second call(s) of a D3 system."""
+    wording, placebo = WORDINGS[system]
+    mode = "all" if system.startswith("D3-all") else "short"
+    if system == "D3-all-split2":
+        return [extras(case, wording, placebo, mode, only) for only in SPLIT2]
+    return [extras(case, wording, placebo, mode)]
 
 
 def read_checks(answers, mapping):
@@ -291,22 +331,30 @@ def _system_class():
             if self.system in ("shipped", "shipped-repeat") or "request_hash" not in res:
                 return out
             formats = self._load()[0]
-            wording, placebo = WORDINGS[self.system]
-            q, mapping = extras(case, wording, placebo)
             if self.system == "D3-same":
+                q, mapping = extras(case)
                 answers = self._cached(res["request_hash"])["answers"]
+                cs, glob = read_checks(answers, mapping)
             else:
                 built, _, _ = formats.build(SHIPPED, case)
-                full = self._plain_ask(built, scrub(q))
-                answers = full["answers"]
-                out["checks_tokens"] = (full.get("usage") or {}).get("input_tokens")
-            cs, glob = read_checks(answers, mapping)
+                parts = [(q, mp) for q, mp in check_calls(self.system, case) if q]
+                with ThreadPoolExecutor(max(len(parts), 1)) as pool:
+                    fulls = list(pool.map(lambda x: self._plain_ask(built, scrub(x[0])), parts))
+                cs, glob = [], {}
+                for (q, mp), full in zip(parts, fulls):
+                    c1, g1 = read_checks(full["answers"], mp)
+                    cs += c1
+                    glob.update(g1)
+                out["checks_calls"] = [{"n": len(q), "tokens": (f.get("usage") or {}).get("input_tokens"),
+                                        "latency": f.get("_latency")} for (q, _), f in zip(parts, fulls)]
+                out["checks_tokens"] = sum(c["tokens"] or 0 for c in out["checks_calls"])
+                out["n_board_cards"] = len(case["board"]["cards"])
             route_answers = self._cached(res["request_hash"])["answers"]
             probs, raw_top = self._fused(self.format_name, case, route_answers)
             T = res.get("target") if res["decision"] == "send" and (res.get("target") or "").startswith("session:") \
                 else res.get("top")
             info = {"T": T, "pT": probs.get(T, 0.0) if T else 0.0, "raw_top": raw_top, "checks": cs, "globals": glob,
-                    "stoppable": [s["id"] for s in working(case, waiting_too=False)[:6]],
+                    "stoppable": [s["id"] for s in stoppable(case, "all" if self.system.startswith("D3-all") else "short")],
                     "T_act": live_action(T, cards) if T else None, "routing": routing}
             d = decide(info, self.params)
             out["d3"] = info
@@ -381,20 +429,23 @@ def bench(system, max_calls):
     L.STATE["fields"] = True
     final3._FIT["combo-o"] = E._shipped_weights()
     cases = B.load_set("real")
-    wording, placebo = WORDINGS[system]
-    calls, out = [], []
+    calls, out, spans = [], [], []
     for c in cases:
         state, q, keymap = F.build(SHIPPED, c)
+        start = len(calls)
         calls.append((state, q))
-        xq, mapping = extras(c, wording, placebo)
-        calls.append((state, scrub(xq)))
+        parts = [(xq, mp) for xq, mp in check_calls(system, c) if xq]
+        for xq, _ in parts:
+            calls.append((state, scrub(xq)))
+        spans.append((start, parts))
+    route_idx = {s for s, _ in spans}
     todo = route_todo = 0
     for i, (st, q) in enumerate(calls):
         raw = json.dumps({"model": "jev-latest", "state": st, "questions": q}, sort_keys=False)
         d = hashlib.sha256((raw + "#0").encode()).hexdigest()
         miss = not (jev.CACHE / d[:2] / f"{d}.json").exists()
         todo += miss
-        route_todo += miss and i % 2 == 0
+        route_todo += miss and i in route_idx
     # The route request is the shipped one: answered already by the shipped bench run (route_todo 0) = the same answer.
     print(f"[bench {system}] {len(cases)} cases, {todo} uncached calls, of which {route_todo} route requests",
           file=sys.stderr)
@@ -403,7 +454,8 @@ def bench(system, max_calls):
     answers = jev.ask_many(calls)
     for i, c in enumerate(cases):
         state, q, keymap = F.build(SHIPPED, c)
-        route, checks = answers[2 * i], answers[2 * i + 1]
+        start, parts = spans[i]
+        route, checks_l = answers[start], answers[start + 1:start + 1 + len(parts)]
         row = {"id": c["id"], "keymap": keymap, "answers": route["answers"]}
         r = R.reading(row)
         fusion._CASES = {c["id"]: c}
@@ -415,8 +467,11 @@ def bench(system, max_calls):
         rt = {keymap.get(kk, kk): p for kk, p in route["answers"].get("route", {}).get("probabilities", {}).items()}
         raw_top = max(rt.items(), key=lambda x: x[1])[0] if rt else None
         raw_top = "session:" + raw_top if raw_top in {s["id"] for s in c["board"]["sessions"]} else raw_top
-        _, mapping = extras(c, wording, placebo)
-        cs, glob = read_checks(checks["answers"], mapping)
+        cs, glob = [], {}
+        for (xq, mp), ch in zip(parts, checks_l):
+            c1, g1 = read_checks(ch["answers"], mp)
+            cs += c1
+            glob.update(g1)
         sent = "session:" + w if k == "send" and w in {s["id"] for s in c["board"]["sessions"]} else (w if k == "send" else None)
         T = sent if sent and sent.startswith("session:") else top
         cards = [(cd["id"], cd["session"], cd["kind"]) for cd in c["board"]["cards"]]
@@ -424,12 +479,16 @@ def bench(system, max_calls):
                    "options": [live_action("session:" + t if t in {s["id"] for s in c["board"]["sessions"]} else t, cards)
                                for t in (w if k != "send" else [])][:4]}
         info = {"T": T, "pT": probs.get(T, 0.0) if T else 0.0, "raw_top": raw_top, "checks": cs, "globals": glob,
-                "stoppable": [s["id"] for s in working(c, waiting_too=False)[:6]],
+                "stoppable": [s["id"] for s in stoppable(c, "all" if system.startswith("D3-all") else "short")],
                 "T_act": live_action(T, cards) if T else None, "routing": routing}
         out.append({"id": c["id"], "message": c["message"], "gold": c["gold"], "label": c["gold"].get("label"),
                     "half": B.half(c["id"]), "route_hash": hashlib.sha256(json.dumps(
                         {"model": "jev-latest", "state": state, "questions": q}, sort_keys=False).encode()).hexdigest(),
-                    "d3": info, "d3_decision": decide(info), "tokens": (checks.get("usage") or {}).get("input_tokens"),
+                    "d3": info, "d3_decision": decide(info),
+                    "tokens": sum((ch.get("usage") or {}).get("input_tokens") or 0 for ch in checks_l),
+                    "checks_calls": [{"n": len(xq), "tokens": (ch.get("usage") or {}).get("input_tokens"),
+                                      "latency": ch.get("_latency")} for (xq, _), ch in zip(parts, checks_l)],
+                    "n_board_cards": len(c["board"]["cards"]),
                     "route_tokens": (route.get("usage") or {}).get("input_tokens")})
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / f"bench.{system}.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in out))
@@ -439,7 +498,8 @@ def bench(system, max_calls):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["run", "bench"])
-    ap.add_argument("system", choices=["shipped", "shipped-repeat", "D3", "D3-placebo", "D3-same", "D3-w2", "D3-final"])
+    ap.add_argument("system", choices=["shipped", "shipped-repeat", "D3", "D3-placebo", "D3-same", "D3-w2", "D3-final",
+                                       "D3-all", "D3-all-split2"])
     ap.add_argument("set", nargs="?")
     ap.add_argument("--split", default="dev")
     ap.add_argument("--workers", type=int, default=6)
