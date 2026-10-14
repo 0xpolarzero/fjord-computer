@@ -41,4 +41,6 @@ No live Silo guest was available for end-to-end validation of installation, form
 
 ## Final verification
 
-Final `swift build` and `scripts/test.sh` results will be recorded here after their one-time sequential run.
+- `swift build` passed. SwiftPM warned that six existing fixture JSON files are unhandled resources.
+- `scripts/test.sh` was invoked once after the build. After about six minutes, its log contained 1,628 passing test cases across 160 completed suites and no reported test failures. Two suites (`RouterMCP` and `GuestRouterTests`) had started without completion, and the required `Test run with … tests passed` summary was absent. The test helper was still alive in the app's main run loop, so I terminated that invocation; the script exited 1. This is an incomplete full-suite run, not a clean suite pass, and it was not rerun.
+- The script replaced the contents of the pre-existing untracked `test.log` with this run's output. It remains untracked and was not staged; I did not preserve the previous contents.
