@@ -180,7 +180,7 @@ import Testing
         #expect(Writer.events(from: state(decisions: [unrouted]), to: state(decisions: [said])) == [.you("push it", sessions: ["a"])])
         // Nothing new about it.
         #expect(Writer.events(from: state(decisions: [said]), to: state(decisions: [said])).isEmpty)
-        #expect(Writer.triggers([.you("push it", sessions: ["a", "b"]), .refresh(["z"], projects: [])]) == [.you("push it"), .session("a"), .session("b")])
+        #expect(Writer.triggers([.you("push it", sessions: ["a", "b"]), .card(session: "z", card: "z#1")]) == [.you("push it"), .session("a"), .session("b"), .session("z")])
     }
 
     // MARK: Writer checks
@@ -209,9 +209,9 @@ import Testing
 
     @Test func triggersPutWhatYouSaidFirstAndDedupe() {
         let events: [Writer.Event] = [.card(session: "a", card: "a#1"), .you("hi", sessions: []), .handled(session: "a", card: "a#1", by: "you"),
-                                      .running(["z"]), .card(session: "b", card: "b#1"), .you("hi", sessions: [])]
-        #expect(Writer.triggers(events) == [.you("hi"), .session("a"), .session("b")])
-        #expect(Writer.triggers([.running(["z"])]).isEmpty)
+                                      .changed(["z"], projects: []), .card(session: "b", card: "b#1"), .you("hi", sessions: [])]
+        // The sessions whose state changed name themselves too.
+        #expect(Writer.triggers(events) == [.you("hi"), .session("a"), .session("z"), .session("b")])
     }
 
     // MARK: Apply
@@ -251,7 +251,7 @@ import Testing
                                    projects: [.init(folder: "/p/a", text: #"<need s="s1">a</need>"#),
                                               .init(folder: "/p/gone", text: "Was going.")], at: t0)
         let next = try #require(Writer.apply(answer(forYou: #"<need s="s1">a</need>"#, projects: [("/p/gone", "")]), to: current,
-                                             rewriting: ["/p/gone"], board: b, events: [.running(["x"])], now: t0.addingTimeInterval(1)))
+                                             rewriting: ["/p/gone"], board: b, events: [.changed(["x"], projects: [])], now: t0.addingTimeInterval(1)))
         #expect(next.projects.map(\.folder) == ["/p/a"])
         #expect(next.history.first?.changes.map(\.key) == ["/p/gone"])
     }
@@ -371,171 +371,252 @@ import Testing
         #expect(calls == 1)
     }
 
-    @Test func eventsThatComeInDuringARewriteAreScheduledAfterIt() async throws {
-        let store = InboxFixture.store([])
+    nonisolated private static let firstBrief = #"{"changed":true,"for_you":"","worth_a_look":"","projects":[],"label":"first","why":"w"}"#
+
+    /// A writer on a store with the Router on and Claude's sessions listed (none yet), no wait really running, and the state
+    /// as it is the baseline.
+    private func quiet(_ store: Store) -> Writer {
+        let w = store.routerDigester
+        w.clock = { self.t0 }
+        // Nothing waits for real: a wait is only ever asked for (`scheduledIn`) or flushed.
+        w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        store.claudeSessionsListed = [:]
         store.router.enabled = true
-        store.routerDigester.runner = { _, _, _ in
-            #"{"changed":true,"for_you":"","worth_a_look":"<look s=\"a\">T a</look>","projects":[{"key":"/code/lookout","text":"<look s=\"a\">T a</look>"}],"label":"","why":""}"#
-        }
+        w.check(store)
+        return w
+    }
+
+    private func session(_ id: String, folder: String = "/code/lookout", turns: Int = 1, running: Bool = true) -> ClaudeSession {
+        ClaudeSession(id: id, title: "Session \(id)", folder: folder, completedTurns: turns, lastActivity: Date(), running: running)
+    }
+
+    /// Claude's sessions read: these are all there are.
+    private func put(_ store: Store, _ sessions: ClaudeSession...) {
+        store.agents.enabled = true
+        store.agents.enabledAt = Date().addingTimeInterval(-3600)
+        store.ingest(sessions, appUnread: [], claudeFrontmost: false, now: Date())
+    }
+
+    private func todo(_ done: Int, _ total: Int = 3) -> ClaudeActivity {
+        var a = ClaudeActivity(text: "Doing it", since: t0)
+        a.todo = .init(done: done, total: total, active: nil)
+        return a
+    }
+
+    @Test func changesThatComeInDuringARewriteAreScheduledAfterIt() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
         store.router.cards = [card("a#1")]
-        await store.routerDigester.flush(store: store)
+        await w.flush(store: store)
         let late = card("c#1", kind: .asks)
-        store.routerDigester.runner = { _, _, _ in
-            // Noted while this call is out: the debounce would find the writer busy.
-            await MainActor.run { store.router.cards.append(late) }
+        w.runner = { _, _, _ in
+            // Noticed while this call is out: the timer would find the writer busy.
+            await MainActor.run {
+                store.router.cards.append(late)
+                w.check(store)
+            }
             return #"{"changed":false}"#
         }
         store.router.cards.append(card("b#1", kind: .asks))
-        await store.routerDigester.flush(store: store)
-        #expect(store.routerDigester.pending.contains(.card(session: "c", card: "c#1")))
-        #expect(store.routerDigester.timer != nil)
-        store.routerDigester.stop()
-    }
-
-    @Test func aBoardThatMovedDuringARewriteGetsAFollowUp() async throws {
-        let store = InboxFixture.store([])
-        store.router.enabled = true
-        store.routerDigester.runner = { _, _, _ in
-            #"{"changed":true,"for_you":"","worth_a_look":"<look s=\"a\">T a</look>","projects":[{"key":"/code/lookout","text":"<look s=\"a\">T a</look>"}],"label":"","why":""}"#
-        }
-        store.router.cards = [card("a#1")]
-        await store.routerDigester.flush(store: store)
-        let handled = card("a#1", open: false)
-        store.routerDigester.runner = { _, _, _ in
-            // The card is handled while the answer is being made.
-            await MainActor.run { store.router.cards[0] = handled }
-            return #"{"changed":true,"for_you":"","worth_a_look":"<look s=\"a\">T a</look>","projects":[],"label":"","why":""}"#
-        }
-        store.router.cards.append(card("b#1", kind: .asks))
-        await store.routerDigester.flush(store: store)
-        #expect(store.routerDigester.pending.contains(.refresh(["a"], projects: ["/code/lookout"])))
-        store.routerDigester.stop()
-    }
-
-    @Test func theWatchNotesASessionThatStartedNeedingYouAtOnce() {
-        let store = InboxFixture.store([])
-        store.router.enabled = true
-        store.router.cards = [card("a#1", kind: .asks)]
-        store.routerDigester.stop()
-        // The first look is the baseline.
-        store.routerDigester.look(store)
-        #expect(store.routerDigester.pending.isEmpty)
-        store.router.cards.append(card("b#1", kind: .asks))
-        store.routerDigester.stop()
-        store.routerDigester.look(store)
-        #expect(store.routerDigester.pending.contains(.refresh(["b"], projects: ["/code/lookout"])))
-        store.routerDigester.stop()
-    }
-
-    @Test func theWatchComparesWithTheStateAfterALoadAndHoldsRunningChangesUntilTheyAreLetThrough() {
-        let store = InboxFixture.store([])
-        store.router.enabled = true
-        var now = t0
-        var current = board(projects: [("/p/a", [("n1", .need), ("r1", .run)])])
-        let w = store.routerDigester
-        w.boardOf = { _ in current }
-        w.clock = { now }
-        w.look(store)
-        // A load changed the board: it is the new baseline, not news.
-        current = board(projects: [("/p/a", [("n1", .need), ("r1", .run), ("r2", .run)])])
-        w.rebaseline(store: store)
-        w.look(store)
-        #expect(w.pending.isEmpty)
-        // A run-only change and an urgent one in the same tick: the urgent one goes at once, the other is not consumed.
-        current = board(projects: [("/p/a", [("n1", .need), ("r1", .run), ("r2", .run), ("n2", .need)])])
-        current.kinds["r3"] = .run
-        current.projectOf["r3"] = "/p/a"
-        w.look(store)
-        #expect(w.pending.contains(.refresh(["n2"], projects: ["/p/a"])))
-        #expect(w.pending.contains(.running(["r3"], projects: ["/p/a"])))
-        w.stop()
-        // The throttle holds the next one back until `runningEvery` has passed, and it is still there then.
-        current.kinds["r4"] = .run
-        now = t0.addingTimeInterval(60)
-        w.look(store)
-        #expect(w.pending.isEmpty)
-        now = t0.addingTimeInterval(Writer.runningEvery + 1)
-        w.look(store)
-        #expect(w.pending == [.running(["r4"])])
+        await w.flush(store: store)
+        #expect(w.pending.contains(.card(session: "c", card: "c#1")))
+        #expect(w.urgentSince != nil && w.timer != nil)
         w.stop()
     }
 
-    @Test func aSessionMovedToAnotherProjectIsNotedWithBothProjects() {
+    @Test func aSessionThatLeftTheBoardDuringARewriteStillGetsItsProjectRewritten() async throws {
         let store = InboxFixture.store([])
-        store.router.enabled = true
-        var current = board(projects: [("/p/a", [("r1", .run)])])
-        let w = store.routerDigester
-        w.boardOf = { _ in current }
-        w.look(store)
-        current = board(projects: [("/p/b", [("r1", .run)])])
-        w.look(store)
-        #expect(w.pending == [.refresh(["r1"], projects: ["/p/a", "/p/b"])])
-        w.stop()
-    }
-
-    @Test func aSessionThatStoppedDuringARewriteStillGetsItsProjectRewritten() async throws {
-        let store = InboxFixture.store([])
-        store.router.enabled = true
-        var current = board(projects: [("/p/a", [("n1", .need)]), ("/p/b", [("n2", .need)])])
-        store.routerDigester.boardOf = { _ in current }
-        store.routerDigester.runner = { _, _, _ in
+        let w = quiet(store)
+        w.runner = { _, _, _ in
             #"{"changed":true,"for_you":"<need s=\"n1\">A</need> <need s=\"n2\">B</need>","worth_a_look":"","projects":[{"key":"/p/a","text":"<need s=\"n1\">A</need>"},{"key":"/p/b","text":"<need s=\"n2\">B</need>"}],"label":"","why":""}"#
         }
-        await store.routerDigester.flush(store: store)
+        store.router.cards = [card("n1#1", kind: .asks, folder: "/p/a"), card("n2#1", kind: .asks, folder: "/p/b")]
+        await w.flush(store: store)
         #expect(store.routerDigest?.projects.count == 2)
         // n1 is handled while the answer for n2 is being made: it is on no board afterwards.
-        store.routerDigester.runner = { _, _, _ in
-            await MainActor.run { current = board(projects: [("/p/b", [("n2", .need)])]) }
+        w.runner = { _, _, _ in
+            await MainActor.run {
+                store.router.cards[0] = card("n1#1", kind: .asks, folder: "/p/a", open: false)
+                w.check(store)
+            }
             return #"{"changed":true,"for_you":"<need s=\"n2\">B</need>","worth_a_look":"","projects":[{"key":"/p/b","text":"<need s=\"n2\">B</need> again"}],"label":"","why":""}"#
         }
-        store.routerDigester.note([.card(session: "n2", card: "n2#1")], store: store)
-        await store.routerDigester.flush(store: store)
-        #expect(store.routerDigester.pending.contains(.refresh(["n1"], projects: ["/p/a"])))
-        store.routerDigester.runner = { _, context, _ in
-            #expect(context.contains("REWRITE: the lead (for_you, worth_a_look) and these projects: /p/a"))
+        store.router.cards[1] = card("n2#2", kind: .asks, folder: "/p/b")
+        await w.flush(store: store)
+        #expect(w.pending.contains(.changed(["n1"], projects: ["/p/a"])))
+        w.runner = { _, context, _ in
+            #expect(context.contains("these projects: /p/a"))
             return #"{"changed":true,"for_you":"<need s=\"n2\">B</need>","worth_a_look":"","projects":[],"label":"","why":""}"#
         }
-        await store.routerDigester.flush(store: store)
+        await w.flush(store: store)
         #expect(store.routerDigest?.projects.map(\.folder) == ["/p/b"])
-        store.routerDigester.stop()
+        w.stop()
     }
 
-    @Test func aBoardThatDiffersAfterEveryCallInRunningSessionsOnlyDoesNotKeepTheWriterCalling() async throws {
+    // MARK: The writer, from the store's changes
+
+    @Test func aLoopStepThatOnlyChangesTheActivityTextCausesNothing() {
         let store = InboxFixture.store([])
-        store.router.enabled = true
-        var flip = false
-        func flapping() -> Writer.Board { board(projects: [("/p/a", [("n1", .need)] + (flip ? [("r1", .run)] : []))]) }
+        let w = quiet(store)
+        put(store, session("r1"))
+        store.claudeActivity = ["r1": todo(1)]
+        w.baseline(store: store)
+        #expect(w.snapshot?["r1"] != nil)
+        var step = todo(1)
+        step.text = "Reading foo.swift"
+        step.narration = "Let me look"
+        store.claudeActivity = ["r1": step]
+        w.check(store)
+        #expect(w.pending.isEmpty && w.urgentSince == nil && w.progressSince == nil && w.timer == nil)
+    }
+
+    @Test func aTodoStepCompletingIsProgressAndIsScheduledOnlyWhileTheBriefIsShown() {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
+        put(store, session("r1"))
+        store.claudeActivity = ["r1": todo(1)]
+        w.baseline(store: store)
+        // Hidden: noted, nothing scheduled.
+        store.claudeActivity = ["r1": todo(2)]
+        w.check(store)
+        #expect(w.progressSince != nil && w.urgentSince == nil && w.timer == nil)
+        w.stop()
+        // Shown: written a minute after the first change.
+        w.setVisible(true, store: store)
+        w.baseline(store: store)
+        store.claudeActivity = ["r1": todo(3)]
+        w.check(store)
+        #expect(w.scheduledIn == .seconds(60))
+        w.stop()
+    }
+
+    @Test func progressWhileHiddenMakesNoCallAndIsWrittenWhenTheBriefIsOpened() async throws {
+        let store = InboxFixture.store([])
+        var calls = 0
+        let w = quiet(store)
+        w.runner = { _, _, _ in
+            calls += 1
+            return Self.firstBrief
+        }
+        put(store, session("r1"))
+        await w.flush(store: store)
+        #expect(calls == 1)
+        // A turn ends while the Brief is closed.
+        put(store, session("r1", turns: 2))
+        w.check(store)
+        #expect(w.progressSince != nil && w.timer == nil && calls == 1)
+        // Opened: written after the usual settle.
+        w.setVisible(true, store: store)
+        #expect(w.scheduledIn == Writer.settle && w.timer != nil)
+        await w.flush(store: store)
+        #expect(calls == 2 && w.progressSince == nil)
+        w.stop()
+    }
+
+    @Test func progressRidesAlongWithAnUrgentRewrite() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
+        put(store, session("r1", folder: "/code/other"))
+        store.claudeActivity = ["r1": todo(1)]
+        store.router.cards = [card("a#1")]
+        await w.flush(store: store)
+        store.claudeActivity = ["r1": todo(2)]
+        w.check(store)
+        #expect(w.progressSince != nil && w.timer == nil)
+        w.runner = { _, context, _ in
+            #expect(context.contains("these projects: /code/lookout, /code/other")
+                    || context.contains("these projects: /code/other, /code/lookout"))
+            return #"{"changed":false}"#
+        }
+        store.router.cards.append(card("b#1", kind: .asks))
+        w.check(store)
+        #expect(w.urgentSince != nil && w.timer != nil)
+        await w.flush(store: store)
+        w.stop()
+    }
+
+    @Test func urgentChangesWaitForQuietButNotPastTheMaximum() {
+        let store = InboxFixture.store([])
         var now = t0
-        let w = store.routerDigester
-        w.boardOf = { _ in flapping() }
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
         w.clock = { now }
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.check(store)
+        #expect(w.scheduledIn == .seconds(3))
+        now = t0.addingTimeInterval(5)
+        store.router.cards.append(card("b#1", kind: .asks))
+        w.check(store)
+        #expect(w.scheduledIn == .seconds(3))
+        now = t0.addingTimeInterval(10)
+        store.router.cards.append(card("c#1", kind: .asks))
+        w.check(store)
+        #expect(w.scheduledIn == .seconds(2))
+        w.stop()
+    }
+
+    @Test func aCardsBriefLandingIsUrgent() {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.baseline(store: store)
+        store.router.cards[0].brief = "A brief"
+        w.check(store)
+        #expect(w.urgentSince != nil && w.pending.contains(.changed(["a"], projects: ["/code/lookout"])))
+        w.stop()
+    }
+
+    @Test func aSessionMovingProjectRewritesBothProjects() {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
+        put(store, session("r1", folder: "/p/a"))
+        w.baseline(store: store)
+        put(store, session("r1", folder: "/p/b"))
+        w.check(store)
+        #expect(w.urgentSince != nil)
+        #expect(w.pending == [.changed(["r1"], projects: ["/p/a", "/p/b"])])
+        w.stop()
+    }
+
+    @Test func aLoadOrADemoPopulateIsNeverNews() {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
+        w.suspended = true
+        put(store, session("r1"))
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.suspended = false
+        w.baseline(store: store)
+        w.check(store)
+        #expect(w.pending.isEmpty && w.urgentSince == nil && w.progressSince == nil)
+        Demo.populate(store, .router)
+        w.check(store)
+        #expect(w.pending.isEmpty && w.urgentSince == nil && w.progressSince == nil)
+        w.stop()
+    }
+
+    @Test func aCheckAfterAWriteWithNothingNewDoesNotCallAgain() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
         var calls = 0
         w.runner = { _, _, _ in
             calls += 1
-            await MainActor.run { flip.toggle() }
-            return #"{"changed":true,"for_you":"<need s=\"n1\">A</need>","worth_a_look":"","projects":[{"key":"/p/a","text":"<need s=\"n1\">A</need> \(calls)"}],"label":"","why":""}"#
+            // The model corrects the brief: no fingerprint holds the brief.
+            return #"{"changed":true,"for_you":"<need s=\"a\">T a</need>","worth_a_look":"","projects":[{"key":"/code/lookout","text":"<need s=\"a\">T a</need> \#(calls)"}],"label":"","why":""}"#
         }
+        store.router.cards = [card("a#1", kind: .asks)]
         await w.flush(store: store)
-        #expect(calls == 1 && w.pending.isEmpty)
-        // Each call leaves the board different; no follow-up comes of it, however many are made.
-        for i in 0..<5 {
-            w.note([.card(session: "n1", card: "n1#\(i)")], store: store)
-            await w.flush(store: store)
-            #expect(w.pending.isEmpty)
-        }
-        #expect(calls == 6)
-        // The watch lets one running change through per window.
-        w.look(store)
-        var told = 0
-        for tick in 1...10 {
-            flip.toggle()
-            now = t0.addingTimeInterval(Double(tick) * 20)
-            w.look(store)
-            if w.pending.contains(where: { if case .running = $0 { true } else { false } }) { told += 1 }
-            w.stop()
-        }
-        // Ten ticks over 200 s: one.
-        #expect(told == 1)
+        #expect(calls == 1)
+        w.check(store)
+        w.check(store)
+        #expect(w.pending.isEmpty && w.urgentSince == nil && w.timer == nil)
+        await w.flush(store: store)
+        #expect(calls == 1)
         w.stop()
     }
 
