@@ -147,10 +147,11 @@ import Testing
         #expect(Writer.events(from: state([a]), to: state([a])).isEmpty)
         // Decisions: a new one of yours is an event; session ones and old ones aren't.
         let said = RouterDecision(trigger: .you("push it"))
+        let two = RouterDecision(trigger: .you("two"))
         let sys = RouterDecision(trigger: .session(sessionID: "a", event: "x"))
-        #expect(Writer.events(from: state([a]), to: state([a], decisions: [said, sys])) == [.you("push it", sessions: [])])
-        #expect(Writer.events(from: state([a], decisions: [said]), to: state([a], decisions: [said, RouterDecision(trigger: .you("two"))]))
-                == [.you("two", sessions: [])])
+        #expect(Writer.events(from: state([a]), to: state([a], decisions: [said, sys])) == [.you("push it", id: said.id.uuidString, sessions: [])])
+        #expect(Writer.events(from: state([a], decisions: [said]), to: state([a], decisions: [said, two]))
+                == [.you("two", id: two.id.uuidString, sessions: [])])
     }
 
     @Test func anOpenCardsBriefAsksLeftAndTextAreEventsButAHandledOnesAreNot() {
@@ -174,10 +175,10 @@ import Testing
     @Test func aMessageOfYoursCarriesTheSessionsItWentToAlsoOnceRoutedLater() {
         var said = RouterDecision(trigger: .you("push it"))
         said.links.sessions = ["a"]
-        #expect(Writer.events(from: state(), to: state(decisions: [said])) == [.you("push it", sessions: ["a"])])
+        #expect(Writer.events(from: state(), to: state(decisions: [said])) == [.you("push it", id: said.id.uuidString, sessions: ["a"])])
         var unrouted = said
         unrouted.links.sessions = []
-        #expect(Writer.events(from: state(decisions: [unrouted]), to: state(decisions: [said])) == [.you("push it", sessions: ["a"])])
+        #expect(Writer.events(from: state(decisions: [unrouted]), to: state(decisions: [said])) == [.you("push it", id: said.id.uuidString, sessions: ["a"])])
         // Nothing new about it.
         #expect(Writer.events(from: state(decisions: [said]), to: state(decisions: [said])).isEmpty)
         #expect(Writer.triggers([.you("push it", sessions: ["a", "b"]), .card(session: "z", card: "z#1")]) == [.you("push it"), .session("a"), .session("b"), .session("z")])
@@ -815,6 +816,71 @@ import Testing
         v.baseline(store: other)
         #expect(v.timer != nil)
         v.stop()
+    }
+
+    @Test func aFirstListingThatChangesNothingStillWakesTheWaitingFirstWrite() async throws {
+        let store = InboxFixture.store([])
+        let w = store.routerDigester
+        w.clock = { self.t0 }
+        w.sleeper = { d in if d != Writer.checkEvery { try? await Task.sleep(for: .seconds(3600)) } }
+        w.runner = { _, _, _ in Self.firstBrief }
+        store.agents.enabled = true
+        store.router.enabled = true
+        w.baseline(store: store)
+        #expect(w.timer == nil)
+        // An empty first listing: no session, activity or task differs from what was there.
+        store.applyClaude(ClaudeSnapshot(sessions: [], appUnread: [], stamp: store.claudeStamp))
+        for _ in 0..<100 where w.timer == nil { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(w.urgentSince != nil && w.timer != nil)
+        w.stop()
+    }
+
+    @Test func aMessageOfYoursSurvivesTheRouterBeingTurnedOffAndADroppedCall() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        w.baseline(store: store)
+        let said = RouterDecision(trigger: .you("push it"))
+        w.runner = { _, _, _ in
+            await MainActor.run { store.router.enabled = false }
+            return Self.firstBrief
+        }
+        store.router.decisions.append(said)
+        await w.flush(store: store)
+        // The call was dropped: the message is back in the queue, and turning the Router off and on keeps it.
+        #expect(w.events == [.you("push it", id: said.id.uuidString, sessions: [])])
+        store.router.enabled = true
+        #expect(w.events.count == 1 && w.urgentSince != nil)
+        w.stop()
+        #expect(w.events.count == 1)
+        // It leaves only when a rewrite lands.
+        store.router.enabled = true
+        w.runner = { _, _, _ in Self.firstBrief }
+        await w.flush(store: store)
+        #expect(w.events.isEmpty && w.inFlight == nil)
+        w.stop()
+    }
+
+    @Test func aMessageIsOneDecisionAndANewDecisionWithTheSameWordsIsScheduledAgainAfterTheRetriesAreSpent() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        w.baseline(store: store)
+        struct Boom: Error {}
+        w.runner = { _, _, _ in throw Boom() }
+        var first = RouterDecision(trigger: .you("push it"))
+        store.router.decisions.append(first)
+        for _ in 0...Writer.retryAfter.count { await w.flush(store: store) }
+        #expect(w.failures == Writer.retryAfter.count + 1 && w.timer == nil)
+        // The Router routes it: the same decision, its event replaced rather than added.
+        first.links.sessions = ["a"]
+        store.router.decisions[0] = first
+        #expect(w.events == [.you("push it", id: first.id.uuidString, sessions: ["a"])])
+        // Sending the same words again is another decision.
+        store.router.decisions.append(RouterDecision(trigger: .you("push it")))
+        w.check(store)
+        #expect(w.events.count == 2 && w.failures == 0 && w.timer != nil)
+        w.stop()
     }
 
     @Test func claudeBecomingMissingWakesAWaitingFirstWrite() {

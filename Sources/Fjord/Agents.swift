@@ -457,6 +457,8 @@ extension Store {
             ingesting = true
             ingest(sessions, appUnread: snapshot.appUnread, claudeFrontmost: snapshot.frontmost)
             ingesting = false
+            // The first listing may change nothing observed (no session, nothing seeded to differ), yet the writer waits for it.
+            routerDigester.markDirty(store: self)
         }
         // A read that found the sessions, or found them missing or unreadable (no Claude app): either way, what routing will
         // know of them is known, and the actions waiting for it go.

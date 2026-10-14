@@ -28,8 +28,9 @@ import os
         case card(session: String, card: String)
         /// A card was handled: answered, archived, marked seen.
         case handled(session: String, card: String, by: String)
-        /// You said something to the Router or a session (the sessions it went to, once the Router has routed it).
-        case you(String, sessions: [String])
+        /// You said something to the Router or a session (its decision, and the sessions it went to, once the Router has
+        /// routed it). Kept until a rewrite that was told about it lands.
+        case you(String, id: String = "", sessions: [String])
         /// Sessions whose fingerprint changed, and the projects they were in and are in now (a session that stopped is on
         /// no board, so its project can't be found from it).
         case changed(Set<String>, projects: Set<String>)
@@ -38,7 +39,7 @@ import os
         var sessions: [String] {
             switch self {
             case .card(let s, _), .handled(let s, _, _): [s]
-            case .you(_, let sessions): sessions
+            case .you(_, _, let sessions): sessions
             case .changed(let ids, _): ids.sorted()
             }
         }
@@ -135,10 +136,10 @@ import os
                 // New, or routed since: the sessions it went to are known only once the Router has done it.
                 if let was = before[decision.id] {
                     if was.links.sessions != decision.links.sessions, !decision.links.sessions.isEmpty {
-                        out.append(.you(text, sessions: decision.links.sessions))
+                        out.append(.you(text, id: decision.id.uuidString, sessions: decision.links.sessions))
                     }
                 } else {
-                    out.append(.you(text, sessions: decision.links.sessions))
+                    out.append(.you(text, id: decision.id.uuidString, sessions: decision.links.sessions))
                 }
             }
         }
@@ -155,8 +156,17 @@ import os
         // Turned on again: what changed while it was off is for the check to find, against what it last saw.
         if !old.enabled, acknowledged == nil { acknowledged = Self.prints(Board.make(store), store) }
         guard !suspended else { return }
-        for event in Self.events(from: old, to: new) where !events.contains(event) { events.append(event) }
+        for event in Self.events(from: old, to: new) { add(event) }
         check(store)
+    }
+
+    /// Notes an event. A message of yours is one decision: when it is routed, its sessions replace those it had.
+    private func add(_ event: Event) {
+        if case .you(_, let id, _) = event, let i = events.firstIndex(where: { if case .you(_, id, _) = $0 { true } else { false } }) {
+            events[i] = event
+        } else if !events.contains(event) {
+            events.append(event)
+        }
     }
 
     /// Something that may change the brief changed: looked at in a moment, with whatever else changes by then.
@@ -212,7 +222,7 @@ import os
             urgent.combine(id)
             urgent.combine(current[id]?.urgent)
         }
-        urgent.combine(you.count)
+        for case .you(_, let id, _) in you { urgent.combine(id) }
         let urgentKey = urgent.finalize()
         var all = Hasher()
         all.combine(urgentKey)
@@ -310,7 +320,8 @@ import os
         disarm()
         checkTask?.cancel()
         checkTask = nil
-        events = []
+        // Your messages stay: the brief hasn't heard of them yet, and nothing else says they were sent.
+        events = events.filter { if case .you = $0 { true } else { false } }
         inFlight = nil
         urgentSince = nil
         progressSince = nil
@@ -462,6 +473,15 @@ import os
             outcome = generation == self.generation && store.router.enabled ? .failed : .dropped
         }
         writing = false
+        // Back into the queue, before what came in meanwhile, unless a rewrite landed with them.
+        // A dropped call only keeps your messages: the rest is found again from the state.
+        if outcome != .landed {
+            let meanwhile = events
+            events = []
+            for event in taken + meanwhile {
+                if outcome == .failed { add(event) } else if case .you = event { add(event) }
+            }
+        }
         switch outcome {
         case .landed:
             // What this rewrite was told about is what it acknowledges, not what the store is at when it lands.
@@ -470,8 +490,6 @@ import os
             retryAt = nil
             failedKey = nil
         case .failed:
-            // Back into the queue, before what came in meanwhile.
-            events = taken + events.filter { !taken.contains($0) }
             urgentSince = [hadUrgent, urgentSince].compactMap { $0 }.min()
             progressSince = [hadProgress, progressSince].compactMap { $0 }.min()
             failures += 1
@@ -542,7 +560,7 @@ import os
         var out: [RouterDigest.Revision.Trigger] = []
         for event in events {
             let trigger: RouterDigest.Revision.Trigger? = switch event {
-            case .you(let text, _): .you(text)
+            case .you(let text, _, _): .you(text)
             case .card(let s, _), .handled(let s, _, _): .session(s)
             case .changed: nil
             }
@@ -842,7 +860,7 @@ enum DigestPrompt {
             default: "it was handled"
             }
             return "session id=\(s) \(title(s)): its card is done, \(how)"
-        case .you(let text, let sessions):
+        case .you(let text, _, let sessions):
             let to = sessions.isEmpty ? "" : " (to " + sessions.map { "id=\($0) \(title($0))" }.joined(separator: ", ") + ")"
             return "the user said" + to + ": " + clip(text, 300)
         case .changed(let ids, _):
