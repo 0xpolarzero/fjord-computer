@@ -47,6 +47,10 @@ enum FjordValidate {
             if case .comment(let text) = action.kind, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 out.append("actions[\(i)] (\(action.title)): the comment is empty")
             }
+            if case .runInComputer(let settings) = action.kind {
+                do { try settings.validate() }
+                catch { out.append("actions[\(i)] (\(action.title)): \(error.localizedDescription)") }
+            }
         }
         var seen = Set<String>()
         return out.filter { seen.insert($0).inserted }

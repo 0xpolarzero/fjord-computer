@@ -11,6 +11,7 @@ enum AppDestination: Hashable {
     case router
     case computers
     case computerDetail(String)
+    case computerRun(UUID)
     case settings
     case categories
     case snippets
@@ -23,6 +24,7 @@ enum AppDestination: Hashable {
         case .router: "router"
         case .computers: "computers"
         case .computerDetail(let id): "computer-detail:" + id
+        case .computerRun(let id): "computer-run:" + id.uuidString
         case .settings: "settings"
         case .categories: "categories"
         case .snippets: "snippets"
@@ -38,7 +40,10 @@ enum AppDestination: Hashable {
         case "categories": self = .categories
         case "snippets": self = .snippets
         default:
-            if token.hasPrefix("computer-detail:") {
+            if token.hasPrefix("computer-run:") {
+                guard let id = UUID(uuidString: String(token.dropFirst("computer-run:".count))) else { return nil }
+                self = .computerRun(id)
+            } else if token.hasPrefix("computer-detail:") {
                 let id = String(token.dropFirst("computer-detail:".count))
                 guard !id.isEmpty else { return nil }
                 self = .computerDetail(id)
@@ -69,7 +74,7 @@ enum AppDestination: Hashable {
     /// (there while either is on).
     var tool: Tool? {
         switch self {
-        case .category, .done, .categories: .triage
+        case .category, .done, .categories, .computerRun: .triage
         case .router: .router
         case .computers, .computerDetail: .computers
         case .settings, .snippets: nil

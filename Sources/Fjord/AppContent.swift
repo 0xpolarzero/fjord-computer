@@ -277,6 +277,8 @@ struct AppContent: View {
                 ComputersView(store: store, navigator: navigator, leadingInset: leadingInset)
             case .computerDetail(let id):
                 ComputerDetailView(store: store, navigator: navigator, computerId: id, leadingInset: leadingInset)
+            case .computerRun(let id):
+                ComputerRunResultView(store: store, runID: id, leadingInset: leadingInset)
             case .settings:
                 AppPage(title: "Settings", leadingInset: leadingInset, trailing: { EmptyView() }) {
                     column { SettingsView(store: store, hub: hub) }

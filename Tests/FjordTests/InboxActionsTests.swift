@@ -1439,6 +1439,9 @@ final class DiskCheckingPerformer: ActionPerformer {
                 case .comment:
                     return InboxActions.Chip(id: action.id, label: "commented", tint: .neutral, target: run.url.map { .url($0) },
                                              help: "Open the comment on GitHub")
+                case .runInComputer:
+                    return InboxActions.Chip(id: action.id, label: "run complete", tint: .neutral,
+                                             target: run.computerRunID.map { .computerRun($0) }, help: "Open the computer run result")
                 case .rerun:
                     return InboxActions.Chip(id: action.id, label: run.detail.isEmpty ? "re-ran" : run.detail, tint: .neutral,
                                              target: nil, help: "Failed checks were re-run \(ago(run.at))")

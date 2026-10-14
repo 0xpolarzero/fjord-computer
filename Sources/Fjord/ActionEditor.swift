@@ -63,6 +63,20 @@ struct ActionsEditor: View {
             if store.toolsLinked {
                 Button("Send to the Router") { actions.items.append(.make(.askRouter(prompt: ActionPrompt()))) }
             }
+            Button("Run in a computer") {
+                actions.items.append(.make(.runInComputer(settings: RunInComputerSettings(
+                    deviceID: nil,
+                    computerID: "",
+                    computerName: "",
+                    workspaceRoot: "/workspace",
+                    promptTemplate: "",
+                    model: nil,
+                    effort: nil,
+                    permissionMode: .default,
+                    allowedTools: [],
+                    recordProof: true
+                ))))
+            }
             Button("Comment on GitHub") { actions.items.append(.make(.comment(""))) }
             Button("Re-run failed checks") { actions.items.append(.make(.rerun)) }
         } label: {
@@ -129,6 +143,8 @@ private struct ActionRow: View {
                 ActionTextBox(text: Binding(get: { text }, set: { action.kind = .comment($0) }),
                               placeholder: "The comment, like “Thanks @{author}, taking a look”", label: "Comment")
                     .tip("Comment", "{title} {url} {number} {repo} {author} are filled in. PRs and issues only.")
+            case .runInComputer(let settings):
+                RunInComputerActionEditor(settings: runSettingsBinding(fallback: settings), store: store)
             case .rerun:
                 EmptyView()
             }
@@ -177,6 +193,175 @@ private struct ActionRow: View {
         let performer = store.actionPerformer ?? (store.persists && !Store.isDemo ? StoreActionPerformer(store: store) : nil)
         preview = await InboxActions.preview(action, category: categoryName.isEmpty ? "New category" : categoryName,
                                              thing: match.thing, facts: match.facts, performer: performer, name: store.pointerName)
+    }
+
+    private func runSettingsBinding(fallback: RunInComputerSettings) -> Binding<RunInComputerSettings> {
+        Binding(
+            get: {
+                if case .runInComputer(let settings) = action.kind { return settings }
+                return fallback
+            },
+            set: { action.kind = .runInComputer(settings: $0) }
+        )
+    }
+}
+
+/// Settings for a saved, unattended placement. The target remains explicit and owner-scoped; the picker never guesses
+/// from the repository or falls back to this Mac.
+private struct RunInComputerActionEditor: View {
+    @Binding var settings: RunInComputerSettings
+    let store: Store
+
+    private var selectedPlacement: ComputerPlacementOption? {
+        store.computers.placementOptions.first {
+            $0.deviceId == settings.deviceID && $0.computer.id == settings.computerID
+        }
+    }
+
+    private var placementTitle: String {
+        if let selectedPlacement {
+            return "\(selectedPlacement.computer.name) · \(selectedPlacement.ownerName)"
+        }
+        if settings.computerID.isEmpty { return "Choose computer" }
+        let owner = settings.deviceID.map { "Owner \($0)" } ?? "This Mac"
+        return "\(settings.computerName.isEmpty ? "Computer" : settings.computerName) · \(owner)"
+    }
+
+    private var allowedToolsText: Binding<String> {
+        Binding(
+            get: { settings.allowedTools.joined(separator: ", ") },
+            set: {
+                settings.allowedTools = $0
+                    .components(separatedBy: CharacterSet(charactersIn: ",\n"))
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            MenuChip(title: "Computer: \(placementTitle)", label: "Computer placement") {
+                ForEach(store.computers.placementOwners) { owner in
+                    if !owner.options.isEmpty {
+                        Section(owner.name) {
+                            ForEach(owner.options) { option in
+                                Button {
+                                    settings.deviceID = option.deviceId
+                                    settings.computerID = option.computer.id
+                                    settings.computerName = option.computer.name
+                                } label: {
+                                    Label("\(option.computer.name) · \(option.computer.kind.title) · \(option.computer.displayState.title)",
+                                          systemImage: option.computer.kind == .linux ? "shippingbox" : "desktopcomputer")
+                                }
+                            }
+                        }
+                    }
+                }
+                if let placementError = store.computers.placementError {
+                    Divider()
+                    Button("Refresh computers: \(placementError)") {
+                        Task { await store.computers.refreshPlacementInventories() }
+                    }
+                } else if store.computers.placementOptions.isEmpty {
+                    Button("Refresh computers") {
+                        Task { await store.computers.refreshPlacementInventories() }
+                    }
+                }
+            }
+            .help("Choose the computer and owner where every matching item will run")
+
+            HStack(spacing: 8) {
+                MenuChip(title: "Model: \(settings.model?.capitalized ?? "Default")", label: "Run model") {
+                    Toggle("Default", isOn: Binding(get: { settings.model == nil }, set: { _ in settings.model = nil }))
+                    ForEach(ActionSettings.models, id: \.self) { model in
+                        Toggle(model.capitalized, isOn: Binding(get: { settings.model == model }, set: { _ in settings.model = model }))
+                    }
+                }
+                MenuChip(title: "Effort: \(settings.effort ?? "Default")", label: "Run effort") {
+                    Toggle("Default", isOn: Binding(get: { settings.effort == nil }, set: { _ in settings.effort = nil }))
+                    ForEach(ActionSettings.efforts, id: \.self) { effort in
+                        Toggle(effort, isOn: Binding(get: { settings.effort == effort }, set: { _ in settings.effort = effort }))
+                    }
+                }
+                MenuChip(title: settings.permissionMode.title, label: "Permission mode") {
+                    ForEach(RunInComputerSettings.PermissionMode.allCases, id: \.self) { mode in
+                        Toggle(mode.title, isOn: Binding(get: { settings.permissionMode == mode }, set: { _ in settings.permissionMode = mode }))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 8) {
+                Text("Workspace root").cdsText(foot12, .medium, CDS.Text.secondary)
+                TextField("/workspace", text: $settings.workspaceRoot)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Guest workspace root")
+            }
+            Text("Fjord clones the matching repository under this guest folder.")
+                .cdsText(foot12, .regular, CDS.Text.muted)
+
+            ActionTextBox(text: $settings.promptTemplate,
+                          placeholder: "Fix the issue described by {title} in {repo}.",
+                          label: "Run prompt template")
+                .tip("Prompt template", "Use {repo}, {title}, {number}, {url}, or {author} to include fields from the matching GitHub item. Fjord bounds and marks those values as untrusted GitHub content.")
+
+            HStack(spacing: 8) {
+                Text("Allowed tools").cdsText(foot12, .medium, CDS.Text.secondary)
+                TextField("Claude Code defaults", text: allowedToolsText)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Allowed tools, comma separated")
+            }
+            Text("Optional comma-separated tool names or patterns. Leave blank to use Claude Code defaults.")
+                .cdsText(foot12, .regular, CDS.Text.muted)
+
+            Toggle("Record proof video", isOn: $settings.recordProof)
+                .toggleStyle(.checkbox)
+                .font(CDS.sans(12))
+                .tip("Proof video", "Records the guest desktop for this run. A recording can contain credentials visible in the computer.")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Run preview").cdsText(foot12, .semibold, CDS.Text.secondary)
+                Text("\(placementTitle) · \(settings.workspaceRoot.isEmpty ? "Choose a workspace root" : settings.workspaceRoot + "/<repo>")")
+                    .cdsText(foot12, .regular, CDS.Text.primary).textSelection(.enabled)
+                Text("Automatic checkpoint before each run; the computer's retention setting applies.")
+                    .cdsText(foot12, .regular, CDS.Text.secondary)
+                Text("Proof video: \(settings.recordProof ? "on" : "off") · Permissions: \(settings.permissionMode.title)")
+                    .cdsText(foot12, .regular, CDS.Text.secondary)
+                if !settings.promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Prompt: \(settings.promptTemplate)")
+                        .cdsText(foot12, .regular, CDS.Text.secondary).lineLimit(3).textSelection(.enabled)
+                }
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(CDS.Fill.field))
+
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "lock.trianglebadge.exclamationmark.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Authentication gate closed · B-17 unproven")
+                        .cdsText(foot12, .semibold, CDS.Text.warning)
+                    Text("The proxy has not proven OAuth bearer-token substitution. Fjord blocks the Claude run until a controlled bearer check and harmless authenticated request pass.")
+                        .cdsText(foot12, .regular, CDS.Text.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .foregroundStyle(CDS.Text.warning)
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(CDS.Text.warning.opacity(0.13)))
+            .accessibilityElement(children: .combine)
+            Text("Before a run can be enabled, create a long-lived token with `claude setup-token`, then save it in Computers → Secrets as CLAUDE_CODE_OAUTH_TOKEN for this computer, allowing api.anthropic.com. The rule never stores the token.")
+                .cdsText(foot12, .regular, CDS.Text.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !store.computersOn {
+                Text("Computers is off. Turn it on in Settings to run this Triage action.")
+                    .cdsText(foot12, .medium, CDS.Text.warning)
+            }
+        }
+        .task { await store.computers.refreshPlacementInventories() }
     }
 }
 
