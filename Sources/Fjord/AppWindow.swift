@@ -970,7 +970,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         case .done: "Archive"
         case .router: "Router"
         case .computers: "Computers"
-        case .computerDetail(let id): store.computers.inventory?.computer(id)?.name ?? "Computer"
+        case .computerDetail(let target): store.computers.row(target)?.name ?? "Computer"
         case .computerRun: "Triage run"
         case .settings: "Settings"
         case .categories: "Inbox categories"

@@ -208,13 +208,13 @@ import Testing
         await deliveries.waitForCount(3)
         #expect(subscription != "sub-1")
         #expect(deliveries.values.count == 3)
-        guard case .event(let progressSequence, .jobProgress(let progress)) = deliveries.values[0] else {
+        guard case .event(let progressSequence, .jobProgress(let progress, _)) = deliveries.values[0] else {
             Issue.record("The fake server's first event must decode as job progress.")
             return
         }
         #expect(progressSequence == 1)
         #expect(progress.source == .lifecycle)
-        guard case .event(let finishedSequence, .jobFinished(let finished)) = deliveries.values[1] else {
+        guard case .event(let finishedSequence, .jobFinished(let finished, _)) = deliveries.values[1] else {
             Issue.record("The fake server's second event must decode as job finished.")
             return
         }
@@ -562,12 +562,13 @@ import Testing
         #expect(deliveries.values == [
             .event(sequence: 1, event: .jobProgress(OperationJobProgress(
                 jobId: "job:123", source: .lifecycle,
-                data: .lifecycle(LifecycleJobProgressData(computerId: "computer-1", action: "start", step: "boot"))))),
+                data: .lifecycle(LifecycleJobProgressData(computerId: "computer-1", action: "start", step: "boot"))),
+                deviceId: "device-1")),
             .sequenceAdvanced(sequence: 2),
-            .event(sequence: 3, event: .jobFinished(OperationJobFinished(jobId: "job:123"))),
+            .event(sequence: 3, event: .jobFinished(OperationJobFinished(jobId: "job:123"), deviceId: "device-1")),
             .sequenceAdvanced(sequence: 4),
             .reconnected,
-            .event(sequence: 7, event: .jobFinished(OperationJobFinished(jobId: "job:123"))),
+            .event(sequence: 7, event: .jobFinished(OperationJobFinished(jobId: "job:123"), deviceId: "device-1")),
         ])
         await client.eventsUnsubscribe(subscription: localId)
         try await client.engineDisconnect()
@@ -599,7 +600,7 @@ import Testing
         await deliveries.waitForCount(1)
         let snapshot = try await client.operationsJobGet(jobId: "job:123", deviceId: nil)
         let eventResult: SiloJSONValue?
-        if let first = deliveries.values.first, case .event(_, .jobFinished(let finished)) = first {
+        if let first = deliveries.values.first, case .event(_, .jobFinished(let finished, _)) = first {
             eventResult = finished.result
         } else {
             eventResult = nil

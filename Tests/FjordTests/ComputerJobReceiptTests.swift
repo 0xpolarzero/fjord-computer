@@ -7,7 +7,7 @@ import Testing
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        _ = await model.perform("Start") {
+        _ = await model.perform("Start", on: nil) {
             try await client.computersStart(ComputerReference(computerId: MockEngineClient.failedID))
         }
 

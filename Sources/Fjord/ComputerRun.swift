@@ -1221,10 +1221,10 @@ private final class ComputerRunProgressSink {
         }
         guard case .event(_, let event) = delivery else { return }
         switch event {
-        case .jobProgress(let progress) where matches(progress.jobId):
+        case .jobProgress(let progress, _) where matches(progress.jobId):
             guard let text = progress.data.presentationTitle else { return }
             record.detail = text
-        case .jobFinished(let finished) where matches(finished.jobId):
+        case .jobFinished(let finished, _) where matches(finished.jobId):
             record.detail = "Job finished; reading its durable result"
         default:
             return

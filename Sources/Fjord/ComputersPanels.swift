@@ -13,13 +13,15 @@ struct ComputerCreationSheet: View {
     @State private var memoryGiB = 1
     @State private var diskGiB = 64
     private var model: ComputersModel { store.computers }
+    /// The device the computer is created on, fixed when the sheet opens.
+    @State private var deviceId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Create \(kind.title) computer").font(CDS.sans(18, .semibold)).foregroundStyle(CDS.Text.primary)
-                    Text("Limits come from this Mac's available host capacity.")
+                    Text("Limits come from \(deviceId == nil ? "this Mac" : model.ownerName(deviceId))'s available host capacity.")
                         .font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
                 }
                 Spacer()
@@ -59,15 +61,18 @@ struct ComputerCreationSheet: View {
         .frame(width: 440)
         .background(CDS.Surface.s1)
         .preferredColorScheme(.dark)
-        .task { await loadLimits() }
+        .task {
+            deviceId = model.createDeviceId
+            await loadLimits()
+        }
     }
 
     private func loadLimits() async {
         do {
-            let value = try await model.resourceLimits(for: kind)
+            let value = try await model.resourceLimits(for: kind, deviceId: model.createDeviceId)
             limits = value
             let base = kind == .linux ? "linux-new" : "macos-new"
-            name = ComputerName.unique(base, among: model.inventory?.allComputers.map(\.name) ?? [])
+            name = ComputerName.unique(base, among: model.inventory(for: model.createDeviceId)?.allComputers.map(\.name) ?? [])
             cpus = value.defaultCPUs
             memoryGiB = value.defaultMemoryGiB
             diskGiB = value.defaultDiskGiB ?? 64
@@ -84,8 +89,11 @@ struct ComputerCreationSheet: View {
     private func create() {
         guard ComputerName.isValid(name) else { return }
         Task {
-            if kind == .linux { await model.createLinuxComputer(name: name, cpus: cpus, memoryGiB: memoryGiB) }
-            else { await model.createMacosComputer(name: name, cpus: cpus, memoryGiB: memoryGiB, diskGiB: diskGiB) }
+            if kind == .linux {
+                await model.createLinuxComputer(name: name, cpus: cpus, memoryGiB: memoryGiB, deviceId: deviceId)
+            } else {
+                await model.createMacosComputer(name: name, cpus: cpus, memoryGiB: memoryGiB, diskGiB: diskGiB, deviceId: deviceId)
+            }
             if model.actionError == nil { dismiss() }
         }
     }
@@ -93,6 +101,7 @@ struct ComputerCreationSheet: View {
 
 struct ComputerResourcesPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
     @State private var cpus = 1
     @State private var memoryGiB = 1
@@ -173,7 +182,7 @@ struct ComputerResourcesPanel: View {
 
     private func loadMacosLimits() async {
         do {
-            let limits = try await model.resourceLimits(for: .macos)
+            let limits = try await model.resourceLimits(for: .macos, deviceId: target.deviceId)
             maxCPUs = max(limits.maxCPUs, currentCPUs)
             maxMemoryGiB = max(limits.maxMemoryGiB, currentMemory)
             minCPUsValue = limits.minCPUs
@@ -194,7 +203,7 @@ struct ComputerResourcesPanel: View {
 
     private func save() {
         Task {
-            await model.updateResources(for: row.id, cpus: cpus, memoryGiB: memoryGiB,
+            await model.updateResources(for: target, cpus: cpus, memoryGiB: memoryGiB,
                                         expectedConfiguration: displayedConfiguration)
         }
     }
@@ -202,8 +211,9 @@ struct ComputerResourcesPanel: View {
 
 struct ComputerUsePanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
-    private var state: SiloWireComputerUseState? { model.computerUseByComputer[row.id] }
+    private var state: SiloWireComputerUseState? { model.computerUseByComputer[target.key] }
     private var isAutomatic: Bool { state?.approval == .auto }
 
     var body: some View {
@@ -214,14 +224,14 @@ struct ComputerUsePanel: View {
                         .font(CDS.sans(11, .medium)).foregroundStyle(CDS.Text.secondary)
                     Spacer()
                     if state?.state == .failed || state?.state == .unavailable {
-                        ActionButton("Set up") { Task { await model.setupComputerUse(computerId: row.id) } }
+                        ActionButton("Set up") { Task { await model.setupComputerUse(target) } }
                     }
                 }
                 if let warning = state?.warning ?? state?.reason {
                     Text(warning).font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
                 }
                 Toggle("Approve computer use automatically", isOn: Binding(get: { isAutomatic }, set: { newValue in
-                    Task { await model.setComputerUseApproval(computerId: row.id, automatic: newValue) }
+                    Task { await model.setComputerUseApproval(target, automatic: newValue) }
                 }))
                 .toggleStyle(.switch)
                 .font(CDS.sans(11))
@@ -234,8 +244,8 @@ struct ComputerUsePanel: View {
 
 struct ComputerAgentToolsPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
-    private var target: GuestReference { GuestReference.thisMac(row.id) }
     private var status: SiloWireAgentToolsStatus? { model.agentTools(for: target) }
     private var setupMessage: String? { model.agentToolsSetupMessage[target.key] }
 
@@ -274,17 +284,18 @@ struct ComputerAgentToolsPanel: View {
 
 struct ComputerFilesPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
-    private var listing: SiloWireFileListResult? { model.fileLists[row.id] }
+    private var listing: SiloWireFileListResult? { model.fileLists[target.key] }
     private var root: String? { ComputerFilesPath.root(for: row.kind) }
-    private var path: String { model.filePaths[row.id] ?? root ?? "" }
+    private var path: String { model.filePaths[target.key] ?? root ?? "" }
 
     var body: some View {
         ComputerPanel(title: "Files", action: {
             if root != nil {
                 HStack(spacing: 7) {
                     ActionButton("Upload") { chooseUpload() }
-                    ActionButton("Refresh") { Task { await model.loadFiles(computerId: row.id, path: path) } }
+                    ActionButton("Refresh") { Task { await model.loadFiles(target, path: path) } }
                 }
             }
         }) {
@@ -298,14 +309,14 @@ struct ComputerFilesPanel: View {
                     HStack(spacing: 8) {
                         ActionButton("Up") {
                             if let parent = ComputerFilesPath.parent(of: path, kind: row.kind) {
-                                Task { await model.loadFiles(computerId: row.id, path: parent) }
+                                Task { await model.loadFiles(target, path: parent) }
                             }
                         }
                         .disabled(path == root)
                         Text(path).font(CDS.sans(10).monospaced()).foregroundStyle(CDS.Text.muted).lineLimit(1)
                     }
                     .padding(.bottom, 10)
-                    if let conflict = model.uploadConflict(for: row.id) {
+                    if let conflict = model.uploadConflict(for: target) {
                         VStack(alignment: .leading, spacing: 9) {
                             ComputerNotice(text: "Upload paused. Existing files: \(conflict.names.joined(separator: ", ")).",
                                            tone: .warning)
@@ -323,7 +334,7 @@ struct ComputerFilesPanel: View {
                         }
                         .padding(.bottom, 10)
                     }
-                    if let notice = model.uploadNotice(for: row.id) {
+                    if let notice = model.uploadNotice(for: target) {
                         HStack(spacing: 8) {
                             ComputerNotice(text: notice.message, tone: .warning)
                             ActionButton("Dismiss") { Task { await model.dismissUploadNotice(jobId: notice.jobId) } }
@@ -336,7 +347,7 @@ struct ComputerFilesPanel: View {
                                 Image(systemName: entry.kind == .folder ? "folder" : "doc.text")
                                     .foregroundStyle(CDS.Text.secondary).frame(width: 16)
                                 if entry.kind == .folder {
-                                    Button(entry.name) { Task { await model.loadFiles(computerId: row.id, path: entry.path) } }
+                                    Button(entry.name) { Task { await model.loadFiles(target, path: entry.path) } }
                                         .buttonStyle(.plain).font(CDS.sans(11)).foregroundStyle(CDS.Text.primary)
                                     Spacer()
                                 } else {
@@ -350,7 +361,7 @@ struct ComputerFilesPanel: View {
                         }
                         if let offset = listing.nextOffset {
                             ActionButton("Load more") {
-                                Task { await model.loadFiles(computerId: row.id, path: path, offset: offset,
+                                Task { await model.loadFiles(target, path: path, offset: offset,
                                                              snapshotId: listing.snapshotId) }
                             }
                             .padding(.top, 9)
@@ -371,7 +382,7 @@ struct ComputerFilesPanel: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
-        Task { await model.uploadFiles(computerId: row.id, directory: path,
+        Task { await model.uploadFiles(target, directory: path,
                                        paths: panel.urls.map(\.standardizedFileURL.path)) }
     }
 
@@ -380,13 +391,14 @@ struct ComputerFilesPanel: View {
         panel.nameFieldStringValue = entry.name
         panel.allowedContentTypes = [.data]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await model.downloadFile(computerId: row.id, path: entry.path, destination: url.standardizedFileURL.path) }
+        Task { await model.downloadFile(target, path: entry.path, destination: url.standardizedFileURL.path) }
     }
 
 }
 
 struct ComputerNetworkPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
     @State private var guestPort = "3000"
     @State private var hostPort = ""
@@ -395,8 +407,8 @@ struct ComputerNetworkPanel: View {
     @State private var bindAddress = "127.0.0.1"
     @State private var sshKeys = ""
     @State private var sshEnabled = false
-    private var state: SiloWireNetworkComputer? { model.networkByComputer[row.id] }
-    private var sshState: SiloWireSSHAccessComputer? { model.sshAccessByComputer[row.id] }
+    private var state: SiloWireNetworkComputer? { model.networkByComputer[target.key] }
+    private var sshState: SiloWireSSHAccessComputer? { model.sshAccessByComputer[target.key] }
     private var visiblePorts: [SiloWirePublishedPort] {
         (state?.ports ?? []).filter { !(row.kind == .linux && $0.port == ComputerNetworkPolicy.hiddenDesktopPort) }
     }
@@ -439,12 +451,13 @@ struct ComputerNetworkPanel: View {
                             Spacer()
                             if port.configured {
                                 if port.state == .reachable, port.scheme != nil {
-                                    ActionButton("Open") { Task { await model.openPort(computerId: row.id, port: port.port) } }
+                                    ActionButton("Open") { Task { await model.openPort(target, port: port.port) } }
+                                        .disabled(ComputerRemoteLimit.openPort.unavailableReason(for: target) != nil)
                                 }
-                                ActionButton("Remove") { Task { await model.unpublishPort(computerId: row.id, port: port.port) } }
+                                ActionButton("Remove") { Task { await model.unpublishPort(target, port: port.port) } }
                             } else {
                                 ActionButton("Publish") {
-                                    Task { await model.publishPort(computerId: row.id, port: port.port,
+                                    Task { await model.publishPort(target, port: port.port,
                                                                   hostPort: port.configuredHostPort,
                                                                   scheme: port.scheme ?? selectedNetworkScheme) }
                                 }
@@ -456,6 +469,10 @@ struct ComputerNetworkPanel: View {
                 }
                 Text("Detected services stay private until you publish them. The Linux desktop port stays private behind Open screen.")
                     .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+                if target.deviceId != nil {
+                    Text("\(ComputerRemoteLimit.openPort.reason) \(ComputerRemoteLimit.terminal.reason)")
+                        .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+                }
                 SettingsDivider().padding(.vertical, 3)
                 HStack {
                     Text("SSH access").font(CDS.sans(12, .semibold)).foregroundStyle(CDS.Text.primary)
@@ -486,15 +503,16 @@ struct ComputerNetworkPanel: View {
                         Spacer()
                         if sshState.state == .listening {
                             ActionButton("Open SSH in Terminal") {
-                                Task { await model.openSSHAccessConnection(computerId: row.id) }
+                                Task { await model.openSSHAccessConnection(target) }
                             }
+                            .disabled(ComputerRemoteLimit.terminal.unavailableReason(for: target) != nil)
                         }
                     }
                 }
             }
         }
         .task {
-            await model.loadSSHAccess(computerId: row.id)
+            await model.loadSSHAccess(target)
             if let sshState {
                 sshEnabled = sshState.enabled
                 sshPort = String(sshState.port)
@@ -508,14 +526,14 @@ struct ComputerNetworkPanel: View {
         guard let port = Int(guestPort), (1...65_535).contains(port),
               !(row.kind == .linux && port == ComputerNetworkPolicy.hiddenDesktopPort) else { return }
         let host = hostPort.isEmpty ? nil : Int(hostPort)
-        Task { await model.publishPort(computerId: row.id, port: port, hostPort: host,
+        Task { await model.publishPort(target, port: port, hostPort: host,
                                        scheme: selectedNetworkScheme) }
     }
 
     private func saveSSHAccess() {
         guard let port = Int(sshPort), (1...65_535).contains(port) else { return }
         let keys = sshKeys.split(whereSeparator: \.isNewline).map(String.init)
-        Task { await model.saveSSHAccess(computerId: row.id, enabled: sshEnabled, port: port,
+        Task { await model.saveSSHAccess(target, enabled: sshEnabled, port: port,
                                          bindAddress: bindAddress, keys: keys) }
     }
 
@@ -538,53 +556,55 @@ struct ComputerNetworkPanel: View {
 
 struct ComputerGitHubPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
     @State private var token = ""
-    private var policy: SiloWireGitHubPolicy? { model.githubState?.computers.first { $0.computerId == row.id } }
+    private var state: SiloWireGitHubState? { model.githubState(for: target.deviceId) }
+    private var policy: SiloWireGitHubPolicy? { state?.computers.first { $0.computerId == row.id } }
 
     var body: some View {
         ComputerPanel(title: "GitHub repositories", action: {
-            ActionButton("Refresh repositories") { Task { await model.refreshGitHubRepositories() } }
+            ActionButton("Refresh repositories") { Task { await model.refreshGitHubRepositories(deviceId: target.deviceId) } }
         }) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    SettingsStatusLine(text: model.githubState?.account ?? model.githubState?.state.rawValue.capitalized ?? "Loading GitHub",
-                                       color: model.githubState?.state == .connected ? Theme.green : Theme.amber)
+                    SettingsStatusLine(text: state?.account ?? state?.state.rawValue.capitalized ?? "Loading GitHub",
+                                       color: state?.state == .connected ? Theme.green : Theme.amber)
                     Spacer()
-                    if model.githubState?.state == .connected {
+                    if state?.state == .connected {
                         SettingsSwitch("GitHub access", isOn: Binding(
-                            get: { model.githubState?.accessEnabled ?? false },
-                            set: { newValue in Task { await model.setGitHubAccess(newValue) } }))
-                        ActionButton("Manage repositories") { Task { await model.manageGitHubRepositories() } }
-                        ActionButton("Disconnect") { Task { await model.disconnectGitHub() } }
-                    } else if model.githubState?.pendingAuthorizationUrl != nil {
-                        ActionButton("Reopen sign in") { Task { await model.reopenGitHubAuthorization() } }
-                    } else if model.githubState?.state == .connecting {
+                            get: { state?.accessEnabled ?? false },
+                            set: { newValue in Task { await model.setGitHubAccess(newValue, deviceId: target.deviceId) } }))
+                        ActionButton("Manage repositories") { Task { await model.manageGitHubRepositories(deviceId: target.deviceId) } }
+                        ActionButton("Disconnect") { Task { await model.disconnectGitHub(deviceId: target.deviceId) } }
+                    } else if state?.pendingAuthorizationUrl != nil {
+                        ActionButton("Reopen sign in") { Task { await model.reopenGitHubAuthorization(deviceId: target.deviceId) } }
+                    } else if state?.state == .connecting {
                         ActionButton("Connecting…") { }
                             .disabled(true)
                     } else {
-                        ActionButton("Connect GitHub") { Task { await model.connectGitHub() } }
+                        ActionButton("Connect GitHub") { Task { await model.connectGitHub(deviceId: target.deviceId) } }
                     }
                 }
-                if model.githubState?.state != .connected {
+                if state?.state != .connected {
                     HStack(spacing: 8) {
                         SecureField("GitHub personal token", text: $token).textFieldStyle(.roundedBorder)
-                        ActionButton("Save token") { Task { await model.saveGitHubToken(token); token = "" } }
+                        ActionButton("Save token") { Task { await model.saveGitHubToken(token, deviceId: target.deviceId); token = "" } }
                             .disabled(token.isEmpty)
                     }
-                } else if model.githubState?.personalToken.saved == true {
-                    ActionButton("Remove saved token") { Task { await model.removeGitHubToken() } }
+                } else if state?.personalToken.saved == true {
+                    ActionButton("Remove saved token") { Task { await model.removeGitHubToken(deviceId: target.deviceId) } }
                 }
-                if model.githubState?.repositoryCatalog.isEmpty == true {
-                    SettingsNote(model.githubState?.repositoryCatalogStatus.message ?? "No repositories available")
+                if state?.repositoryCatalog.isEmpty == true {
+                    SettingsNote(state?.repositoryCatalogStatus.message ?? "No repositories available")
                 }
-                ForEach(model.githubState?.repositoryCatalog ?? [], id: \.self) { repository in
+                ForEach(state?.repositoryCatalog ?? [], id: \.self) { repository in
                     let selected = policy?.repositories.contains { $0.repository == repository } ?? false
                     Toggle(repository, isOn: Binding(get: { selected }, set: { on in
                         var selectedRepositories = policy?.repositories.map(\.repository) ?? []
                         if on, !selectedRepositories.contains(repository) { selectedRepositories.append(repository) }
                         if !on { selectedRepositories.removeAll { $0 == repository } }
-                        Task { await model.setGitHubRepositories(computerId: row.id, repositories: selectedRepositories) }
+                        Task { await model.setGitHubRepositories(target, repositories: selectedRepositories) }
                     }))
                     .toggleStyle(.checkbox)
                     .font(CDS.sans(11))
@@ -593,17 +613,17 @@ struct ComputerGitHubPanel: View {
                     Toggle("Allow pushes to selected repositories",
                            isOn: Binding(get: { policy?.repositories.allSatisfy(\.allowPushes) ?? false }, set: { enabled in
                         let repositories = policy?.repositories.map(\.repository) ?? []
-                        Task { await model.setGitHubRepositories(computerId: row.id, repositories: repositories,
+                        Task { await model.setGitHubRepositories(target, repositories: repositories,
                                                                  allowPushes: enabled) }
                     }))
                     .toggleStyle(.checkbox)
                     .font(CDS.sans(11))
                 }
-                if let operation = model.githubState?.computerOperations.first(where: { $0.computerId == row.id }) {
+                if let operation = state?.computerOperations.first(where: { $0.computerId == row.id }) {
                     SettingsStatusLine(text: operation.message,
                                        color: operation.status == .failed ? Theme.red : Theme.amber)
                     if operation.canRetry == true {
-                        ActionButton("Retry apply") { Task { await model.retryGitHubConfiguration(computerId: row.id) } }
+                        ActionButton("Retry apply") { Task { await model.retryGitHubConfiguration(target) } }
                     }
                 }
             }
@@ -613,19 +633,21 @@ struct ComputerGitHubPanel: View {
 
 struct ComputerSecretsPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
     @State private var editorPresentation: SecretEditorPresentation?
     @State private var removingSecret: SiloWireSecret?
     @State private var confirmsRemoval = false
+    private var secrets: [SiloWireSecret] { model.secrets(for: target.deviceId) }
 
     var body: some View {
         ComputerPanel(title: "Secrets", action: {
             ActionButton("Add secret") { editorPresentation = SecretEditorPresentation(id: "add", secret: nil) }
         }) {
-            if model.secrets.isEmpty {
-                SettingsNote("No secrets saved on this Mac.")
+            if secrets.isEmpty {
+                SettingsNote("No secrets saved on \(target.deviceId == nil ? "this Mac" : model.ownerName(target.deviceId)).")
             }
-            ForEach(model.secrets, id: \.id) { secret in
+            ForEach(secrets, id: \.id) { secret in
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 3) {
@@ -639,7 +661,8 @@ struct ComputerSecretsPanel: View {
                             if assigned, !ids.contains(row.id) { ids.append(row.id) }
                             if !assigned { ids.removeAll { $0 == row.id } }
                             Task { await model.saveSecret(id: secret.id, name: secret.name, value: nil, computerIds: ids,
-                                                          allowedDomains: secret.allowedDomains, allowAnyDestination: secret.allowedDomains.contains("*")) }
+                                                          allowedDomains: secret.allowedDomains, allowAnyDestination: secret.allowedDomains.contains("*"),
+                                                          deviceId: target.deviceId) }
                         }))
                         .toggleStyle(.switch)
                         .labelsHidden()
@@ -648,7 +671,7 @@ struct ComputerSecretsPanel: View {
                             editorPresentation = SecretEditorPresentation(id: "edit-\(secret.id)", secret: secret)
                         }
                         if secret.error != nil || secret.removing {
-                            ActionButton("Retry") { Task { await model.retrySecret(id: secret.id) } }
+                            ActionButton("Retry") { Task { await model.retrySecret(id: secret.id, deviceId: target.deviceId) } }
                         }
                         ActionButton("Remove") {
                             removingSecret = secret
@@ -667,11 +690,11 @@ struct ComputerSecretsPanel: View {
                 .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted).padding(.top, 6)
         }
         .sheet(item: $editorPresentation) { presentation in
-            SecretEditorSheet(model: model, computerId: row.id, secret: presentation.secret)
+            SecretEditorSheet(model: model, computerId: row.id, deviceId: target.deviceId, secret: presentation.secret)
         }
         .confirmationDialog("Remove secret?", isPresented: $confirmsRemoval, titleVisibility: .visible) {
             Button("Remove secret", role: .destructive) {
-                if let removingSecret { Task { await model.removeSecret(id: removingSecret.id) } }
+                if let removingSecret { Task { await model.removeSecret(id: removingSecret.id, deviceId: target.deviceId) } }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -688,6 +711,7 @@ private struct SecretEditorPresentation: Identifiable {
 struct SecretEditorSheet: View {
     let model: ComputersModel
     let computerId: String
+    let deviceId: String?
     let secret: SiloWireSecret?
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -728,7 +752,8 @@ struct SecretEditorSheet: View {
             model.actionError = nil
             await model.saveSecret(id: secret?.id, name: name, value: value.isEmpty ? nil : value,
                                    computerIds: Array(Set((secret?.computerIds ?? []) + [computerId])).sorted(),
-                                   allowedDomains: finalDomains, allowAnyDestination: allowAnyDestination)
+                                   allowedDomains: finalDomains, allowAnyDestination: allowAnyDestination,
+                                   deviceId: deviceId)
             if model.actionError == nil { dismiss() }
         }
     }
@@ -750,6 +775,7 @@ struct SecretEditorSheet: View {
 
 struct ComputerActivityPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
     @State private var query = ""
     @State private var source = SiloWireLogSource.all.rawValue
@@ -785,8 +811,8 @@ struct ComputerActivityPanel: View {
             .font(CDS.sans(10, .medium)).foregroundStyle(CDS.Text.secondary)
             Toggle("Follow new output", isOn: $following)
                 .toggleStyle(.switch).font(CDS.sans(10))
-            if model.setupActivity.isEmpty { SettingsNote("No setup activity recorded.") }
-            ForEach(model.setupActivity, id: \.requestId) { item in
+            if model.setupActivity(for: target.deviceId).isEmpty { SettingsNote("No setup activity recorded.") }
+            ForEach(model.setupActivity(for: target.deviceId), id: \.requestId) { item in
                 HStack(alignment: .top, spacing: 8) {
                     Text(item.phase).font(CDS.sans(10, .medium)).foregroundStyle(CDS.Text.secondary)
                     Text(item.message).font(CDS.sans(10)).foregroundStyle(CDS.Text.muted).lineLimit(2)
@@ -795,7 +821,7 @@ struct ComputerActivityPanel: View {
                 .padding(.vertical, 3)
             }
             SettingsDivider().padding(.vertical, 5)
-            if let page = model.logsByComputer[row.id] {
+            if let page = model.logsByComputer[target.key] {
                 if page.unsupported == true { ComputerNotice(text: "This computer owner cannot serve logs.", tone: .warning) }
                 if page.unreadableRecords == true { ComputerNotice(text: "Some log records could not be read.", tone: .warning) }
                 ForEach(page.entries, id: \.id) { entry in
@@ -817,7 +843,7 @@ struct ComputerActivityPanel: View {
                     .font(CDS.sans(9)).foregroundStyle(CDS.Text.muted)
                 if let cursor = page.nextCursor {
                     ActionButton("Load more logs") {
-                        Task { await model.loadLogs(computerId: row.id, query: query.isEmpty ? nil : query,
+                        Task { await model.loadLogs(target, query: query.isEmpty ? nil : query,
                                                     cursor: cursor, source: selectedSource,
                                                     since: optional(since), until: optional(until), aroundId: optional(aroundId)) }
                     }
@@ -833,12 +859,12 @@ struct ComputerActivityPanel: View {
         }
         .task(id: following) {
             guard following else { return }
-            if model.logsByComputer[row.id]?.snapshot == nil { await loadCurrentSearch() }
+            if model.logsByComputer[target.key]?.snapshot == nil { await loadCurrentSearch() }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) }
                 catch { return }
-                guard let snapshot = model.logsByComputer[row.id]?.snapshot else { continue }
-                await model.loadLogs(computerId: row.id, query: query.isEmpty ? nil : query,
+                guard let snapshot = model.logsByComputer[target.key]?.snapshot else { continue }
+                await model.loadLogs(target, query: query.isEmpty ? nil : query,
                                      source: selectedSource, since: optional(since), until: optional(until),
                                      aroundId: optional(aroundId), follow: snapshot)
             }
@@ -850,7 +876,7 @@ struct ComputerActivityPanel: View {
         panel.nameFieldStringValue = "\(row.name)-logs.jsonl"
         panel.allowedContentTypes = [UTType(filenameExtension: "jsonl") ?? .json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await model.exportLogs(computerId: row.id, destination: url.path,
+        Task { await model.exportLogs(target, destination: url.path,
                                       query: query.isEmpty ? nil : query, source: selectedSource,
                                       since: optional(since), until: optional(until), aroundId: optional(aroundId)) }
     }
@@ -861,7 +887,7 @@ struct ComputerActivityPanel: View {
     }
 
     private func loadCurrentSearch() async {
-        await model.loadLogs(computerId: row.id, query: query.isEmpty ? nil : query, source: selectedSource,
+        await model.loadLogs(target, query: query.isEmpty ? nil : query, source: selectedSource,
                              since: optional(since), until: optional(until), aroundId: optional(aroundId))
     }
 
@@ -875,12 +901,13 @@ struct ComputerActivityPanel: View {
 
 struct ComputerStoragePanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
-    private var storage: SiloWireStorageState? { model.storageByComputer[row.id] }
+    private var storage: SiloWireStorageState? { model.storageByComputer[target.key] }
 
     var body: some View {
         ComputerPanel(title: "Storage", action: {
-            ActionButton("Reclaim storage") { Task { await model.reclaimStorage(computerId: row.id) } }
+            ActionButton("Reclaim storage") { Task { await model.reclaimStorage(target) } }
         }) {
             if let storage {
                 metric("Workspace used", storage.workspaceUsedBytes)
@@ -937,25 +964,35 @@ struct ComputerStoragePanel: View {
 
 struct ComputerExportPanel: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
     @State private var newName = ""
     @State private var archivePath: String? = nil
     @State private var sourceName = ""
     @State private var operationToDismiss: SiloWireOperationClass?
     @State private var confirmsDismiss = false
+    private var state: SiloWireBackupState? { model.exportState(for: target.deviceId) }
+    /// Folders and archives are paths on the Mac that owns the computer, which this Mac's file panels cannot browse.
+    private var isRemote: Bool { target.deviceId != nil }
+    private var ownerName: String { model.ownerName(target.deviceId) }
 
     var body: some View {
         ComputerPanel(title: "Export and import", action: {
             HStack(spacing: 7) {
                 ActionButton("Choose export folder") { chooseFolder() }
-                ActionButton("Export computer") { Task { await model.exportComputer(computerId: row.id) } }
-                    .disabled(model.exportState?.destination == nil || model.exportState?.availability != .available)
+                    .disabled(isRemote)
+                ActionButton("Export computer") { Task { await model.exportComputer(target) } }
+                    .disabled(state?.destination == nil || state?.availability != .available)
             }
         }) {
-            Text(model.exportState?.destination ?? "Choose a destination on this Mac.")
+            Text(state?.destination ?? (isRemote ? "No export folder is set on \(ownerName)." : "Choose a destination on this Mac."))
                 .font(CDS.sans(10).monospaced()).foregroundStyle(CDS.Text.muted).lineLimit(2)
+            if isRemote {
+                SettingsNote("The export folder and archives are on \(ownerName). Choose the folder in Silo there; Fjord exports to it.")
+            }
             HStack(spacing: 8) {
                 ActionButton("Choose archive") { chooseArchive() }
+                    .disabled(isRemote)
                 Text(archivePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No archive selected")
                     .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted).lineLimit(1)
             }
@@ -978,8 +1015,8 @@ struct ComputerExportPanel: View {
                     ComputerNotice(text: inspection.reason ?? "This archive cannot be imported.", tone: .warning)
                 }
             }
-            if let message = model.exportState?.availabilityMessage { ComputerNotice(text: message, tone: .warning) }
-            if let operation = model.exportState?.operation {
+            if let message = state?.availabilityMessage { ComputerNotice(text: message, tone: .warning) }
+            if let operation = state?.operation {
                 VStack(alignment: .leading, spacing: 7) {
                     Text(operation.title ?? (operation.kind == .running ? "Export/import in progress" : "Export/import result"))
                         .font(CDS.sans(11, .medium)).foregroundStyle(CDS.Text.primary)
@@ -997,8 +1034,8 @@ struct ComputerExportPanel: View {
                             ComputerNotice(text: operation.message ?? "The export or import was cancelled.", tone: .warning)
                         }
                         HStack(spacing: 8) {
-                            if model.exportState?.resultUnseen == true {
-                                ActionButton("Mark as seen") { Task { await model.acknowledgeExportResult() } }
+                            if state?.resultUnseen == true {
+                                ActionButton("Mark as seen") { Task { await model.acknowledgeExportResult(deviceId: target.deviceId) } }
                             }
                             ActionButton("Dismiss result") {
                                 operationToDismiss = operation
@@ -1008,7 +1045,7 @@ struct ComputerExportPanel: View {
                     }
                 }
             }
-            if let archives = model.exportState?.archives, !archives.isEmpty {
+            if let archives = state?.archives, !archives.isEmpty {
                 SettingsDivider().padding(.vertical, 6)
                 Text("Recent archives").font(CDS.sans(10, .medium)).foregroundStyle(CDS.Text.secondary)
                 ForEach(archives, id: \.archivePath) { archive in
@@ -1019,8 +1056,10 @@ struct ComputerExportPanel: View {
                                 .font(CDS.sans(9)).foregroundStyle(CDS.Text.muted).lineLimit(1)
                         }
                         Spacer()
-                        ActionButton("Show in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: archive.archivePath)])
+                        if !isRemote {
+                            ActionButton("Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: archive.archivePath)])
+                            }
                         }
                     }
                 }
@@ -1029,7 +1068,7 @@ struct ComputerExportPanel: View {
         .confirmationDialog("Dismiss this export or import result?", isPresented: $confirmsDismiss,
                             titleVisibility: .visible) {
             Button("Dismiss result", role: .destructive) {
-                if let operationToDismiss { Task { await model.dismissExportOperation(operationToDismiss) } }
+                if let operationToDismiss { Task { await model.dismissExportOperation(operationToDismiss, deviceId: target.deviceId) } }
                 operationToDismiss = nil
             }
             Button("Cancel", role: .cancel) { operationToDismiss = nil }
@@ -1046,7 +1085,7 @@ struct ComputerExportPanel: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await model.setExportDestination(url.standardizedFileURL.path) }
+        Task { await model.setExportDestination(url.standardizedFileURL.path, deviceId: target.deviceId) }
     }
 
     private func chooseArchive() {
@@ -1059,17 +1098,17 @@ struct ComputerExportPanel: View {
         archivePath = url.standardizedFileURL.path
         model.archiveInspection = nil
         Task {
-            await model.inspectExportArchive(path: url.standardizedFileURL.path)
+            await model.inspectExportArchive(path: url.standardizedFileURL.path, deviceId: target.deviceId)
             guard let inspection = model.archiveInspection, inspection.valid else { return }
             sourceName = inspection.archive.computers.first ?? ""
             let base = sourceName.isEmpty ? "imported-computer" : sourceName
-            newName = ComputerName.unique(base, among: model.inventory?.allComputers.map(\.name) ?? [])
+            newName = ComputerName.unique(base, among: model.inventory(for: target.deviceId)?.allComputers.map(\.name) ?? [])
         }
     }
 
     private func importArchive() {
         guard let archivePath, let inspection = model.archiveInspection, inspection.valid,
               inspection.archive.computers.contains(sourceName), ComputerName.isValid(newName) else { return }
-        Task { await model.importComputer(archivePath: archivePath, newName: newName, sourceName: sourceName) }
+        Task { await model.importComputer(archivePath: archivePath, newName: newName, sourceName: sourceName, deviceId: target.deviceId) }
     }
 }

@@ -96,7 +96,7 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         try await model.connect()
 
-        await model.updateResources(for: MockEngineClient.linuxID, cpus: 3, memoryGiB: 10)
+        await model.updateResources(for: .thisMac(MockEngineClient.linuxID), cpus: 3, memoryGiB: 10)
 
         #expect(client.stopRequests == [MockEngineClient.linuxID])
         #expect(client.inventory.computer(MockEngineClient.linuxID)?.resources == "3 CPU · 10 GB memory")
@@ -116,7 +116,7 @@ import Testing
         competingConfiguration.memoryGiB = 12
         competingInventory.linux.computers[index].configuration = competingConfiguration
 
-        let edit = Task { await model.updateResources(for: computerID, cpus: 3, memoryGiB: 10) }
+        let edit = Task { await model.updateResources(for: .thisMac(computerID), cpus: 3, memoryGiB: 10) }
         await waitUntil { client.stopRequests == [computerID] }
         client.replaceInventory(competingInventory)
         await edit.value
@@ -131,9 +131,9 @@ import Testing
         client.suspendNextViewerOpen = true
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        let firstOpen = Task { await model.openScreen(for: MockEngineClient.linuxID) }
+        let firstOpen = Task { await model.openScreen(for: .thisMac(MockEngineClient.linuxID)) }
         await client.waitForSuspendedViewerOpen()
-        let secondOpen = Task { await model.openScreen(for: MockEngineClient.linuxID) }
+        let secondOpen = Task { await model.openScreen(for: .thisMac(MockEngineClient.linuxID)) }
         client.resumeSuspendedViewerOpen()
         await firstOpen.value
         await secondOpen.value
@@ -154,7 +154,7 @@ import Testing
         client.suspendNextViewerOpen = true
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        let opening = Task { await model.openScreen(for: MockEngineClient.linuxID) }
+        let opening = Task { await model.openScreen(for: .thisMac(MockEngineClient.linuxID)) }
         await client.waitForSuspendedViewerOpen()
         await model.closeScreen()
         client.resumeSuspendedViewerOpen()
@@ -190,7 +190,7 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: inventory)
         let before = try #require(inventory.macos.computers.first { $0.id == MockEngineClient.devID })
 
-        await model.updateResources(for: MockEngineClient.devID, cpus: 6, memoryGiB: 20)
+        await model.updateResources(for: .thisMac(MockEngineClient.devID), cpus: 6, memoryGiB: 20)
 
         #expect(model.actionError == nil)
         #expect(client.generatedCalls.contains("computers.configuration.change"))
@@ -241,7 +241,7 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         try await model.connect()
 
-        await model.start(MockEngineClient.failedID)
+        await model.start(.thisMac(MockEngineClient.failedID))
 
         #expect(model.actionError == "Start failed: Too many computers are running at once. Stop one, then try again.")
         #expect(model.currentJobReceipt?.message.contains("Too many computers") == true)
@@ -294,23 +294,23 @@ import Testing
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        await model.publishPort(computerId: MockEngineClient.linuxID, port: ComputerNetworkPolicy.hiddenDesktopPort)
+        await model.publishPort(.thisMac(MockEngineClient.linuxID), port: ComputerNetworkPolicy.hiddenDesktopPort)
         #expect(!client.generatedCalls.contains("network.publish"))
         #expect(model.actionError?.contains("stays private") == true)
 
-        await model.publishPort(computerId: "missing-computer", port: ComputerNetworkPolicy.hiddenDesktopPort)
+        await model.publishPort(.thisMac("missing-computer"), port: ComputerNetworkPolicy.hiddenDesktopPort)
         #expect(!client.generatedCalls.contains("network.publish"))
         #expect(model.actionError?.contains("no longer available") == true)
 
         await model.saveSecret(id: nil, name: "BUILD_TOKEN", value: "secret-value",
                                computerIds: [MockEngineClient.linuxID], allowedDomains: ["*"],
-                               allowAnyDestination: false)
+                               allowAnyDestination: false, deviceId: nil)
         #expect(!client.generatedCalls.contains("secrets.save"))
         #expect(model.actionError?.contains("lowercase destination hosts") == true)
 
         await model.saveSecret(id: nil, name: "BUILD_TOKEN", value: "secret-value",
                                computerIds: [MockEngineClient.linuxID], allowedDomains: ["*"],
-                               allowAnyDestination: true)
+                               allowAnyDestination: true, deviceId: nil)
         #expect(client.generatedCalls.contains("secrets.save"))
         #expect(model.actionError == nil)
     }
@@ -318,15 +318,15 @@ import Testing
     @Test func repositoryPolicyAndComputerUseApprovalUseGeneratedMethods() async {
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
-        await model.loadGitHubState()
+        await model.loadGitHubState(deviceId: nil)
 
-        await model.setGitHubRepositories(computerId: MockEngineClient.devID,
+        await model.setGitHubRepositories(.thisMac(MockEngineClient.devID),
                                           repositories: ["fjord/lookout"], allowPushes: true)
-        await model.setComputerUseApproval(computerId: MockEngineClient.devID, automatic: true)
+        await model.setComputerUseApproval(.thisMac(MockEngineClient.devID), automatic: true)
 
         #expect(model.githubState?.computers.first { $0.computerId == MockEngineClient.devID }?.repositories
             == [SiloWireGitHubRepositoryPolicy(allowPushes: true, repository: "fjord/lookout")])
-        #expect(model.computerUseByComputer[MockEngineClient.devID]?.approval == .auto)
+        #expect(model.computerUseByComputer[GuestReference.thisMac(MockEngineClient.devID).key]?.approval == .auto)
         #expect(client.generatedCalls.contains("github.configuration.save"))
         #expect(client.generatedCalls.contains("computerUse.approval"))
     }
@@ -335,7 +335,7 @@ import Testing
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        await model.inspectExportArchive(path: "/tmp/demo.silo-backup")
+        await model.inspectExportArchive(path: "/tmp/demo.silo-backup", deviceId: nil)
 
         #expect(model.archiveInspection?.valid == true)
         #expect(model.archiveInspection?.archive.computers == ["linux-1"])
@@ -348,11 +348,11 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         try await model.connect()
 
-        await model.setExportDestination("/tmp/fjord-exports")
-        await model.exportComputer(computerId: MockEngineClient.linuxID)
+        await model.setExportDestination("/tmp/fjord-exports", deviceId: nil)
+        await model.exportComputer(.thisMac(MockEngineClient.linuxID))
         let archive = try #require(model.exportState?.archives.first)
-        await model.inspectExportArchive(path: archive.archivePath)
-        await model.importComputer(archivePath: archive.archivePath, newName: "linux-copy", sourceName: "linux-1")
+        await model.inspectExportArchive(path: archive.archivePath, deviceId: nil)
+        await model.importComputer(archivePath: archive.archivePath, newName: "linux-copy", sourceName: "linux-1", deviceId: nil)
 
         #expect(model.exportState?.destination == "/tmp/fjord-exports")
         #expect(model.inventory?.allComputers.contains { $0.name == "linux-copy" } == true)
@@ -373,17 +373,17 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         try await model.connect()
 
-        await model.setExportDestination("/tmp/fjord-exports")
-        await model.exportComputer(computerId: MockEngineClient.linuxID)
+        await model.setExportDestination("/tmp/fjord-exports", deviceId: nil)
+        await model.exportComputer(.thisMac(MockEngineClient.linuxID))
         let result = try #require(model.exportState?.operation)
         #expect(result.kind == .result)
         #expect(model.exportState?.resultUnseen == true)
 
-        await model.acknowledgeExportResult()
+        await model.acknowledgeExportResult(deviceId: nil)
         #expect(model.exportState?.resultUnseen == false)
         #expect(client.generatedCalls.contains("exports.acknowledge"))
 
-        await model.dismissExportOperation(result)
+        await model.dismissExportOperation(result, deviceId: nil)
         #expect(model.exportState?.operation == nil)
         #expect(client.generatedCalls.contains("exports.dismiss"))
         #expect(model.actionError == nil)
@@ -393,11 +393,11 @@ import Testing
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        await model.loadFiles(computerId: MockEngineClient.linuxID)
-        await model.uploadFiles(computerId: MockEngineClient.linuxID, directory: "/workspace", paths: ["/tmp/notes.txt"])
-        await model.downloadFile(computerId: MockEngineClient.linuxID, path: "/workspace/notes.txt", destination: "/tmp/notes-copy.txt")
+        await model.loadFiles(.thisMac(MockEngineClient.linuxID))
+        await model.uploadFiles(.thisMac(MockEngineClient.linuxID), directory: "/workspace", paths: ["/tmp/notes.txt"])
+        await model.downloadFile(.thisMac(MockEngineClient.linuxID), path: "/workspace/notes.txt", destination: "/tmp/notes-copy.txt")
 
-        #expect(model.fileLists[MockEngineClient.linuxID]?.entries.contains { $0.name == "notes.txt" } == true)
+        #expect(model.fileLists[GuestReference.thisMac(MockEngineClient.linuxID).key]?.entries.contains { $0.name == "notes.txt" } == true)
         #expect(client.generatedCalls.contains("files.list"))
         #expect(client.generatedCalls.contains("files.upload"))
         #expect(client.generatedCalls.contains("files.download"))
@@ -418,15 +418,15 @@ import Testing
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        await model.loadLogs(computerId: MockEngineClient.linuxID, query: "ready", source: .runtime,
+        await model.loadLogs(.thisMac(MockEngineClient.linuxID), query: "ready", source: .runtime,
                              since: "2026-10-01T00:00:00Z", until: "2026-10-14T00:00:00Z", aroundId: "anchor")
-        await model.loadLogs(computerId: MockEngineClient.linuxID, query: "ready", source: .runtime,
+        await model.loadLogs(.thisMac(MockEngineClient.linuxID), query: "ready", source: .runtime,
                              since: "2026-10-01T00:00:00Z", until: "2026-10-14T00:00:00Z", aroundId: "anchor",
                              follow: "mock-log-snapshot-1")
 
         #expect(client.logFollowRequests == [nil, "mock-log-snapshot-1"])
-        #expect(model.logsByComputer[MockEngineClient.linuxID]?.entries.map(\.line) == ["Computer ready", "New output"])
-        #expect(model.logsByComputer[MockEngineClient.linuxID]?.snapshot == "mock-log-snapshot-2")
+        #expect(model.logsByComputer[GuestReference.thisMac(MockEngineClient.linuxID).key]?.entries.map(\.line) == ["Computer ready", "New output"])
+        #expect(model.logsByComputer[GuestReference.thisMac(MockEngineClient.linuxID).key]?.snapshot == "mock-log-snapshot-2")
     }
 
     @Test func normalQuitSkipsComputerInspectionWhenComputersAreOffOrEngineIsAbsent() {
@@ -485,7 +485,7 @@ import Testing
             #expect(error.localizedDescription.contains("expected configuration"))
         }
 
-        await model.delete(MockEngineClient.failedID)
+        await model.delete(.thisMac(MockEngineClient.failedID))
         #expect(client.deleteRequests.last?.expected == configuration)
         #expect(model.actionError == nil)
     }
@@ -497,7 +497,7 @@ import Testing
         model.prepareComputerRemoval = { _ in steps.append("cleanup") }
         model.computerRemovalCompleted = { _ in steps.append("removed") }
 
-        await model.delete(MockEngineClient.failedID)
+        await model.delete(.thisMac(MockEngineClient.failedID))
 
         #expect(steps == ["cleanup", "removed"])
         #expect(client.deleteRequests.count == 1)
@@ -510,7 +510,7 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         try await model.connect()
 
-        await model.start(MockEngineClient.failedID)
+        await model.start(.thisMac(MockEngineClient.failedID))
 
         #expect(model.actionError == "Start failed: disk image could not be opened")
         let jobId = try #require(model.jobAwaitingAcknowledgement)
@@ -592,7 +592,7 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         try await model.connect()
 
-        await model.start(MockEngineClient.failedID)
+        await model.start(.thisMac(MockEngineClient.failedID))
 
         #expect(client.jobGetCallCount > 1)
         #expect(model.actionError == "Start failed: completion event was lost")
@@ -612,7 +612,7 @@ import Testing
 
         #expect(model.operationQueue.waiting == [entry])
         #expect(model.activeJob?.jobId != entry.jobId)
-        await model.cancelJob("job:queued-macos")
+        await model.cancelJob("job:queued-macos", deviceId: nil)
 
         #expect(client.cancelRequests == ["job:queued-macos"])
         #expect(model.operationQueue.waiting.isEmpty)
@@ -662,11 +662,11 @@ import Testing
             #expect(error.localizedDescription.contains("already exists"))
         }
 
-        await model.createCheckpoint(for: MockEngineClient.linuxID)
+        await model.createCheckpoint(for: .thisMac(MockEngineClient.linuxID))
         let checkpointID = try #require(model.inventory?.computer(MockEngineClient.linuxID)?.checkpoints.first?.id)
         let longName = String(repeating: "x", count: ComputerName.maximumLength)
-        await model.forkCheckpoint(checkpointID, computerId: MockEngineClient.linuxID, computerName: longName)
-        await model.forkCheckpoint(checkpointID, computerId: MockEngineClient.linuxID, computerName: longName)
+        await model.forkCheckpoint(checkpointID, on: .thisMac(MockEngineClient.linuxID), computerName: longName)
+        await model.forkCheckpoint(checkpointID, on: .thisMac(MockEngineClient.linuxID), computerName: longName)
 
         let forkNames = client.forkRequests.map(\.newName)
         #expect(forkNames.count == 2)
@@ -682,26 +682,26 @@ import Testing
         try await model.connect()
         let linuxID = MockEngineClient.failedID
 
-        await model.createCheckpoint(for: linuxID)
+        await model.createCheckpoint(for: .thisMac(linuxID))
         var checkpoints = try #require(model.inventory?.computer(linuxID)?.checkpoints)
         #expect(checkpoints.count == 1)
         let checkpointID = try #require(checkpoints.first?.id)
-        #expect(model.checkpointUsage[linuxID]?.checkpoints.map(\.id) == [checkpointID])
+        #expect(model.checkpointUsage[GuestReference.thisMac(linuxID).key]?.checkpoints.map(\.id) == [checkpointID])
 
-        await model.restoreCheckpoint(checkpointID, computerId: linuxID)
+        await model.restoreCheckpoint(checkpointID, on: .thisMac(linuxID))
         guard case .linux(let restored)? = model.inventory?.computer(linuxID) else {
             Issue.record("The Linux computer should remain in the inventory after restore.")
             return
         }
         #expect(restored.pendingCheckpointRestore?.checkpointId == checkpointID)
 
-        await model.forkCheckpoint(checkpointID, computerId: linuxID, computerName: "linux-source")
+        await model.forkCheckpoint(checkpointID, on: .thisMac(linuxID), computerName: "linux-source")
         #expect(model.inventory?.allComputers.contains(where: { $0.name == "linux-source-fork" }) == true)
 
-        await model.deleteCheckpoint(checkpointID, computerId: linuxID)
+        await model.deleteCheckpoint(checkpointID, on: .thisMac(linuxID))
         checkpoints = try #require(model.inventory?.computer(linuxID)?.checkpoints)
         #expect(checkpoints.isEmpty)
-        #expect(model.checkpointUsage[linuxID]?.checkpoints.isEmpty == true)
+        #expect(model.checkpointUsage[GuestReference.thisMac(linuxID).key]?.checkpoints.isEmpty == true)
         #expect(client.checkpointListCallCount == 0)
     }
 

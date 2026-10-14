@@ -222,16 +222,21 @@ enum PalettePlacesSource {
 
     private static func computers(_ context: PaletteContext) -> [PaletteItem] {
         let store = context.store
-        guard store.computersOn && store.computersEngineReady, let inventory = store.computers.inventory else { return [] }
-        return inventory.allComputers.map { row in
-            let state = row.displayState
-            return PaletteItem(
-                id: "computer:" + row.id, kind: .computer, title: row.name, subtitle: "\(row.kind.title) · \(state.title)",
-                keywords: ["computer", "machine", "vm", row.kind.title, state.title],
-                icon: .symbol(Tool.computers.symbol), dot: state == .running ? .running : nil, weight: 1,
-                actions: [PaletteAction(id: "show", title: "Show", symbol: Tool.computers.symbol) {
-                    context.go(.computerDetail(row.id))
-                }])
+        guard store.computersOn && store.computersEngineReady, store.computers.inventory != nil else { return [] }
+        return store.computers.ownerGroups.flatMap { group in
+            group.inventory.allComputers.map { row in
+                let state = row.displayState
+                let target = GuestReference(deviceId: group.deviceId, computerId: row.id)
+                let owner = group.deviceId == nil ? "" : " · \(group.name)"
+                return PaletteItem(
+                    id: "computer:" + target.key, kind: .computer, title: row.name,
+                    subtitle: "\(row.kind.title) · \(state.title)\(owner)",
+                    keywords: ["computer", "machine", "vm", row.kind.title, state.title] + (group.deviceId == nil ? [] : [group.name]),
+                    icon: .symbol(Tool.computers.symbol), dot: state == .running ? .running : nil, weight: 1,
+                    actions: [PaletteAction(id: "show", title: "Show", symbol: Tool.computers.symbol) {
+                        context.go(.computerDetail(target))
+                    }])
+            }
         }
     }
 

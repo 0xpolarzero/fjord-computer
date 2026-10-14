@@ -18,17 +18,23 @@ struct ComputersView: View {
     }
 
     private var computersPage: some View {
-        let rows = model.inventory?.allComputers ?? []
-        return AppPage(title: "Computers", subtitle: rows.isEmpty ? "" : plural(rows.count, "computer"), leadingInset: leadingInset,
+        let groups = model.ownerGroups
+        let count = groups.reduce(0) { $0 + $1.inventory.allComputers.count }
+        return AppPage(title: "Computers", subtitle: count == 0 ? "" : plural(count, "computer"), leadingInset: leadingInset,
                 column: (880, 20)) {
             Menu {
-                Button("Linux computer") {
-                    model.createSheetKind = .linux
-                    model.isCreatePresented = true
-                }
-                Button("macOS computer") {
-                    model.createSheetKind = .macos
-                    model.isCreatePresented = true
+                ForEach(groups) { group in
+                    if groups.count > 1 { Text(group.name) }
+                    Button(groups.count > 1 ? "Linux computer on \(group.name)" : "Linux computer") {
+                        model.createSheetKind = .linux
+                        model.createDeviceId = group.deviceId
+                        model.isCreatePresented = true
+                    }
+                    Button(groups.count > 1 ? "macOS computer on \(group.name)" : "macOS computer") {
+                        model.createSheetKind = .macos
+                        model.createDeviceId = group.deviceId
+                        model.isCreatePresented = true
+                    }
                 }
             } label: {
                 Image(systemName: "plus")
@@ -50,24 +56,34 @@ struct ComputersView: View {
                     }
                     if let error = model.actionError { ComputerNotice(text: error, tone: .danger) }
                     ComputerOperationQueue(model: model)
-                    if let job = model.activeJob { ComputerJobCard(job: job, inventory: model.inventory) }
+                    if let job = model.activeJob {
+                        ComputerJobCard(job: job, inventory: model.inventory(for: model.activeJobDeviceId),
+                                        ownerName: model.activeJobDeviceId.map { model.ownerName($0) })
+                    }
                     if model.isLoading && model.inventory == nil {
                         ProgressView().frame(maxWidth: .infinity).padding(.vertical, 44)
-                    } else if rows.isEmpty {
+                    } else if count == 0 && model.unreachableOwners.isEmpty {
                         ComputerEmptyState()
+                    } else if groups.count == 1 && model.unreachableOwners.isEmpty {
+                        ComputerRowList(rows: groups[0].inventory.allComputers, deviceId: nil, navigator: navigator)
                     } else {
-                        VStack(spacing: 1) {
-                            ForEach(rows) { row in
-                                Button { navigator.go(.computerDetail(row.id)) } label: {
-                                    ComputerListRow(row: row)
+                        ForEach(groups) { group in
+                            VStack(alignment: .leading, spacing: 8) {
+                                ComputerOwnerHeader(name: group.name, count: group.inventory.allComputers.count,
+                                                    isThisMac: group.deviceId == nil)
+                                if group.inventory.allComputers.isEmpty {
+                                    SettingsNote("No computers on \(group.name) yet.")
+                                } else {
+                                    ComputerRowList(rows: group.inventory.allComputers, deviceId: group.deviceId, navigator: navigator)
                                 }
-                                .buttonStyle(.plain)
-                                if row.id != rows.last?.id { Rectangle().fill(CDS.Settings.divider).frame(height: 1) }
                             }
                         }
-                        .padding(.horizontal, 14)
-                        .background(CDS.Surface.s2, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
+                        ForEach(model.unreachableOwners) { failure in
+                            VStack(alignment: .leading, spacing: 8) {
+                                ComputerOwnerHeader(name: failure.device.name, count: nil, isThisMac: false)
+                                ComputerNotice(text: "Couldn't load its computers. \(failure.message)", tone: .warning)
+                            }
+                        }
                     }
                 }
                 .frame(maxWidth: 880)
@@ -82,6 +98,48 @@ struct ComputersView: View {
                 ComputerCreationSheet(store: store, kind: kind)
             }
         }
+    }
+}
+
+/// A device's name above its computers, on the Computers page once another Mac is connected.
+private struct ComputerOwnerHeader: View {
+    let name: String
+    let count: Int?
+    let isThisMac: Bool
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: isThisMac ? "laptopcomputer" : "network")
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(CDS.Text.muted)
+            Text(name).font(CDS.sans(12, .semibold)).foregroundStyle(CDS.Text.secondary)
+            if let count {
+                Text(plural(count, "computer")).font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
+            }
+            Spacer()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+private struct ComputerRowList: View {
+    let rows: [ComputerRow]
+    let deviceId: String?
+    let navigator: AppNavigator
+
+    var body: some View {
+        VStack(spacing: 1) {
+            ForEach(rows) { row in
+                Button { navigator.go(.computerDetail(GuestReference(deviceId: deviceId, computerId: row.id))) } label: {
+                    ComputerListRow(row: row)
+                }
+                .buttonStyle(.plain)
+                if row.id != rows.last?.id { Rectangle().fill(CDS.Settings.divider).frame(height: 1) }
+            }
+        }
+        .padding(.horizontal, 14)
+        .background(CDS.Surface.s2, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(CDS.border, lineWidth: 1))
     }
 }
 
@@ -132,13 +190,16 @@ private struct EngineEnablePage: View {
 struct ComputerDetailView: View {
     let store: Store
     let navigator: AppNavigator
-    let computerId: String
+    let target: GuestReference
     var leadingInset: CGFloat = 0
     private var model: ComputersModel { store.computers }
-    private var row: ComputerRow? { model.inventory?.computer(computerId) }
+    private var row: ComputerRow? { model.row(target) }
+    private var subtitle: String {
+        [row?.kind.title, target.deviceId.map { "On \(model.ownerName($0))" }].compactMap { $0 }.joined(separator: " · ")
+    }
 
     var body: some View {
-        AppPage(title: row?.name ?? "Computer", subtitle: row?.kind.title ?? "", leadingInset: leadingInset,
+        AppPage(title: row?.name ?? "Computer", subtitle: subtitle, leadingInset: leadingInset,
                 column: (880, 20)) {
             Button { back() } label: {
                 Image(systemName: "chevron.left")
@@ -162,29 +223,30 @@ struct ComputerDetailView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        ComputerOperationQueue(model: model, computerId: row.id)
-                        if let job = model.activeJob, job.computerId == row.id {
-                            ComputerJobCard(job: job, inventory: model.inventory)
+                        ComputerOperationQueue(model: model, target: target)
+                        if let job = model.activeJob, model.activeJobDeviceId == target.deviceId,
+                           (job.computerId ?? job.data.presentationComputerId) == row.id {
+                            ComputerJobCard(job: job, inventory: model.inventory(for: target.deviceId), ownerName: nil)
                         }
                         switch model.selectedDetailSection {
                         case .overview:
-                            ComputerOverview(row: row, model: model)
-                            ComputerAgentToolsPanel(row: row, model: model)
-                            ComputerResourcesPanel(row: row, model: model)
-                            ComputerCheckpointSection(row: row, model: model)
-                            ComputerUsePanel(row: row, model: model)
+                            ComputerOverview(row: row, target: target, model: model)
+                            ComputerAgentToolsPanel(row: row, target: target, model: model)
+                            ComputerResourcesPanel(row: row, target: target, model: model)
+                            ComputerCheckpointSection(row: row, target: target, model: model)
+                            ComputerUsePanel(row: row, target: target, model: model)
                         case .files:
-                            ComputerFilesPanel(row: row, model: model)
+                            ComputerFilesPanel(row: row, target: target, model: model)
                         case .network:
-                            ComputerNetworkPanel(row: row, model: model)
+                            ComputerNetworkPanel(row: row, target: target, model: model)
                         case .access:
-                            ComputerGitHubPanel(row: row, model: model)
-                            ComputerSecretsPanel(row: row, model: model)
+                            ComputerGitHubPanel(row: row, target: target, model: model)
+                            ComputerSecretsPanel(row: row, target: target, model: model)
                         case .activity:
-                            ComputerActivityPanel(row: row, model: model)
+                            ComputerActivityPanel(row: row, target: target, model: model)
                         case .storage:
-                            ComputerStoragePanel(row: row, model: model)
-                            ComputerExportPanel(row: row, model: model)
+                            ComputerStoragePanel(row: row, target: target, model: model)
+                            ComputerExportPanel(row: row, target: target, model: model)
                         }
                     } else if model.isLoading {
                         ProgressView().frame(maxWidth: .infinity).padding(.vertical, 44)
@@ -199,29 +261,29 @@ struct ComputerDetailView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.never)
-            .task(id: "\(computerId)-\(model.selectedDetailSection.rawValue)-\(model.inventory?.computer(computerId)?.displayState == .running)") {
+            .task(id: "\(target.key)-\(model.selectedDetailSection.rawValue)-\(model.row(target)?.displayState == .running)") {
                 switch model.selectedDetailSection {
                 case .overview:
-                    await model.loadComputerUse(computerId: computerId)
-                    if model.inventory?.computer(computerId)?.displayState == .running {
-                        await model.loadAgentTools(GuestReference.thisMac(computerId))
+                    await model.loadComputerUse(target)
+                    if model.row(target)?.displayState == .running {
+                        await model.loadAgentTools(target)
                     }
-                    await model.loadCheckpointUsage(computerId: computerId)
+                    await model.loadCheckpointUsage(target)
                 case .files:
-                    await model.loadFiles(computerId: computerId)
+                    await model.loadFiles(target)
                 case .network:
-                    await model.loadNetwork(computerId: computerId)
-                    await model.loadSSHAccess(computerId: computerId)
+                    await model.loadNetwork(target)
+                    await model.loadSSHAccess(target)
                 case .access:
-                    await model.loadGitHubState()
-                    await model.loadSecrets()
-                    await model.loadComputerUse(computerId: computerId)
+                    await model.loadGitHubState(deviceId: target.deviceId)
+                    await model.loadSecrets(deviceId: target.deviceId)
+                    await model.loadComputerUse(target)
                 case .activity:
-                    await model.loadSetupActivity()
-                    await model.loadLogs(computerId: computerId)
+                    await model.loadSetupActivity(deviceId: target.deviceId)
+                    await model.loadLogs(target)
                 case .storage:
-                    await model.loadStorage(computerId: computerId)
-                    await model.loadExportState()
+                    await model.loadStorage(target)
+                    await model.loadExportState(deviceId: target.deviceId)
                 }
             }
         }
@@ -301,6 +363,7 @@ private struct ComputerStateBadge: View {
 
 private struct ComputerOverview: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
 
     var body: some View {
@@ -317,26 +380,38 @@ private struct ComputerOverview: View {
                 if let version = osVersion {
                     SettingsNote(version).padding(.top, 8)
                 }
+                if target.deviceId != nil {
+                    SettingsNote("On \(model.ownerName(target.deviceId)). Every action runs on that Mac.").padding(.top, 8)
+                }
                 SettingsDivider().padding(.vertical, 14)
                 HStack(spacing: 8) {
                     if row.canStart {
-                        ActionButton("Start") { Task { await model.start(row.id) } }
+                        ActionButton("Start") { Task { await model.start(target) } }
                     }
                     if row.canStop {
-                        ActionButton("Stop") { Task { await model.stop(row.id) } }
+                        ActionButton("Stop") { Task { await model.stop(target) } }
                     }
                     if row.canForceStop {
-                        ActionButton("Force stop") { Task { await model.forceStop(row.id) } }
+                        ActionButton("Force stop") { Task { await model.forceStop(target) } }
                     }
                     if row.canShowDisplay {
-                        ActionButton("Open screen") { Task { await model.openScreen(for: row.id) } }
+                        ActionButton("Open screen") { Task { await model.openScreen(for: target) } }
+                            .disabled(displayUnavailable != nil)
                     }
                     if row.canDelete {
-                        ActionButton("Delete") { Task { await model.delete(row.id) } }
+                        ActionButton("Delete") { Task { await model.delete(target) } }
                     }
+                }
+                if let displayUnavailable {
+                    SettingsNote(displayUnavailable).padding(.top, 8)
                 }
             }
         }
+    }
+
+    /// A macOS computer's window opens on its owner; a Linux computer's screen is opened here through the viewer.
+    private var displayUnavailable: String? {
+        row.kind == .macos ? ComputerRemoteLimit.display.unavailableReason(for: target) : nil
     }
 
     private var osVersion: String? {
@@ -347,14 +422,15 @@ private struct ComputerOverview: View {
 
 private struct ComputerCheckpointSection: View {
     let row: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
 
     var body: some View {
         ComputerPanel(title: "Checkpoints", action: {
-            ActionButton("Create checkpoint") { Task { await model.createCheckpoint(for: row.id) } }
+            ActionButton("Create checkpoint") { Task { await model.createCheckpoint(for: target) } }
                 .disabled(row.displayState != .running && row.displayState != .stopped)
         }) {
-            if let usage = model.checkpointUsage[row.id] {
+            if let usage = model.checkpointUsage[target.key] {
                 SettingsNote("\(usage.checkpoints.count) checkpoints · \(usage.totalBytes.map(byteCount) ?? "size unavailable")")
             }
             if row.checkpoints.isEmpty {
@@ -362,7 +438,7 @@ private struct ComputerCheckpointSection: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(row.checkpoints.enumerated()), id: \.element.id) { index, checkpoint in
-                        CheckpointRow(checkpoint: checkpoint, computer: row, model: model)
+                        CheckpointRow(checkpoint: checkpoint, computer: row, target: target, model: model)
                         if index < row.checkpoints.count - 1 { SettingsDivider() }
                     }
                 }
@@ -370,7 +446,7 @@ private struct ComputerCheckpointSection: View {
             if hasPendingRestore {
                 SettingsDivider().padding(.vertical, 6)
                 ComputerNotice(text: "A checkpoint restore needs attention. Abandoning it clears the pending restore; it does not restore files.", tone: .warning)
-                ActionButton("Abandon pending restore") { Task { await model.abandonRestore(computerId: row.id) } }
+                ActionButton("Abandon pending restore") { Task { await model.abandonRestore(target) } }
             }
         }
     }
@@ -390,6 +466,7 @@ private struct ComputerCheckpointSection: View {
 private struct CheckpointRow: View {
     let checkpoint: ComputerCheckpoint
     let computer: ComputerRow
+    let target: GuestReference
     let model: ComputersModel
 
     var body: some View {
@@ -415,10 +492,10 @@ private struct CheckpointRow: View {
                 Spacer(minLength: 8)
             }
             HStack(spacing: 8) {
-                ActionButton("Restore") { Task { await model.restoreCheckpoint(checkpoint.id, computerId: computer.id) } }
-                ActionButton("Fork") { Task { await model.forkCheckpoint(checkpoint.id, computerId: computer.id, computerName: computer.name) } }
+                ActionButton("Restore") { Task { await model.restoreCheckpoint(checkpoint.id, on: target) } }
+                ActionButton("Fork") { Task { await model.forkCheckpoint(checkpoint.id, on: target, computerName: computer.name) } }
                 if checkpoint.kind == .manual {
-                    ActionButton("Delete") { Task { await model.deleteCheckpoint(checkpoint.id, computerId: computer.id) } }
+                    ActionButton("Delete") { Task { await model.deleteCheckpoint(checkpoint.id, on: target) } }
                 }
             }
             .padding(.leading, 22)
@@ -430,12 +507,15 @@ private struct CheckpointRow: View {
 private struct ComputerJobCard: View {
     let job: OperationJobProgress
     let inventory: ComputerInventory?
+    /// The device the job runs on, when it is not This Mac.
+    let ownerName: String?
 
     private var percent: Double? { job.data.presentationProgress.map { min(max($0, 0), 1) } }
     private var title: String { job.data.presentationTitle ?? "Working" }
     private var subject: String {
         let id = job.computerId ?? job.data.presentationComputerId
-        return id.flatMap { inventory?.computer($0) }.map { "\($0.name) · \($0.kind.title)" } ?? job.jobId
+        let subject = id.flatMap { inventory?.computer($0) }.map { "\($0.name) · \($0.kind.title)" } ?? job.jobId
+        return ownerName.map { "\(subject) · \($0)" } ?? subject
     }
 
     var body: some View {
@@ -456,55 +536,71 @@ private struct ComputerJobCard: View {
 
 private struct ComputerOperationQueue: View {
     let model: ComputersModel
-    var computerId: String? = nil
+    /// The computer whose queue to show; nil shows every owner's.
+    var target: GuestReference? = nil
 
-    private var running: [OperationQueueEntry] {
-        entries(model.operationQueue.running)
+    private struct Item: Identifiable {
+        var deviceId: String?
+        var entry: OperationQueueEntry
+        var id: String { "\(GuestReference.ownerKey(deviceId))/\(entry.id)" }
     }
 
-    private var waiting: [OperationQueueEntry] {
-        entries(model.operationQueue.waiting)
+    private var owners: [String?] {
+        if let target { return [target.deviceId] }
+        return [nil] + model.remoteOwnerInventories.compactMap(\.deviceId)
+    }
+
+    private var running: [Item] { items { $0.running } }
+    private var waiting: [Item] { items { $0.waiting } }
+
+    private func items(_ pick: (OperationsList) -> [OperationQueueEntry]) -> [Item] {
+        owners.flatMap { owner in
+            let queue = model.operationQueues[GuestReference.ownerKey(owner)] ?? .empty
+            return pick(queue)
+                .filter { entry in target.map { entry.computerId == nil || entry.computerId == $0.computerId } ?? true }
+                .map { Item(deviceId: owner, entry: $0) }
+        }
     }
 
     var body: some View {
         if !running.isEmpty || !waiting.isEmpty {
             ComputerPanel(title: "Operation queue") {
                 VStack(spacing: 0) {
-                    ForEach(running) { entry in
-                        ComputerOperationQueueRow(entry: entry, status: "Running", model: model)
-                        if entry.id != running.last?.id || !waiting.isEmpty { SettingsDivider() }
+                    ForEach(running) { item in
+                        ComputerOperationQueueRow(entry: item.entry, deviceId: item.deviceId, status: "Running", model: model,
+                                                  showsOwner: target == nil && owners.count > 1)
+                        if item.id != running.last?.id || !waiting.isEmpty { SettingsDivider() }
                     }
-                    ForEach(waiting) { entry in
-                        ComputerOperationQueueRow(entry: entry, status: "Waiting…", model: model)
-                        if entry.id != waiting.last?.id { SettingsDivider() }
+                    ForEach(waiting) { item in
+                        ComputerOperationQueueRow(entry: item.entry, deviceId: item.deviceId, status: "Waiting…", model: model,
+                                                  showsOwner: target == nil && owners.count > 1)
+                        if item.id != waiting.last?.id { SettingsDivider() }
                     }
                 }
             }
         }
     }
-
-    private func entries(_ entries: [OperationQueueEntry]) -> [OperationQueueEntry] {
-        guard let computerId else { return entries }
-        return entries.filter { $0.computerId == nil || $0.computerId == computerId }
-    }
 }
 
 private struct ComputerOperationQueueRow: View {
     let entry: OperationQueueEntry
+    let deviceId: String?
     let status: String
     let model: ComputersModel
+    var showsOwner = false
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.label).font(CDS.sans(12, .medium)).foregroundStyle(CDS.Text.primary)
-                Text(entry.computerName ?? entry.computerId ?? entry.kind)
+                Text([entry.computerName ?? entry.computerId ?? entry.kind, showsOwner ? model.ownerName(deviceId) : nil]
+                    .compactMap { $0 }.joined(separator: " · "))
                     .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
             }
             Spacer(minLength: 8)
             Text(status).font(CDS.sans(11)).foregroundStyle(status == "Waiting…" ? CDS.Text.warning : CDS.Text.muted)
             if entry.cancellable, let jobId = entry.jobId {
-                Button("Cancel") { Task { await model.cancelJob(jobId) } }
+                Button("Cancel") { Task { await model.cancelJob(jobId, deviceId: deviceId) } }
                     .buttonStyle(.plain)
                     .font(CDS.sans(11, .medium))
                     .foregroundStyle(CDS.Text.accent)

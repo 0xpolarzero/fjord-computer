@@ -84,6 +84,24 @@ enum AppWindowShots {
         Shot(name: "computers", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
         }),
+        Shot(name: "computers-remote", destination: { _ in .computers }, prepare: { store in
+            store.setTool(.computers, on: true)
+            (store.engineClient as? MockEngineClient)?.connectDemoRemoteDevice()
+        }),
+        Shot(name: "computer-detail-remote", destination: { _ in
+            .computerDetail(GuestReference(deviceId: MockEngineClient.remoteDeviceID, computerId: MockEngineClient.devID))
+        }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .overview
+            (store.engineClient as? MockEngineClient)?.connectDemoRemoteDevice()
+        }),
+        Shot(name: "computer-files-remote", destination: { _ in
+            .computerDetail(GuestReference(deviceId: MockEngineClient.remoteDeviceID, computerId: MockEngineClient.linuxID))
+        }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .files
+            (store.engineClient as? MockEngineClient)?.connectDemoRemoteDevice()
+        }),
         Shot(name: "computer-queue", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
             let entry = OperationQueueEntry(id: 42, jobId: "job:queued-macos", label: "Create macOS computer",
@@ -92,35 +110,35 @@ enum AppWindowShots {
             (store.engineClient as? MockEngineClient)?.operationQueue = OperationsList(running: [], waiting: [entry],
                                                                                        unacknowledgedJobIds: [])
         }),
-        Shot(name: "computer-detail", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+        Shot(name: "computer-detail", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
             store.setTool(.computers, on: true)
         }),
-        Shot(name: "computer-overview", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+        Shot(name: "computer-overview", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .overview
         }),
-        Shot(name: "computer-agent-tools", destination: { _ in .computerDetail(MockEngineClient.linuxID) }, prepare: { store in
+        Shot(name: "computer-agent-tools", destination: { _ in .computerDetail(.thisMac(MockEngineClient.linuxID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .overview
             (store.engineClient as? MockEngineClient)?.mockAgentTools[MockEngineClient.linuxID] = MockEngineClient.agentTools(.outdated)
         }),
-        Shot(name: "computer-files", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+        Shot(name: "computer-files", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .files
         }),
-        Shot(name: "computer-network", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+        Shot(name: "computer-network", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .network
         }),
-        Shot(name: "computer-access", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+        Shot(name: "computer-access", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .access
         }),
-        Shot(name: "computer-activity", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+        Shot(name: "computer-activity", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .activity
         }),
-        Shot(name: "computer-storage", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
+        Shot(name: "computer-storage", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .storage
             let destination = "/Users/fjord/Exports"
@@ -136,7 +154,7 @@ enum AppWindowShots {
             (store.engineClient as? MockEngineClient)?.mockExportState = exports
             store.computers.exportState = exports
         }),
-        Shot(name: "computer-viewer", destination: { _ in .computerDetail(MockEngineClient.linuxID) }, prepare: { store in
+        Shot(name: "computer-viewer", destination: { _ in .computerDetail(.thisMac(MockEngineClient.linuxID)) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.pendingViewer = SiloWireViewerOpenResult(connectionId: "viewer-shot",
                 cookie: SiloWireViewerCookie(domain: "127.0.0.1", httpOnly: true, name: "silo-viewer", path: "/", value: "demo"),

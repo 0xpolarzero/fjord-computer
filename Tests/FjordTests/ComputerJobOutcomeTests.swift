@@ -9,7 +9,7 @@ import Testing
         let outcome = OperationJobFinished(jobId: "transfer:conflict",
             result: .object(["status": .string("conflict"), "names": .array([.string("notes.txt")])]))
 
-        model.presentJobOutcome(outcome, action: "Upload files")
+        model.presentJobOutcome(outcome, action: "Upload files", deviceId: nil)
 
         #expect(model.actionError?.contains("notes.txt") == true)
     }
@@ -20,7 +20,7 @@ import Testing
         let outcome = OperationJobFinished(jobId: "transfer:cancelled",
             result: .object(["status": .string("cancelled")]))
 
-        model.presentJobOutcome(outcome, action: "Upload files")
+        model.presentJobOutcome(outcome, action: "Upload files", deviceId: nil)
 
         #expect(model.actionError?.localizedCaseInsensitiveContains("cancelled") == true)
     }
@@ -31,7 +31,7 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         let paths = ["/tmp/notes.txt"]
 
-        await model.uploadFiles(computerId: MockEngineClient.linuxID, directory: "/workspace", paths: paths)
+        await model.uploadFiles(.thisMac(MockEngineClient.linuxID), directory: "/workspace", paths: paths)
 
         let conflict = try #require(model.pendingUploadConflict)
         #expect(conflict.names == ["notes.txt"])

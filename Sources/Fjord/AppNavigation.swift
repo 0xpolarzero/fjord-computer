@@ -10,7 +10,8 @@ enum AppDestination: Hashable {
     case done
     case router
     case computers
-    case computerDetail(String)
+    /// A computer of This Mac or of a connected device; ids are owner-local, so the owner is part of the place.
+    case computerDetail(GuestReference)
     case computerRun(UUID)
     case settings
     case categories
@@ -23,7 +24,7 @@ enum AppDestination: Hashable {
         case .done: "done"
         case .router: "router"
         case .computers: "computers"
-        case .computerDetail(let id): "computer-detail:" + id
+        case .computerDetail(let target): "computer-detail:" + target.key
         case .computerRun(let id): "computer-run:" + id.uuidString
         case .settings: "settings"
         case .categories: "categories"
@@ -44,9 +45,12 @@ enum AppDestination: Hashable {
                 guard let id = UUID(uuidString: String(token.dropFirst("computer-run:".count))) else { return nil }
                 self = .computerRun(id)
             } else if token.hasPrefix("computer-detail:") {
-                let id = String(token.dropFirst("computer-detail:".count))
-                guard !id.isEmpty else { return nil }
-                self = .computerDetail(id)
+                let key = String(token.dropFirst("computer-detail:".count))
+                guard let separator = key.firstIndex(of: "/") else { return nil }
+                let owner = String(key[..<separator])
+                let computerId = String(key[key.index(after: separator)...])
+                guard !owner.isEmpty, !computerId.isEmpty else { return nil }
+                self = .computerDetail(GuestReference(deviceId: owner == "local" ? nil : owner, computerId: computerId))
             } else {
                 guard token.hasPrefix("category:"), let id = UUID(uuidString: String(token.dropFirst("category:".count))) else { return nil }
                 self = .category(id)

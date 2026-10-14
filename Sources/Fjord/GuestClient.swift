@@ -5,10 +5,13 @@ struct GuestReference: Codable, Equatable, Hashable, Sendable {
     var deviceId: String?
     var computerId: String
 
-    var key: String { "\(deviceId ?? "local")/\(computerId)" }
+    /// The owner of a computer in a dictionary key: `local` for This Mac, otherwise the device id.
+    static func ownerKey(_ deviceId: String?) -> String { deviceId ?? "local" }
 
-    /// A computer on This Mac. The Computers page lists and manages This Mac's computers only, so its references use this;
-    /// a computer owned by another device is always addressed with its owner's `deviceId`.
+    var ownerKey: String { Self.ownerKey(deviceId) }
+    var key: String { "\(ownerKey)/\(computerId)" }
+
+    /// A computer on This Mac. A computer owned by another device is always addressed with its owner's `deviceId`.
     static func thisMac(_ computerId: String) -> GuestReference { GuestReference(deviceId: nil, computerId: computerId) }
 }
 

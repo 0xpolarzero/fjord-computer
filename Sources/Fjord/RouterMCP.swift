@@ -1371,7 +1371,7 @@ final class RouterMCPServer: @unchecked Sendable {
         case .running:
             return
         case .stopped, .failed:
-            await store.computers.start(computerId)
+            await store.computers.start(.thisMac(computerId))
             if let error = store.computers.actionError { throw Failure("Fjord couldn't start \(row.name): \(error)") }
             guard store.computers.inventory?.computer(computerId)?.displayState == .running else {
                 throw Failure("\(row.name) did not reach Running. Check its state in Computers and retry.")

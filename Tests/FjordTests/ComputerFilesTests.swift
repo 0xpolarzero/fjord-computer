@@ -7,10 +7,10 @@ import Testing
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        await model.loadFiles(computerId: MockEngineClient.linuxID)
+        await model.loadFiles(.thisMac(MockEngineClient.linuxID))
 
-        #expect(model.filePaths[MockEngineClient.linuxID] == "/workspace")
-        #expect(Set(model.fileLists[MockEngineClient.linuxID]?.entries.map(\.path) ?? []) ==
+        #expect(model.filePaths[GuestReference.thisMac(MockEngineClient.linuxID).key] == "/workspace")
+        #expect(Set(model.fileLists[GuestReference.thisMac(MockEngineClient.linuxID).key]?.entries.map(\.path) ?? []) ==
                 Set(["/workspace/Projects", "/workspace/README.md"]))
         #expect(ComputerFilesPath.parent(of: "/workspace", kind: .linux) == "/workspace")
         #expect(ComputerFilesPath.parent(of: "/workspace/Projects", kind: .linux) == "/workspace")
@@ -22,10 +22,10 @@ import Testing
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
-        await model.loadFiles(computerId: MockEngineClient.devID)
+        await model.loadFiles(.thisMac(MockEngineClient.devID))
 
         #expect(ComputerFilesPath.root(for: .macos) == nil)
         #expect(!client.generatedCalls.contains("files.list"))
-        #expect(model.filePaths[MockEngineClient.devID] == nil)
+        #expect(model.filePaths[GuestReference.thisMac(MockEngineClient.devID).key] == nil)
     }
 }

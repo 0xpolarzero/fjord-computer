@@ -114,7 +114,7 @@ import Testing
         model.prepareComputerRemoval = { removed.append($0) }
         model.computerRemovalCompleted = { removed.append($0) }
         // The local twin is stopped, so it can be deleted.
-        await model.delete(computerID)
+        await model.delete(.thisMac(computerID))
         #expect(removed == [local, local])
         #expect(engine.ownerInventories[deviceID]?.computer(computerID) != nil)
 

@@ -33,10 +33,25 @@ struct ComputerQuitPrompt: Equatable {
 
 enum ComputerQuitChoice: Equatable { case cancel, keepRunning, stopAndQuit }
 
+/// A job as the model tracks it: job ids are owner-local, so a job on another device is `(deviceId, jobId)`. The key is the bare
+/// job id for This Mac and `<jobId>@<deviceId>` for another device, and it is what `ComputerJobReceipt.jobId`,
+/// `ComputerUploadConflict.jobId` and `ComputersModel.finishedJobs` carry.
+enum ComputerJobKey {
+    static func make(deviceId: String?, jobId: String) -> String {
+        deviceId.map { "\(jobId)@\($0)" } ?? jobId
+    }
+
+    static func parts(_ key: String) -> (deviceId: String?, jobId: String) {
+        guard let separator = key.lastIndex(of: "@") else { return (nil, key) }
+        return (String(key[key.index(after: separator)...]), String(key[..<separator]))
+    }
+}
+
 struct ComputerUploadContext: Equatable {
     var computerId: String
     var directory: String
     var paths: [String]
+    var deviceId: String? = nil
 }
 
 struct ComputerUploadConflict: Equatable, Identifiable {
@@ -45,14 +60,37 @@ struct ComputerUploadConflict: Equatable, Identifiable {
     var directory: String
     var paths: [String]
     var names: [String]
+    var deviceId: String? = nil
     var id: String { jobId }
+    var target: GuestReference { GuestReference(deviceId: deviceId, computerId: computerId) }
 }
 
 struct ComputerUploadNotice: Equatable, Identifiable {
     var jobId: String
     var computerId: String
     var message: String
+    var deviceId: String? = nil
     var id: String { jobId }
+    var target: GuestReference { GuestReference(deviceId: deviceId, computerId: computerId) }
+}
+
+/// Where a computer's action cannot reach when another device owns the computer, so Fjord says so instead of calling.
+/// `display.show` is the owner's own VM window (Silo answers `unsupported_remote_operation`). The other two are answers
+/// that name the owner's machine: a published port's URL and the SSH-access command are the owner's loopback address and
+/// key path (remote-all.md, remote-guest-ssh.md). Files, terminals, editors and SSH aliases do work remotely.
+enum ComputerRemoteLimit {
+    case display, openPort, terminal
+
+    var reason: String {
+        switch self {
+        case .display: "A macOS computer's window opens on the Mac that owns it."
+        case .openPort: "This port is published on the Mac that owns the computer, so it can't be opened from here."
+        case .terminal: "The SSH command is for the Mac that owns the computer, so it can't be opened from here."
+        }
+    }
+
+    /// The reason this action is unavailable for `target`, `nil` when it is available.
+    func unavailableReason(for target: GuestReference) -> String? { target.deviceId == nil ? nil : reason }
 }
 
 struct ComputerJobReceipt: Equatable, Identifiable {
@@ -98,19 +136,29 @@ final class ComputerViewerOperationGate {
 final class ComputersModel {
     private(set) var client: any EngineClient
     private(set) var inventory: ComputerInventory?
+    /// The computers of each connected device, in name order. Computer ids are owner-local, so these never merge with
+    /// `inventory` (This Mac).
     private(set) var remoteOwnerInventories: [ComputerOwnerInventory] = []
+    /// Connected devices whose computers could not be read, with the reason.
+    private(set) var unreachableOwners: [ComputerOwnerFailure] = []
     private(set) var placementError: String?
     var placementOwners: [ComputerOwnerInventory] {
         (inventory.map { [ComputerOwnerInventory.local($0)] } ?? []) + remoteOwnerInventories
     }
     var placementOptions: [ComputerPlacementOption] { placementOwners.flatMap(\.options) }
+    /// Checkpoint usage by `GuestReference.key`.
     var checkpointUsage: [String: CheckpointUsage] = [:]
     private(set) var isLoading = false
     private(set) var error: String?
     var actionError: String?
     private(set) var activeJob: OperationJobProgress?
+    /// The device `activeJob` runs on (`nil`: This Mac).
+    private(set) var activeJobDeviceId: String?
+    /// Finished jobs by `ComputerJobKey`.
     private(set) var finishedJobs: [String: OperationJobFinished] = [:]
-    private(set) var operationQueue = OperationsList.empty
+    /// Each owner's operation queue, by owner (`ownerKey`).
+    private(set) var operationQueues: [String: OperationsList] = [:]
+    var operationQueue: OperationsList { operationQueues[GuestReference.ownerKey(nil)] ?? .empty }
     private(set) var jobAwaitingAcknowledgement: String?
     var uploadConflicts: [ComputerUploadConflict] = []
     var uploadNotices: [ComputerUploadNotice] = []
@@ -119,16 +167,20 @@ final class ComputersModel {
     private(set) var isQuitWorking = false
     var selectedDetailSection: ComputerDetailSection = .overview
     var createSheetKind: ComputerKind?
+    /// The device the computer is created on (`nil`: This Mac).
+    var createDeviceId: String?
     var isCreatePresented = false
     var hostFacts: DeviceFacts?
+    /// This Mac's settings. Settings are host-level and the controller's own (remote-all.md).
     var engineSettings: SiloWireSettingsSnapshot?
-    var setupActivity: [SiloWireComputerConfigurationProgress] = []
+    /// Per-computer state is keyed by `GuestReference.key`; per-device state by `GuestReference.ownerKey`.
+    var setupActivityByOwner: [String: [SiloWireComputerConfigurationProgress]] = [:]
     var fileLists: [String: SiloWireFileListResult] = [:]
     var filePaths: [String: String] = [:]
     var networkByComputer: [String: SiloWireNetworkComputer] = [:]
     var sshAccessByComputer: [String: SiloWireSSHAccessComputer] = [:]
-    var githubState: SiloWireGitHubState?
-    var secrets: [SiloWireSecret] = []
+    var githubStates: [String: SiloWireGitHubState] = [:]
+    var secretsByOwner: [String: [SiloWireSecret]] = [:]
     var computerUseByComputer: [String: SiloWireComputerUseState] = [:]
     /// Agent tools by `GuestReference.key` (so a remote owner's computer never collides with a local one).
     var agentToolsByKey: [String: SiloWireAgentToolsStatus] = [:]
@@ -137,7 +189,7 @@ final class ComputersModel {
     var agentToolsError: [String: String] = [:]
     var logsByComputer: [String: SiloWireLogPage] = [:]
     var storageByComputer: [String: SiloWireStorageState] = [:]
-    var exportState: SiloWireBackupState?
+    var exportStates: [String: SiloWireBackupState] = [:]
     var archiveInspection: SiloWireArchiveInspectionResult?
     var connectionsStatus: SiloWireConnectionsStatus?
     var connectionHealth: [String: SiloWireDeviceHealth] = [:]
@@ -148,6 +200,7 @@ final class ComputersModel {
     @ObservationIgnored var viewerRequestID: UUID?
 
     @ObservationIgnored private var subscription: String?
+    @ObservationIgnored private var subscribedDeviceIds: Set<String> = []
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
     @ObservationIgnored private var quitResolutionTask: Task<Void, Never>?
     @ObservationIgnored var jobActions: [String: String] = [:]
@@ -197,11 +250,14 @@ final class ComputersModel {
         self.client = client
         inventory = nil
         remoteOwnerInventories = []
+        unreachableOwners = []
         error = nil
         actionError = nil
         activeJob = nil
+        activeJobDeviceId = nil
         finishedJobs = [:]
-        operationQueue = .empty
+        operationQueues = [:]
+        subscribedDeviceIds = []
         stateRevision = 0
         hasSequence = false
         sequence = 0
@@ -238,9 +294,7 @@ final class ComputersModel {
             self.sequence = 0
             self.hasSequence = true
             self.eventStreamID = attemptID
-            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "checkpoints.*", "operations.*", "connections.devices.changed", "settings.changed", "exports.changed", "display.viewer.page"]) { [weak self] event in
-                self?.receive(event, stream: attemptID)
-            }
+            let newSubscription = try await self.subscribeEvents(stream: attemptID)
             guard self.wantsConnection, self.connectionAttemptID == attemptID else {
                 self.eventStreamID = nil
                 await self.client.eventsUnsubscribe(subscription: newSubscription)
@@ -260,16 +314,56 @@ final class ComputersModel {
             let operations = try await self.client.operationsList(deviceId: nil)
             guard self.wantsConnection, self.connectionAttemptID == attemptID else { return }
             if self.stateRevision == operationsRevision {
-                self.operationQueue = operations
+                self.operationQueues[GuestReference.ownerKey(nil)] = operations
                 self.stateRevision &+= 1
-                await self.recoverOutstandingJobs(operations.unacknowledgedJobIds)
+                await self.recoverOutstandingJobs(operations.unacknowledgedJobIds, deviceId: nil)
             } else {
                 self.beginRecovery(invalidated: true)
             }
             await self.refreshRemoteOwnerInventories()
+            await self.refreshRemoteOperations()
+            guard self.wantsConnection, self.connectionAttemptID == attemptID else { return }
+            await self.resubscribeIfDevicesChanged()
         }
         connectionTask = task
         try await task.value
+    }
+
+    private static let eventTopics = ["computers.*", "checkpoints.*", "operations.*", "connections.devices.changed",
+                                      "settings.changed", "exports.changed", "display.viewer.page"]
+
+    /// Subscribes to this engine's events and to the connected devices' it relays (`deviceIds`).
+    private func subscribeEvents(stream: UUID) async throws -> String {
+        let ids = remoteOwnerInventories.compactMap(\.deviceId).sorted()
+        subscribedDeviceIds = Set(ids)
+        return try await client.eventsSubscribe(events: Self.eventTopics, deviceIds: ids) { [weak self] event in
+            self?.receive(event, stream: stream)
+        }
+    }
+
+    /// The devices to relay changed (one connected or removed): subscribe again for the new set, then read every owner again,
+    /// because a device's events only start once it is in the subscription.
+    private func resubscribeIfDevicesChanged() async {
+        let ids = Set(remoteOwnerInventories.compactMap(\.deviceId))
+        guard wantsConnection, let previous = subscription, ids != subscribedDeviceIds else { return }
+        let stream = UUID()
+        eventStreamID = stream
+        subscription = nil
+        sequence = 0
+        hasSequence = true
+        await client.eventsUnsubscribe(subscription: previous)
+        do {
+            let renewed = try await subscribeEvents(stream: stream)
+            guard wantsConnection, eventStreamID == stream else {
+                await client.eventsUnsubscribe(subscription: renewed)
+                return
+            }
+            subscription = renewed
+            await refreshRemoteOwnerInventories()
+            await refreshRemoteOperations()
+        } catch {
+            if wantsConnection { self.error = error.localizedDescription }
+        }
     }
 
     func activate() async {
@@ -319,6 +413,7 @@ final class ComputersModel {
         } catch {
             placementError = error.localizedDescription
             remoteOwnerInventories = []
+            unreachableOwners = []
         }
     }
 
@@ -328,36 +423,84 @@ final class ComputersModel {
         do {
             let devices = try await client.connectionsDevicesList()
             var groups: [ComputerOwnerInventory] = []
-            var failedOwners: [String] = []
+            var failures: [ComputerOwnerFailure] = []
             for device in devices {
                 guard ownerRefreshID == attempt else { return }
                 do {
                     let latest = try await client.computersList(deviceId: device.id)
                     groups.append(.remote(device, inventory: latest))
                 } catch {
-                    failedOwners.append(device.name)
+                    failures.append(ComputerOwnerFailure(device: device, message: error.localizedDescription))
                 }
             }
             guard ownerRefreshID == attempt else { return }
             remoteOwnerInventories = groups.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-            placementError = failedOwners.isEmpty ? nil : "Couldn't load computers from: \(failedOwners.joined(separator: ", "))."
+            unreachableOwners = failures.sorted { $0.device.name.localizedStandardCompare($1.device.name) == .orderedAscending }
+            let live = Set(groups.compactMap(\.deviceId))
+            operationQueues = operationQueues.filter { $0.key == GuestReference.ownerKey(nil) || live.contains($0.key) }
+            placementError = failures.isEmpty ? nil
+                : "Couldn't load computers from: \(failures.map(\.device.name).joined(separator: ", "))."
         } catch {
             guard ownerRefreshID == attempt else { return }
             remoteOwnerInventories = []
+            unreachableOwners = []
             placementError = error.localizedDescription
         }
     }
 
-    func loadCheckpoints(for computerId: String) async {
+    /// Reads each connected device's operation queue and shows the jobs it finished while Fjord was away.
+    private func refreshRemoteOperations() async {
+        for owner in remoteOwnerInventories {
+            guard let deviceId = owner.deviceId, wantsConnection else { continue }
+            guard let queue = try? await client.operationsList(deviceId: deviceId) else { continue }
+            operationQueues[deviceId] = queue
+            await recoverOutstandingJobs(queue.unacknowledgedJobIds, deviceId: deviceId)
+        }
+    }
+
+    // MARK: Owners
+
+    /// The inventory of the device that owns a computer (`nil`: This Mac).
+    func inventory(for deviceId: String?) -> ComputerInventory? {
+        guard let deviceId else { return inventory }
+        return remoteOwnerInventories.first { $0.deviceId == deviceId }?.inventory
+    }
+
+    func row(_ target: GuestReference) -> ComputerRow? { inventory(for: target.deviceId)?.computer(target.computerId) }
+
+    /// The name of the device that owns computers: "This Mac" or the connected device's name.
+    func ownerName(_ deviceId: String?) -> String {
+        guard let deviceId else { return "This Mac" }
+        return remoteOwnerInventories.first { $0.deviceId == deviceId }?.name
+            ?? unreachableOwners.first { $0.device.id == deviceId }?.device.name
+            ?? connectionDevices.first { $0.id == deviceId }?.name ?? "Another Mac"
+    }
+
+    /// Every computer of every owner, This Mac first: the groups the Computers page lists.
+    var ownerGroups: [ComputerOwnerInventory] { placementOwners }
+
+    /// The owner an event came from: a connected device, or This Mac (`nil`) for its own and unknown sources.
+    private func eventOwner(_ deviceId: String?) -> String? {
+        guard let deviceId, remoteOwnerInventories.contains(where: { $0.deviceId == deviceId }) else { return nil }
+        return deviceId
+    }
+
+    private func setInventory(_ value: ComputerInventory, for deviceId: String?) {
+        guard let deviceId else { inventory = value; return }
+        guard let index = remoteOwnerInventories.firstIndex(where: { $0.deviceId == deviceId }) else { return }
+        remoteOwnerInventories[index].inventory = value
+    }
+
+    func loadCheckpoints(for target: GuestReference) async {
         do {
-            let checkpoints = try await client.checkpointsList(computerId: computerId, deviceId: nil)
-            guard var inventory else { return }
-            if let index = inventory.linux.computers.firstIndex(where: { $0.id == computerId }) {
+            let checkpoints = try await client.checkpointsList(computerId: target.computerId, deviceId: target.deviceId)
+            guard var inventory = inventory(for: target.deviceId) else { return }
+            if let index = inventory.linux.computers.firstIndex(where: { $0.id == target.computerId }) {
                 inventory.linux.computers[index].checkpoints = checkpoints
-            } else if let index = inventory.macos.computers.firstIndex(where: { $0.id == computerId }) {
+            } else if let index = inventory.macos.computers.firstIndex(where: { $0.id == target.computerId }) {
                 inventory.macos.computers[index].checkpoints = checkpoints
             }
-            self.inventory = inventory
+            setInventory(inventory, for: target.deviceId)
         } catch { actionError = error.localizedDescription }
     }
 
@@ -412,7 +555,7 @@ final class ComputersModel {
             }
             for computer in prompt.runningComputers {
                 let job = try await client.computersStop(ComputerReference(computerId: computer.computerId))
-                let finished = try await waitForFinish(job.jobId)
+                let finished = try await waitForFinish(job.jobId, deviceId: nil)
                 if let failure = finished.error { throw EngineClientError.jobFailed(failure.userMessage) }
             }
             try await waitUntilStopped(Set(prompt.runningComputers.map(\.computerId)))
@@ -425,60 +568,80 @@ final class ComputersModel {
         let _: SiloNull = try await client.invoke(SiloGeneratedMethods.settingsFlush(SiloWireEmptyParams()))
     }
 
-    func start(_ computerId: String) async { await perform("Start") { try await self.client.computersStart(ComputerReference(computerId: computerId)) } }
-    func stop(_ computerId: String) async { await perform("Stop") { try await self.client.computersStop(ComputerReference(computerId: computerId)) } }
-    func forceStop(_ computerId: String) async {
+    func start(_ target: GuestReference) async {
+        await perform("Start", on: target.deviceId) { try await self.client.computersStart(Self.reference(target)) }
+    }
+    func stop(_ target: GuestReference) async {
+        await perform("Stop", on: target.deviceId) { try await self.client.computersStop(Self.reference(target)) }
+    }
+    func forceStop(_ target: GuestReference) async {
         actionError = nil
-        do { try await client.computersForceStop(ComputerReference(computerId: computerId)) }
+        do { try await client.computersForceStop(Self.reference(target)) }
         catch { actionError = error.localizedDescription }
     }
-    func delete(_ computerId: String) async {
-        guard let row = inventory?.computer(computerId) else {
+    func delete(_ target: GuestReference) async {
+        guard let row = row(target) else {
             actionError = EngineClientError.notFound("This computer no longer exists.").localizedDescription
             return
         }
-        // The removal hooks get the owner-scoped reference: a deleted This Mac computer never matches a same-id computer
+        // The removal hooks get the owner-scoped reference: a deleted computer never matches a same-id computer
         // that another device owns.
-        let removed = GuestReference.thisMac(row.id)
         if let prepareComputerRemoval {
-            do { try await prepareComputerRemoval(removed) }
+            do { try await prepareComputerRemoval(target) }
             catch { actionError = error.localizedDescription; return }
         }
         let expected: ComputerConfiguration? = if case .linux(let computer) = row { computer.configuration } else { nil }
-        let deleted = await perform("Delete") {
-            try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId, expected: expected))
+        let deleted = await perform("Delete", on: target.deviceId) {
+            try await self.client.computersDelete(ComputerDeleteRequest(computerId: target.computerId,
+                                                                        deviceId: target.deviceId, expected: expected))
         }
-        if deleted { computerRemovalCompleted?(removed) }
+        if deleted { computerRemovalCompleted?(target) }
     }
-    func showDisplay(_ computerId: String) async {
+    func showDisplay(_ target: GuestReference) async {
         actionError = nil
-        do { try await client.displayShow(ComputerReference(computerId: computerId)) }
+        if let reason = ComputerRemoteLimit.display.unavailableReason(for: target) { actionError = reason; return }
+        do { try await client.displayShow(Self.reference(target)) }
         catch { actionError = error.localizedDescription }
     }
-    func createCheckpoint(for computerId: String) async {
+    func createCheckpoint(for target: GuestReference) async {
         let name = "Manual checkpoint · \(Date.now.formatted(.dateTime.month(.abbreviated).day()))"
-        await perform("Create checkpoint") { try await self.client.checkpointsCreate(CheckpointCreateRequest(computerId: computerId, name: name, kind: .manual)) }
+        await perform("Create checkpoint", on: target.deviceId) {
+            try await self.client.checkpointsCreate(CheckpointCreateRequest(computerId: target.computerId,
+                                                                            deviceId: target.deviceId, kind: .manual, name: name))
+        }
     }
-    func restoreCheckpoint(_ checkpointId: String, computerId: String) async {
-        await perform("Restore checkpoint") { try await self.client.checkpointsRestore(CheckpointRestoreRequest(computerId: computerId, checkpointId: checkpointId)) }
+    func restoreCheckpoint(_ checkpointId: String, on target: GuestReference) async {
+        await perform("Restore checkpoint", on: target.deviceId) {
+            try await self.client.checkpointsRestore(CheckpointRestoreRequest(
+                checkpointId: checkpointId, computerId: target.computerId, deviceId: target.deviceId))
+        }
     }
-    func forkCheckpoint(_ checkpointId: String, computerId: String, computerName: String) async {
+    func forkCheckpoint(_ checkpointId: String, on target: GuestReference, computerName: String) async {
         do {
-            let current = try await inventoryForCreation()
+            let current = try await inventoryForCreation(deviceId: target.deviceId)
             let name = reserveForkName(from: computerName, in: current)
             defer { reservedNames.remove(name.lowercased()) }
-            await perform("Fork checkpoint") {
-                try await self.client.checkpointsFork(CheckpointForkRequest(computerId: computerId, checkpointId: checkpointId,
-                                                                            newName: name))
+            await perform("Fork checkpoint", on: target.deviceId) {
+                try await self.client.checkpointsFork(CheckpointForkRequest(
+                    checkpointId: checkpointId, computerId: target.computerId, deviceId: target.deviceId, newName: name))
             }
         } catch { actionError = error.localizedDescription }
     }
-    func deleteCheckpoint(_ checkpointId: String, computerId: String) async {
-        await perform("Delete checkpoint") { try await self.client.checkpointsDelete(CheckpointDeleteRequest(computerId: computerId, checkpointId: checkpointId)) }
+    func deleteCheckpoint(_ checkpointId: String, on target: GuestReference) async {
+        await perform("Delete checkpoint", on: target.deviceId) {
+            try await self.client.checkpointsDelete(CheckpointDeleteRequest(
+                checkpointId: checkpointId, computerId: target.computerId, deviceId: target.deviceId))
+        }
     }
 
+    /// The wire reference to a computer, with its owner.
+    static func reference(_ target: GuestReference) -> ComputerReference {
+        ComputerReference(computerId: target.computerId, deviceId: target.deviceId)
+    }
+
+    /// Runs an action and follows the job it starts, which belongs to the device that owns the computer (`deviceId`).
     @discardableResult
-    func perform<T>(_ label: String, _ action: () async throws -> T) async -> Bool {
+    func perform<T>(_ label: String, on deviceId: String?, _ action: () async throws -> T) async -> Bool {
         actionError = nil
         do {
             let accepted = try await action()
@@ -487,22 +650,23 @@ final class ComputersModel {
                 else if let job = accepted as? SiloWireJobStartResult { job.jobId }
                 else { nil }
             guard let jobId else { return false }
-            jobActions[jobId] = label
-            let outcome = try await waitForFinish(jobId)
-            presentJobOutcome(outcome, action: label)
+            let key = ComputerJobKey.make(deviceId: deviceId, jobId: jobId)
+            jobActions[key] = label
+            let outcome = try await waitForFinish(jobId, deviceId: deviceId)
+            presentJobOutcome(outcome, action: label, deviceId: deviceId)
             let hasUnresolvedUploadOutcome = label == "Upload files"
-                && (uploadConflicts.contains { $0.jobId == jobId } || uploadNotices.contains { $0.jobId == jobId })
-            let uploadWasCancelled = label == "Upload files" && uploadNotices.contains { $0.jobId == jobId }
+                && (uploadConflicts.contains { $0.jobId == key } || uploadNotices.contains { $0.jobId == key })
+            let uploadWasCancelled = label == "Upload files" && uploadNotices.contains { $0.jobId == key }
             return outcome.error == nil && !hasUnresolvedUploadOutcome && !uploadWasCancelled
         }
         catch { actionError = error.localizedDescription; return false }
     }
 
-    func inventoryForCreation() async throws -> ComputerInventory {
+    func inventoryForCreation(deviceId: String?) async throws -> ComputerInventory {
         let revision = stateRevision
-        let latest = try await client.computersList(deviceId: nil)
-        guard stateRevision == revision else { return inventory ?? latest }
-        inventory = latest
+        let latest = try await client.computersList(deviceId: deviceId)
+        guard stateRevision == revision else { return inventory(for: deviceId) ?? latest }
+        setInventory(latest, for: deviceId)
         stateRevision &+= 1
         error = nil
         return latest
@@ -525,8 +689,9 @@ final class ComputersModel {
     func acknowledgePresentedJob(_ jobId: String) async {
         guard jobAwaitingAcknowledgement == jobId, acknowledgingJobIDs.insert(jobId).inserted else { return }
         defer { acknowledgingJobIDs.remove(jobId) }
+        let job = ComputerJobKey.parts(jobId)
         do {
-            try await client.operationsJobAcknowledge(jobId: jobId, deviceId: nil)
+            try await client.operationsJobAcknowledge(jobId: job.jobId, deviceId: job.deviceId)
             removeAcknowledgedJobLocally(jobId)
         } catch {
             actionError = error.localizedDescription
@@ -534,7 +699,8 @@ final class ComputersModel {
     }
 
     func acknowledgeConsumedJob(_ jobId: String) async throws {
-        try await client.operationsJobAcknowledge(jobId: jobId, deviceId: nil)
+        let job = ComputerJobKey.parts(jobId)
+        try await client.operationsJobAcknowledge(jobId: job.jobId, deviceId: job.deviceId)
         removeAcknowledgedJobLocally(jobId)
     }
 
@@ -548,12 +714,12 @@ final class ComputersModel {
 
     var pendingUploadConflict: ComputerUploadConflict? { uploadConflicts.first }
 
-    func uploadConflict(for computerId: String) -> ComputerUploadConflict? {
-        uploadConflicts.first { $0.computerId == computerId }
+    func uploadConflict(for target: GuestReference) -> ComputerUploadConflict? {
+        uploadConflicts.first { $0.target == target }
     }
 
-    func uploadNotice(for computerId: String) -> ComputerUploadNotice? {
-        uploadNotices.first { $0.computerId == computerId }
+    func uploadNotice(for target: GuestReference) -> ComputerUploadNotice? {
+        uploadNotices.first { $0.target == target }
     }
 
     var currentJobReceipt: ComputerJobReceipt? {
@@ -568,14 +734,14 @@ final class ComputersModel {
         return ComputerJobReceipt(jobId: jobId, action: action, message: "\(action) completed.", tone: .success)
     }
 
-    func cancelJob(_ jobId: String) async {
+    func cancelJob(_ jobId: String, deviceId: String?) async {
         actionError = nil
         do {
-            try await client.operationsCancel(jobId: jobId, deviceId: nil)
+            try await client.operationsCancel(jobId: jobId, deviceId: deviceId)
             let revision = stateRevision
-            let latest = try await client.operationsList(deviceId: nil)
+            let latest = try await client.operationsList(deviceId: deviceId)
             if stateRevision == revision {
-                operationQueue = latest
+                operationQueues[GuestReference.ownerKey(deviceId)] = latest
                 stateRevision &+= 1
             }
         } catch {
@@ -628,27 +794,33 @@ final class ComputersModel {
         switch event {
         case .computersChanged(let change, let deviceId):
             stateRevision &+= 1
-            if let deviceId, let index = remoteOwnerInventories.firstIndex(where: { $0.deviceId == deviceId }) {
-                remoteOwnerInventories[index].inventory = remoteOwnerInventories[index].inventory.applying(change)
-            } else if let inventory {
-                self.inventory = inventory.applying(change)
-            }
+            let owner = eventOwner(deviceId)
+            if let current = inventory(for: owner) { setInventory(current.applying(change), for: owner) }
             error = nil
         case .connectionsDevicesChanged:
-            Task { @MainActor [weak self] in await self?.refreshRemoteOwnerInventories() }
-        case .checkpointsChanged(let change):
-            stateRevision &+= 1
-            if let inventory {
-                self.inventory = inventory.applying(ComputersChangedPayload(linux: change.linux, macos: change.macos))
+            Task { @MainActor [weak self] in
+                await self?.refreshRemoteOwnerInventories()
+                await self?.resubscribeIfDevicesChanged()
             }
-            if let usage = change.usage { checkpointUsage.merge(usage) { _, next in next } }
-        case .operationsQueueChanged(let queue):
+        case .checkpointsChanged(let change, let deviceId):
             stateRevision &+= 1
-            operationQueue = queue
-        case .jobProgress(let progress):
+            let owner = eventOwner(deviceId)
+            if let current = inventory(for: owner) {
+                setInventory(current.applying(ComputersChangedPayload(linux: change.linux, macos: change.macos)), for: owner)
+            }
+            if let usage = change.usage {
+                for (computerId, value) in usage {
+                    checkpointUsage[GuestReference(deviceId: owner, computerId: computerId).key] = value
+                }
+            }
+        case .operationsQueueChanged(let queue, let deviceId):
+            stateRevision &+= 1
+            operationQueues[GuestReference.ownerKey(eventOwner(deviceId))] = queue
+        case .jobProgress(let progress, let deviceId):
             activeJob = progress
-        case .jobFinished(let result):
-            recordFinished(result)
+            activeJobDeviceId = eventOwner(deviceId)
+        case .jobFinished(let result, let deviceId):
+            recordFinished(result, deviceId: eventOwner(deviceId))
         case .guestFilesChanged:
             break
         case .viewerPage(let page):
@@ -667,23 +839,25 @@ final class ComputersModel {
         viewerScripts[connectionId] = commands.isEmpty ? nil : commands
     }
 
-    private func recordFinished(_ result: OperationJobFinished) {
-        finishedJobs[result.jobId] = result
-        if activeJob?.jobId == result.jobId { activeJob = nil }
-        presentJobOutcome(result, action: jobActions[result.jobId] ?? "Computer operation")
+    private func recordFinished(_ result: OperationJobFinished, deviceId: String?) {
+        let key = ComputerJobKey.make(deviceId: deviceId, jobId: result.jobId)
+        finishedJobs[key] = result
+        if activeJob?.jobId == result.jobId, activeJobDeviceId == deviceId { activeJob = nil }
+        presentJobOutcome(result, action: jobActions[key] ?? "Computer operation", deviceId: deviceId)
     }
 
-    func presentJobOutcome(_ result: OperationJobFinished, action: String) {
-        guard presentedJobOutcomes.insert(result.jobId).inserted else { return }
+    func presentJobOutcome(_ result: OperationJobFinished, action: String, deviceId: String?) {
+        let key = ComputerJobKey.make(deviceId: deviceId, jobId: result.jobId)
+        guard presentedJobOutcomes.insert(key).inserted else { return }
         if action == "Upload files", result.error == nil, let upload = decodeUploadOutcome(result.result) {
             if upload.status != .done {
                 switch upload.status {
                 case .conflict:
-                    if let context = uploadContexts[result.jobId] {
-                        uploadConflicts.removeAll { $0.jobId == result.jobId }
-                        uploadConflicts.append(ComputerUploadConflict(jobId: result.jobId,
+                    if let context = uploadContexts[key] {
+                        uploadConflicts.removeAll { $0.jobId == key }
+                        uploadConflicts.append(ComputerUploadConflict(jobId: key,
                             computerId: context.computerId, directory: context.directory, paths: context.paths,
-                            names: upload.names ?? []))
+                            names: upload.names ?? [], deviceId: deviceId))
                         actionError = nil
                     } else if let names = upload.names, !names.isEmpty {
                         actionError = "Upload paused because these files already exist: \(names.joined(separator: ", "))."
@@ -692,15 +866,15 @@ final class ComputersModel {
                     }
                     return
                 case .cancelled:
-                    if let context = uploadContexts[result.jobId] {
-                        uploadNotices.removeAll { $0.jobId == result.jobId }
-                        uploadNotices.append(ComputerUploadNotice(jobId: result.jobId,
-                            computerId: context.computerId, message: "Upload cancelled."))
+                    if let context = uploadContexts[key] {
+                        uploadNotices.removeAll { $0.jobId == key }
+                        uploadNotices.append(ComputerUploadNotice(jobId: key,
+                            computerId: context.computerId, message: "Upload cancelled.", deviceId: deviceId))
                         actionError = nil
                         return
                     }
                     actionError = "Upload cancelled."
-                    if finishedJobs[result.jobId] != nil { enqueueJobReceipt(result.jobId) }
+                    if finishedJobs[key] != nil { enqueueJobReceipt(key) }
                     return
                 case .done:
                     break
@@ -710,7 +884,7 @@ final class ComputersModel {
         if let failure = result.error, failure.code != "cancelled" {
             actionError = "\(action) failed: \(failure.userMessage)"
         }
-        enqueueJobReceipt(result.jobId)
+        enqueueJobReceipt(key)
     }
 
     private func enqueueJobReceipt(_ jobId: String) {
@@ -723,13 +897,14 @@ final class ComputersModel {
         return try? JSONDecoder().decode(SiloWireUploadOutcome.self, from: data)
     }
 
-    func waitForFinish(_ jobId: String) async throws -> OperationJobFinished {
+    func waitForFinish(_ jobId: String, deviceId: String?) async throws -> OperationJobFinished {
+        let key = ComputerJobKey.make(deviceId: deviceId, jobId: jobId)
         while true {
-            if let finished = finishedJobs[jobId] { return finished }
-            let snapshot = try await client.operationsJobGet(jobId: jobId, deviceId: nil)
+            if let finished = finishedJobs[key] { return finished }
+            let snapshot = try await client.operationsJobGet(jobId: jobId, deviceId: deviceId)
             if snapshot.state == .finished {
                 let result = snapshot.finishedEvent
-                recordFinished(result)
+                recordFinished(result, deviceId: deviceId)
                 return result
             }
             try await Task.sleep(for: .milliseconds(250))
@@ -760,6 +935,8 @@ final class ComputersModel {
             do {
                 let inventorySnapshot = try await client.computersList(deviceId: nil)
                 guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
+                await refreshRemoteOwnerInventories()
+                guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
                 let operationsSnapshot = try await client.operationsList(deviceId: nil)
                 guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
                 let settingsSnapshot: SiloWireSettingsSnapshot?
@@ -769,14 +946,15 @@ final class ComputersModel {
                 guard revision == recoveryRevision else { continue }
 
                 inventory = inventorySnapshot
-                operationQueue = operationsSnapshot
+                operationQueues[GuestReference.ownerKey(nil)] = operationsSnapshot
                 if let settingsSnapshot { engineSettings = settingsSnapshot }
                 stateRevision &+= 1
                 error = nil
                 let events = bufferedEvents.sorted { $0.0 < $1.0 }
                 bufferedEvents.removeAll()
                 events.forEach { apply($0.1) }
-                await recoverOutstandingJobs(operationsSnapshot.unacknowledgedJobIds)
+                await recoverOutstandingJobs(operationsSnapshot.unacknowledgedJobIds, deviceId: nil)
+                await refreshRemoteOperations()
                 guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
                 guard revision == recoveryRevision else { continue }
                 let lateEvents = bufferedEvents.sorted { $0.0 < $1.0 }
@@ -790,13 +968,13 @@ final class ComputersModel {
         }
     }
 
-    private func recoverOutstandingJobs(_ jobIds: [String]) async {
+    private func recoverOutstandingJobs(_ jobIds: [String], deviceId: String?) async {
         for jobId in jobIds {
             guard !Task.isCancelled else { return }
             do {
-                let snapshot = try await client.operationsJobGet(jobId: jobId, deviceId: nil)
+                let snapshot = try await client.operationsJobGet(jobId: jobId, deviceId: deviceId)
                 guard snapshot.state == .finished else { continue }
-                recordFinished(snapshot.finishedEvent)
+                recordFinished(snapshot.finishedEvent, deviceId: deviceId)
             } catch {
                 self.error = error.localizedDescription
             }
@@ -807,14 +985,15 @@ final class ComputersModel {
         await recoveryTask?.value
     }
 
-    func waitUntilStopped(_ computerIds: Set<String>, timeout: Duration = .seconds(20)) async throws {
+    func waitUntilStopped(_ computerIds: Set<String>, deviceId: String? = nil,
+                          timeout: Duration = .seconds(20)) async throws {
         guard !computerIds.isEmpty else { return }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while true {
             var allStopped = true
             for id in computerIds {
-                guard let row = inventory?.computer(id) else { continue }
+                guard let row = inventory(for: deviceId)?.computer(id) else { continue }
                 switch row.displayState {
                 case .stopped:
                     continue

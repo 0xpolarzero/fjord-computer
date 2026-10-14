@@ -65,27 +65,27 @@ struct ComputerResourceLimits: Equatable {
     var defaultMemoryGiB: Int
     var defaultDiskGiB: Int?
 
-    static func linux(from facts: DeviceFacts) throws -> Self {
+    static func linux(from facts: DeviceFacts, owner: String = "This Mac") throws -> Self {
         guard let capacity = facts.deviceCapacity else {
-            throw EngineClientError.invalidAction("Host CPU and memory capacity are unavailable.")
+            throw EngineClientError.invalidAction("\(owner)'s CPU and memory capacity are unavailable.")
         }
         let cpus = capacity.logicalCpus
         let memory = min(capacity.maxMemoryGib, Int(capacity.physicalMemoryBytes / 1_073_741_824))
         guard cpus >= 1, memory >= 1 else {
-            throw EngineClientError.invalidAction("This Mac does not have enough capacity for a Linux computer.")
+            throw EngineClientError.invalidAction("\(owner) does not have enough capacity for a Linux computer.")
         }
         return Self(minCPUs: 1, maxCPUs: cpus, minMemoryGiB: 1, maxMemoryGiB: memory,
                     minDiskGiB: nil, maxDiskGiB: nil,
                     defaultCPUs: min(2, cpus), defaultMemoryGiB: min(4, memory), defaultDiskGiB: nil)
     }
 
-    static func macos(from facts: DeviceFacts, minimumDiskGiB: Int) throws -> Self {
+    static func macos(from facts: DeviceFacts, minimumDiskGiB: Int, owner: String = "This Mac") throws -> Self {
         guard let limits = facts.macosHostLimits, limits.cpus >= 2, limits.memory_gib >= 8 else {
-            throw EngineClientError.invalidAction("This Mac needs at least 2 CPUs and 8 GiB of memory to host a macOS computer.")
+            throw EngineClientError.invalidAction("\(owner) needs at least 2 CPUs and 8 GiB of memory to host a macOS computer.")
         }
         let minimumDisk = max(32, minimumDiskGiB)
         guard minimumDisk <= 1024 else {
-            throw EngineClientError.invalidAction("The macOS template requires more disk space than this Mac can create.")
+            throw EngineClientError.invalidAction("The macOS template requires more disk space than \(owner) can create.")
         }
         let maxMemory = limits.memory_gib - 4
         return Self(minCPUs: 2, maxCPUs: limits.cpus, minMemoryGiB: 4, maxMemoryGiB: maxMemory,
@@ -114,30 +114,33 @@ extension SiloWireOperationClass {
 }
 
 extension ComputersModel {
-    func resourceLimits(for kind: ComputerKind) async throws -> ComputerResourceLimits {
-        let facts = try await client.deviceFactsRead(deviceId: nil)
-        hostFacts = facts
+    /// The limits of the device that will host the computer (`nil`: This Mac).
+    func resourceLimits(for kind: ComputerKind, deviceId: String? = nil) async throws -> ComputerResourceLimits {
+        let facts = try await client.deviceFactsRead(deviceId: deviceId)
+        if deviceId == nil { hostFacts = facts }
+        let owner = ownerName(deviceId)
         switch kind {
-        case .linux: return try .linux(from: facts)
+        case .linux: return try .linux(from: facts, owner: owner)
         case .macos:
-            if let state = inventory?.macos, !state.supported {
-                throw EngineClientError.unsupported(state.unsupportedReason ?? "This Mac cannot host a macOS computer.")
+            let owned = inventory(for: deviceId)
+            if let state = owned?.macos, !state.supported {
+                throw EngineClientError.unsupported(state.unsupportedReason ?? "\(owner) cannot host a macOS computer.")
             }
-            return try .macos(from: facts, minimumDiskGiB: Int(clamping: inventory?.macos.minDiskGiB ?? 32))
+            return try .macos(from: facts, minimumDiskGiB: Int(clamping: owned?.macos.minDiskGiB ?? 32), owner: owner)
         }
     }
 
-    func createLinuxComputer(name: String, cpus: Int, memoryGiB: Int) async {
+    func createLinuxComputer(name: String, cpus: Int, memoryGiB: Int, deviceId: String? = nil) async {
         do {
             guard ComputerName.isValid(name) else {
                 throw EngineClientError.invalidAction("Choose a valid computer name.")
             }
-            let limits = try await resourceLimits(for: .linux)
+            let limits = try await resourceLimits(for: .linux, deviceId: deviceId)
             guard (limits.minCPUs...limits.maxCPUs).contains(cpus),
                   (limits.minMemoryGiB...limits.maxMemoryGiB).contains(memoryGiB) else {
-                throw EngineClientError.invalidAction("Choose CPU and memory values within this Mac's available capacity.")
+                throw EngineClientError.invalidAction("Choose CPU and memory values within \(ownerName(deviceId))'s available capacity.")
             }
-            let current = try await inventoryForCreation()
+            let current = try await inventoryForCreation(deviceId: deviceId)
             let computerName = reserveName(name, in: current)
             defer { reservedNames.remove(computerName.lowercased()) }
             let id = UUID().uuidString.lowercased()
@@ -145,36 +148,39 @@ extension ComputersModel {
                                                       maxCPUs: limits.maxCPUs, memoryGiB: memoryGiB,
                                                       maxMemoryGiB: limits.maxMemoryGiB,
                                                       workspaceStorageGiB: 64, runtimeStorageGiB: 32)
-            await perform("Create Linux computer") {
-                try await self.client.computersCreate(.linux(configuration, requestId: id))
+            await perform("Create Linux computer", on: deviceId) {
+                try await self.client.computersCreate(.linux(configuration, requestId: id, deviceId: deviceId))
             }
         } catch { actionError = error.localizedDescription }
     }
 
-    func createMacosComputer(name: String, cpus: Int, memoryGiB: Int, diskGiB: Int) async {
+    func createMacosComputer(name: String, cpus: Int, memoryGiB: Int, diskGiB: Int, deviceId: String? = nil) async {
         do {
             guard ComputerName.isValid(name) else {
                 throw EngineClientError.invalidAction("Choose a valid computer name.")
             }
-            let limits = try await resourceLimits(for: .macos)
+            let limits = try await resourceLimits(for: .macos, deviceId: deviceId)
             guard (limits.minCPUs...limits.maxCPUs).contains(cpus),
                   (limits.minMemoryGiB...limits.maxMemoryGiB).contains(memoryGiB),
                   let minDisk = limits.minDiskGiB, let maxDisk = limits.maxDiskGiB,
                   (minDisk...maxDisk).contains(diskGiB) else {
-                throw EngineClientError.invalidAction("Choose CPU, memory and disk values within this Mac's limits.")
+                throw EngineClientError.invalidAction("Choose CPU, memory and disk values within \(ownerName(deviceId))'s limits.")
             }
-            let current = try await inventoryForCreation()
+            let current = try await inventoryForCreation(deviceId: deviceId)
             let computerName = reserveName(name, in: current)
             defer { reservedNames.remove(computerName.lowercased()) }
             let request = MacosComputerCreateRequest(name: computerName, cpus: cpus,
                                                      memoryGiB: memoryGiB, diskGiB: diskGiB)
-            await perform("Create macOS computer") { try await self.client.computersCreate(.macos(request)) }
+            await perform("Create macOS computer", on: deviceId) {
+                try await self.client.computersCreate(.macos(request, deviceId: deviceId))
+            }
         } catch { actionError = error.localizedDescription }
     }
 
-    func updateResources(for computerId: String, cpus: Int, memoryGiB: Int,
+    func updateResources(for target: GuestReference, cpus: Int, memoryGiB: Int,
                          expectedConfiguration: ComputerConfiguration? = nil) async {
-        guard var row = inventory?.computer(computerId) else { return }
+        let computerId = target.computerId
+        guard var row = row(target) else { return }
         let initialLinux: ComputerConfiguration?
         if case .linux(let computer) = row { initialLinux = computer.configuration } else { initialLinux = nil }
         let displayedConfiguration = expectedConfiguration ?? initialLinux
@@ -187,12 +193,12 @@ extension ComputersModel {
         actionError = nil
         do {
             if row.displayState == .running {
-                let stopped = await perform("Stop before editing resources") {
-                    try await self.client.computersStop(ComputerReference(computerId: computerId))
+                let stopped = await perform("Stop before editing resources", on: target.deviceId) {
+                    try await self.client.computersStop(Self.reference(target))
                 }
                 guard stopped else { return }
-                try await waitUntilStopped([computerId])
-                let latest = try await inventoryForCreation()
+                try await waitUntilStopped([computerId], deviceId: target.deviceId)
+                let latest = try await inventoryForCreation(deviceId: target.deviceId)
                 guard let refreshed = latest.computer(computerId) else {
                     throw EngineClientError.notFound("This computer no longer exists.")
                 }
@@ -218,13 +224,14 @@ extension ComputersModel {
                                                                   expected: SiloWireConfiguration(displayedConfiguration),
                                                                   kind: .upsert)
                 let result = try await client.invoke(SiloGeneratedMethods.computersConfigurationChange(
-                    SiloWireComputerConfigurationChangeParams(change: change, requestId: UUID().uuidString)))
-                await waitForFeatureJob(result.jobId, label: "Update computer resources")
+                    SiloWireComputerConfigurationChangeParams(change: change, deviceId: target.deviceId,
+                                                              requestId: UUID().uuidString)))
+                await waitForFeatureJob(result.jobId, deviceId: target.deviceId, label: "Update computer resources")
             case .macos(let computer):
-                let limits = try await resourceLimits(for: .macos)
+                let limits = try await resourceLimits(for: .macos, deviceId: target.deviceId)
                 guard (limits.minCPUs...limits.maxCPUs).contains(cpus),
                       (limits.minMemoryGiB...limits.maxMemoryGiB).contains(memoryGiB) else {
-                    throw EngineClientError.invalidAction("CPU and memory values exceed this Mac's available capacity.")
+                    throw EngineClientError.invalidAction("CPU and memory values exceed \(ownerName(target.deviceId))'s available capacity.")
                 }
                 let expected = SiloWireConfiguration(cpus: computer.cpus, memoryGiB: computer.memoryGiB,
                                                      diskGiB: computer.diskGiB)
@@ -232,8 +239,9 @@ extension ComputersModel {
                     expected: expected, kind: .macosResources, computerId: computerId,
                     cpus: UInt64(cpus), memoryGiB: UInt64(memoryGiB), requestId: UUID().uuidString)
                 let result = try await client.invoke(SiloGeneratedMethods.computersConfigurationChange(
-                    SiloWireComputerConfigurationChangeParams(change: change, requestId: UUID().uuidString)))
-                await waitForFeatureJob(result.jobId, label: "Update computer resources")
+                    SiloWireComputerConfigurationChangeParams(change: change, deviceId: target.deviceId,
+                                                              requestId: UUID().uuidString)))
+                await waitForFeatureJob(result.jobId, deviceId: target.deviceId, label: "Update computer resources")
             }
         } catch { actionError = error.localizedDescription }
     }
@@ -268,56 +276,59 @@ extension ComputersModel {
         } catch { actionError = error.localizedDescription }
     }
 
-    func loadSetupActivity() async {
-        do { setupActivity = try await client.invoke(SiloGeneratedMethods.activitySetupRead(SiloWireDeviceParams())) }
-        catch { actionError = error.localizedDescription }
-    }
-
-    func loadCheckpointUsage(computerId: String) async {
+    func loadSetupActivity(deviceId: String?) async {
         do {
-            checkpointUsage[computerId] = try await client.invoke(
-                SiloGeneratedMethods.checkpointsUsage(SiloWireCheckpointUsageParams(computerId: computerId)))
+            setupActivityByOwner[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.activitySetupRead(SiloWireDeviceParams(deviceId: deviceId)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func abandonRestore(computerId: String) async {
+    func loadCheckpointUsage(_ target: GuestReference) async {
         do {
-            let job = try await client.invoke(SiloGeneratedMethods.checkpointsAbandonRestore(
-                SiloWireComputerTargetParams(computerId: computerId)))
-            await waitForFeatureJob(job.jobId, label: "Abandon restore")
+            checkpointUsage[target.key] = try await client.invoke(
+                SiloGeneratedMethods.checkpointsUsage(SiloWireCheckpointUsageParams(
+                    computerId: target.computerId, deviceId: target.deviceId)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func loadFiles(computerId: String, path requestedPath: String? = nil,
+    func abandonRestore(_ target: GuestReference) async {
+        do {
+            let job = try await client.invoke(SiloGeneratedMethods.checkpointsAbandonRestore(Self.reference(target)))
+            await waitForFeatureJob(job.jobId, deviceId: target.deviceId, label: "Abandon restore")
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func loadFiles(_ target: GuestReference, path requestedPath: String? = nil,
                    offset: UInt64 = 0, snapshotId: String? = nil) async {
-        guard let kind = inventory?.computer(computerId)?.kind,
+        guard let kind = row(target)?.kind,
               let root = ComputerFilesPath.root(for: kind) else { return }
         let path = requestedPath ?? root
         do {
             let result = try await client.invoke(SiloGeneratedMethods.filesList(SiloWireFileListParams(
-                computerId: computerId, offset: offset, path: path, snapshotId: snapshotId)))
-            if offset == 0 { fileLists[computerId] = result }
-            else if var previous = fileLists[computerId], previous.snapshotId == result.snapshotId {
+                computerId: target.computerId, deviceId: target.deviceId, offset: offset, path: path, snapshotId: snapshotId)))
+            if offset == 0 { fileLists[target.key] = result }
+            else if var previous = fileLists[target.key], previous.snapshotId == result.snapshotId {
                 previous.entries.append(contentsOf: result.entries)
                 previous.nextOffset = result.nextOffset
-                fileLists[computerId] = previous
-            } else { fileLists[computerId] = result }
-            filePaths[computerId] = path
+                fileLists[target.key] = previous
+            } else { fileLists[target.key] = result }
+            filePaths[target.key] = path
         } catch { actionError = error.localizedDescription }
     }
 
-    func uploadFiles(computerId: String, directory: String, paths: [String],
+    func uploadFiles(_ target: GuestReference, directory: String, paths: [String],
                      conflict: SiloWireConflictPolicy = .ask) async {
         guard !paths.isEmpty else { return }
         let transferId = UUID().uuidString
-        let jobId = "transfer:\(transferId)"
-        uploadContexts[jobId] = ComputerUploadContext(computerId: computerId, directory: directory, paths: paths)
-        let params = SiloWireFileUploadParams(computerId: computerId, conflict: conflict, directory: directory,
-                                               origin: .client, paths: paths, transferId: transferId)
-        await perform("Upload files") {
+        let key = ComputerJobKey.make(deviceId: target.deviceId, jobId: "transfer:\(transferId)")
+        uploadContexts[key] = ComputerUploadContext(computerId: target.computerId, directory: directory, paths: paths,
+                                                    deviceId: target.deviceId)
+        let params = SiloWireFileUploadParams(computerId: target.computerId, conflict: conflict, deviceId: target.deviceId,
+                                               directory: directory, origin: .client, paths: paths, transferId: transferId)
+        await perform("Upload files", on: target.deviceId) {
             try await self.client.invoke(SiloGeneratedMethods.filesUpload(params))
         }
-        await loadFiles(computerId: computerId, path: directory)
+        await loadFiles(target, path: directory)
     }
 
     func resolveUploadConflict(jobId: String, policy: SiloWireConflictPolicy) async {
@@ -331,8 +342,7 @@ extension ComputersModel {
         }
         uploadConflicts.remove(at: index)
         uploadContexts[jobId] = nil
-        await uploadFiles(computerId: conflict.computerId, directory: conflict.directory,
-                          paths: conflict.paths, conflict: policy)
+        await uploadFiles(conflict.target, directory: conflict.directory, paths: conflict.paths, conflict: policy)
     }
 
     func dismissUploadConflict(jobId: String) async {
@@ -357,29 +367,29 @@ extension ComputersModel {
         }
     }
 
-    func downloadFile(computerId: String, path: String, destination: String) async {
-        let params = SiloWireFileDownloadParams(computerId: computerId, destination: destination,
-                                                path: path, transferId: UUID().uuidString)
-        await perform("Download file") { try await self.client.invoke(SiloGeneratedMethods.filesDownload(params)) }
+    func downloadFile(_ target: GuestReference, path: String, destination: String) async {
+        let params = SiloWireFileDownloadParams(computerId: target.computerId, destination: destination,
+                                                deviceId: target.deviceId, path: path, transferId: UUID().uuidString)
+        await perform("Download file", on: target.deviceId) { try await self.client.invoke(SiloGeneratedMethods.filesDownload(params)) }
     }
 
-    func loadNetwork(computerId: String) async {
+    func loadNetwork(_ target: GuestReference) async {
         do {
-            let state = try await client.invoke(SiloGeneratedMethods.networkState(SiloWireDeviceParams()))
-            let name = inventory?.computer(computerId)?.name
-            if let entry = state.computers.first(where: { $0.computerId == computerId || $0.computer == name }) {
-                networkByComputer[computerId] = entry
+            let state = try await client.invoke(SiloGeneratedMethods.networkState(SiloWireDeviceParams(deviceId: target.deviceId)))
+            let name = row(target)?.name
+            if let entry = state.computers.first(where: { $0.computerId == target.computerId || $0.computer == name }) {
+                networkByComputer[target.key] = entry
             } else {
-                networkByComputer[computerId] = SiloWireNetworkComputer(computer: name ?? computerId,
-                                                                         computerId: computerId, ports: [])
+                networkByComputer[target.key] = SiloWireNetworkComputer(computer: name ?? target.computerId,
+                                                                         computerId: target.computerId, ports: [])
             }
         } catch { actionError = error.localizedDescription }
     }
 
-    func publishPort(computerId: String, port: Int, hostPort: Int? = nil,
+    func publishPort(_ target: GuestReference, port: Int, hostPort: Int? = nil,
                      scheme: SiloWireNetworkScheme? = nil) async {
         actionError = nil
-        guard let computer = inventory?.computer(computerId) else {
+        guard let computer = row(target) else {
             actionError = "This computer is no longer available. Refresh the computer list and try again."
             return
         }
@@ -393,44 +403,81 @@ extension ComputersModel {
         }
         do {
             let state = try await client.invoke(SiloGeneratedMethods.networkPublish(
-                SiloWireNetworkPublishParams(computerId: computerId, hostPort: hostPort, port: port, scheme: scheme)))
-            updateNetworkState(state, computerId: computerId)
+                SiloWireNetworkPublishParams(computerId: target.computerId, deviceId: target.deviceId,
+                                             hostPort: hostPort, port: port, scheme: scheme)))
+            updateNetworkState(state, target: target)
         } catch { actionError = error.localizedDescription }
     }
 
-    func unpublishPort(computerId: String, port: Int) async {
+    func unpublishPort(_ target: GuestReference, port: Int) async {
         actionError = nil
         do {
             let state = try await client.invoke(SiloGeneratedMethods.networkUnpublish(
-                SiloWireNetworkUnpublishParams(computerId: computerId, port: port)))
-            updateNetworkState(state, computerId: computerId)
+                SiloWireNetworkUnpublishParams(computerId: target.computerId, deviceId: target.deviceId, port: port)))
+            updateNetworkState(state, target: target)
         } catch { actionError = error.localizedDescription }
     }
 
-    func openPort(computerId: String, port: Int) async {
+    func openPort(_ target: GuestReference, port: Int) async {
         actionError = nil
+        if let reason = ComputerRemoteLimit.openPort.unavailableReason(for: target) { actionError = reason; return }
         do {
             let result = try await client.invoke(SiloGeneratedMethods.networkOpen(
-                SiloWireNetworkOpenParams(computerId: computerId, port: port)))
+                SiloWireNetworkOpenParams(computerId: target.computerId, deviceId: target.deviceId, port: port)))
             if let url = URL(string: result.url) { NSWorkspace.shared.open(url) }
         } catch { actionError = error.localizedDescription }
     }
 
-    private func updateNetworkState(_ state: SiloWireNetworkState, computerId: String) {
-        let name = inventory?.computer(computerId)?.name
-        if let entry = state.computers.first(where: { $0.computerId == computerId || $0.computer == name }) {
-            networkByComputer[computerId] = entry
+    private func updateNetworkState(_ state: SiloWireNetworkState, target: GuestReference) {
+        let name = row(target)?.name
+        if let entry = state.computers.first(where: { $0.computerId == target.computerId || $0.computer == name }) {
+            networkByComputer[target.key] = entry
         }
     }
 
-    func loadGitHubState() async {
-        do { githubState = try await client.invoke(SiloGeneratedMethods.githubState(SiloWireDeviceParams())) }
-        catch { actionError = error.localizedDescription }
+    // MARK: Per-device state (GitHub, secrets, exports)
+
+    /// This Mac's GitHub state.
+    var githubState: SiloWireGitHubState? {
+        get { githubStates[GuestReference.ownerKey(nil)] }
+        set { githubStates[GuestReference.ownerKey(nil)] = newValue }
     }
 
-    func setGitHubRepositories(computerId: String, repositories: [String], allowPushes: Bool? = nil) async {
+    func githubState(for deviceId: String?) -> SiloWireGitHubState? { githubStates[GuestReference.ownerKey(deviceId)] }
+
+    /// This Mac's secrets.
+    var secrets: [SiloWireSecret] {
+        get { secretsByOwner[GuestReference.ownerKey(nil)] ?? [] }
+        set { secretsByOwner[GuestReference.ownerKey(nil)] = newValue }
+    }
+
+    func secrets(for deviceId: String?) -> [SiloWireSecret] { secretsByOwner[GuestReference.ownerKey(deviceId)] ?? [] }
+
+    /// This Mac's export state.
+    var exportState: SiloWireBackupState? {
+        get { exportStates[GuestReference.ownerKey(nil)] }
+        set { exportStates[GuestReference.ownerKey(nil)] = newValue }
+    }
+
+    func exportState(for deviceId: String?) -> SiloWireBackupState? { exportStates[GuestReference.ownerKey(deviceId)] }
+
+    var setupActivity: [SiloWireComputerConfigurationProgress] { setupActivity(for: nil) }
+
+    func setupActivity(for deviceId: String?) -> [SiloWireComputerConfigurationProgress] {
+        setupActivityByOwner[GuestReference.ownerKey(deviceId)] ?? []
+    }
+
+    func loadGitHubState(deviceId: String?) async {
+        do {
+            githubStates[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.githubState(SiloWireDeviceParams(deviceId: deviceId)))
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func setGitHubRepositories(_ target: GuestReference, repositories: [String], allowPushes: Bool? = nil) async {
         actionError = nil
-        guard let state = githubState else { return }
+        guard let state = githubState(for: target.deviceId) else { return }
+        let computerId = target.computerId
         let current = state.computers.first { $0.computerId == computerId }
         let policy = SiloWireGitHubPolicy(
             allRepositoriesAllowChanges: current?.allRepositoriesAllowChanges ?? false,
@@ -445,97 +492,106 @@ extension ComputersModel {
         let configuration = SiloWireGitHubConfiguration(baseRevision: state.policyRevision,
                                                            computers: state.computers.filter { $0.computerId != computerId } + [policy])
         do {
-            githubState = try await client.invoke(SiloGeneratedMethods.githubConfigurationSave(
-                SiloWireGitHubConfigurationSaveParams(configuration: configuration)))
+            githubStates[target.ownerKey] = try await client.invoke(SiloGeneratedMethods.githubConfigurationSave(
+                SiloWireGitHubConfigurationSaveParams(configuration: configuration, deviceId: target.deviceId)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func refreshGitHubRepositories() async {
-        do { githubState = try await client.invoke(SiloGeneratedMethods.githubRepositoriesRefresh(SiloWireDeviceParams())) }
-        catch { actionError = error.localizedDescription }
+    func refreshGitHubRepositories(deviceId: String?) async {
+        do {
+            githubStates[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.githubRepositoriesRefresh(SiloWireDeviceParams(deviceId: deviceId)))
+        } catch { actionError = error.localizedDescription }
     }
 
-    func setGitHubAccess(_ enabled: Bool) async {
+    func setGitHubAccess(_ enabled: Bool, deviceId: String?) async {
         actionError = nil
         do {
-            githubState = try await client.invoke(SiloGeneratedMethods.githubAccessSet(
-                SiloWireGitHubAccessSetParams(enabled: enabled)))
+            githubStates[GuestReference.ownerKey(deviceId)] = try await client.invoke(SiloGeneratedMethods.githubAccessSet(
+                SiloWireGitHubAccessSetParams(deviceId: deviceId, enabled: enabled)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func connectGitHub() async {
+    func connectGitHub(deviceId: String?) async {
         actionError = nil
         do {
-            let job = try await client.invoke(SiloGeneratedMethods.githubConnect(SiloWireDeviceParams()))
-            await loadGitHubState()
-            if let url = githubState?.pendingAuthorizationUrl.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
-            await waitForFeatureJob(job.jobId, label: "Connect GitHub")
-            await loadGitHubState()
+            let job = try await client.invoke(SiloGeneratedMethods.githubConnect(SiloWireDeviceParams(deviceId: deviceId)))
+            await loadGitHubState(deviceId: deviceId)
+            if let url = githubState(for: deviceId)?.pendingAuthorizationUrl.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+            await waitForFeatureJob(job.jobId, deviceId: deviceId, label: "Connect GitHub")
+            await loadGitHubState(deviceId: deviceId)
         } catch { actionError = error.localizedDescription }
     }
 
-    func reopenGitHubAuthorization() async {
+    func reopenGitHubAuthorization(deviceId: String?) async {
         do {
-            let result = try await client.invoke(SiloGeneratedMethods.githubConnectReopen(SiloWireDeviceParams()))
+            let result = try await client.invoke(SiloGeneratedMethods.githubConnectReopen(SiloWireDeviceParams(deviceId: deviceId)))
             if let url = URL(string: result.url) { NSWorkspace.shared.open(url) }
         } catch { actionError = error.localizedDescription }
     }
 
-    func manageGitHubRepositories() async {
+    func manageGitHubRepositories(deviceId: String?) async {
         do {
-            let result = try await client.invoke(SiloGeneratedMethods.githubRepositoriesManage(SiloWireDeviceParams()))
+            let result = try await client.invoke(SiloGeneratedMethods.githubRepositoriesManage(SiloWireDeviceParams(deviceId: deviceId)))
             if let url = URL(string: result.url) { NSWorkspace.shared.open(url) }
         } catch { actionError = error.localizedDescription }
     }
 
-    func disconnectGitHub() async {
-        actionError = nil
-        do { githubState = try await client.invoke(SiloGeneratedMethods.githubDisconnect(SiloWireDeviceParams())) }
-        catch { actionError = error.localizedDescription }
-    }
-
-    func saveGitHubToken(_ token: String) async {
+    func disconnectGitHub(deviceId: String?) async {
         actionError = nil
         do {
-            githubState = try await client.invoke(SiloGeneratedMethods.githubPersonalTokenSave(
-                SiloWireGitHubPersonalTokenSaveParams(token: token)))
+            githubStates[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.githubDisconnect(SiloWireDeviceParams(deviceId: deviceId)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func removeGitHubToken() async {
+    func saveGitHubToken(_ token: String, deviceId: String?) async {
         actionError = nil
-        do { githubState = try await client.invoke(SiloGeneratedMethods.githubPersonalTokenRemove(SiloWireDeviceParams())) }
-        catch { actionError = error.localizedDescription }
-    }
-
-    func retryGitHubConfiguration(computerId: String) async {
         do {
-            githubState = try await client.invoke(SiloGeneratedMethods.githubConfigurationRetry(
-                SiloWireGitHubConfigurationRetryParams(computerId: computerId)))
+            githubStates[GuestReference.ownerKey(deviceId)] = try await client.invoke(SiloGeneratedMethods.githubPersonalTokenSave(
+                SiloWireGitHubPersonalTokenSaveParams(deviceId: deviceId, token: token)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func loadSSHAccess(computerId: String) async {
+    func removeGitHubToken(deviceId: String?) async {
+        actionError = nil
         do {
-            let state = try await client.invoke(SiloGeneratedMethods.sshAccessState(SiloWireDeviceParams()))
-            sshAccessByComputer[computerId] = state.computers.first { $0.computerId == computerId }
+            githubStates[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.githubPersonalTokenRemove(SiloWireDeviceParams(deviceId: deviceId)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func saveSSHAccess(computerId: String, enabled: Bool, port: Int, bindAddress: String, keys: [String]) async {
+    func retryGitHubConfiguration(_ target: GuestReference) async {
+        do {
+            githubStates[target.ownerKey] = try await client.invoke(SiloGeneratedMethods.githubConfigurationRetry(
+                SiloWireGitHubConfigurationRetryParams(computerId: target.computerId, deviceId: target.deviceId)))
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func loadSSHAccess(_ target: GuestReference) async {
+        do {
+            let state = try await client.invoke(SiloGeneratedMethods.sshAccessState(SiloWireDeviceParams(deviceId: target.deviceId)))
+            sshAccessByComputer[target.key] = state.computers.first { $0.computerId == target.computerId }
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func saveSSHAccess(_ target: GuestReference, enabled: Bool, port: Int, bindAddress: String, keys: [String]) async {
         actionError = nil
         do {
             let state = try await client.invoke(SiloGeneratedMethods.sshAccessSave(SiloWireSSHAccessSaveParams(
-                bindAddress: bindAddress, computerId: computerId, enabled: enabled, keys: keys, port: port)))
-            sshAccessByComputer[computerId] = state.computers.first { $0.computerId == computerId }
+                bindAddress: bindAddress, computerId: target.computerId, deviceId: target.deviceId, enabled: enabled,
+                keys: keys, port: port)))
+            sshAccessByComputer[target.key] = state.computers.first { $0.computerId == target.computerId }
         } catch { actionError = error.localizedDescription }
     }
 
-    func openSSHAccessConnection(computerId: String, network: Bool = false) async {
+    func openSSHAccessConnection(_ target: GuestReference, network: Bool = false) async {
         actionError = nil
+        if let reason = ComputerRemoteLimit.terminal.unavailableReason(for: target) { actionError = reason; return }
         do {
             let command = try await client.invoke(SiloGeneratedMethods.sshAccessConnection(
-                SiloWireSSHAccessConnectionParams(computerId: computerId, download: false, network: network)))
+                SiloWireSSHAccessConnectionParams(computerId: target.computerId, deviceId: target.deviceId,
+                                                  download: false, network: network)))
             guard let command, !command.isEmpty else {
                 throw EngineClientError.invalidAction("The engine did not return an SSH command.")
             }
@@ -543,12 +599,16 @@ extension ComputersModel {
         } catch { actionError = error.localizedDescription }
     }
 
-    func loadSecrets() async {
-        do { secrets = try await client.invoke(SiloGeneratedMethods.secretsList(SiloWireDeviceParams())) }
-        catch { actionError = error.localizedDescription }
+    func loadSecrets(deviceId: String?) async {
+        do {
+            secretsByOwner[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.secretsList(SiloWireDeviceParams(deviceId: deviceId)))
+        } catch { actionError = error.localizedDescription }
     }
 
-    func saveSecret(id: String?, name: String, value: String?, computerIds: [String], allowedDomains: [String], allowAnyDestination: Bool) async {
+    /// Saves a secret on the device that owns the computers it is assigned to (`computerIds` are that device's ids).
+    func saveSecret(id: String?, name: String, value: String?, computerIds: [String], allowedDomains: [String],
+                    allowAnyDestination: Bool, deviceId: String?) async {
         guard ComputerSecretValidation.name(name) else {
             actionError = "Choose a valid secret name. Use letters, numbers and underscores, starting with a letter or underscore."
             return
@@ -579,41 +639,46 @@ extension ComputersModel {
                                                 id: id, name: name,
                                                 operation: id == nil ? .add : .edit, value: value)
         do {
-            secrets = try await client.invoke(SiloGeneratedMethods.secretsSave(SiloWireSecretsSaveParams(request: request)))
+            secretsByOwner[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.secretsSave(SiloWireSecretsSaveParams(deviceId: deviceId, request: request)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func removeSecret(id: String) async {
-        do { secrets = try await client.invoke(SiloGeneratedMethods.secretsRemove(SiloWireSecretIdParams(id: id))) }
-        catch { actionError = error.localizedDescription }
-    }
-
-    func retrySecret(id: String) async {
-        do { secrets = try await client.invoke(SiloGeneratedMethods.secretsRetry(SiloWireSecretIdParams(id: id))) }
-        catch { actionError = error.localizedDescription }
-    }
-
-    func loadComputerUse(computerId: String) async {
+    func removeSecret(id: String, deviceId: String?) async {
         do {
-            computerUseByComputer[computerId] = try await client.invoke(SiloGeneratedMethods.computerUseState(
-                SiloWireComputerUseStateParams(computerId: computerId)))
+            secretsByOwner[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.secretsRemove(SiloWireSecretIdParams(deviceId: deviceId, id: id)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func setComputerUseApproval(computerId: String, automatic: Bool) async {
+    func retrySecret(id: String, deviceId: String?) async {
+        do {
+            secretsByOwner[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.secretsRetry(SiloWireSecretIdParams(deviceId: deviceId, id: id)))
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func loadComputerUse(_ target: GuestReference) async {
+        do {
+            computerUseByComputer[target.key] = try await client.invoke(SiloGeneratedMethods.computerUseState(
+                SiloWireComputerUseStateParams(computerId: target.computerId, deviceId: target.deviceId)))
+        } catch { actionError = error.localizedDescription }
+    }
+
+    func setComputerUseApproval(_ target: GuestReference, automatic: Bool) async {
         actionError = nil
         do {
-            computerUseByComputer[computerId] = try await client.invoke(SiloGeneratedMethods.computerUseApproval(
-                SiloWireComputerUseApprovalParams(computerId: computerId, mode: automatic ? .auto : .ask)))
+            computerUseByComputer[target.key] = try await client.invoke(SiloGeneratedMethods.computerUseApproval(
+                SiloWireComputerUseApprovalParams(computerId: target.computerId, deviceId: target.deviceId,
+                                                  mode: automatic ? .auto : .ask)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func setupComputerUse(computerId: String) async {
+    func setupComputerUse(_ target: GuestReference) async {
         do {
-            let result = try await client.invoke(SiloGeneratedMethods.computerUseSetup(
-                SiloWireComputerTargetParams(computerId: computerId)))
-            await waitForFeatureJob(result.jobId, label: "Set up computer use")
-            await loadComputerUse(computerId: computerId)
+            let result = try await client.invoke(SiloGeneratedMethods.computerUseSetup(Self.reference(target)))
+            await waitForFeatureJob(result.jobId, deviceId: target.deviceId, label: "Set up computer use")
+            await loadComputerUse(target)
         } catch { actionError = error.localizedDescription }
     }
 
@@ -700,15 +765,16 @@ extension ComputersModel {
         await loadAgentTools(target)
     }
 
-    func loadLogs(computerId: String, query: String? = nil, cursor: String? = nil,
+    func loadLogs(_ target: GuestReference, query: String? = nil, cursor: String? = nil,
                   source: SiloWireLogSource? = nil, since: String? = nil, until: String? = nil,
                   aroundId: String? = nil, follow: String? = nil) async {
+        let key = target.key
         do {
             let page = try await client.invoke(SiloGeneratedMethods.logsQuery(
-                SiloWireLogsQueryParams(aroundId: aroundId, computerId: computerId, cursor: cursor,
-                                        follow: follow, limit: 100, query: query, since: since,
+                SiloWireLogsQueryParams(aroundId: aroundId, computerId: target.computerId, cursor: cursor,
+                                        deviceId: target.deviceId, follow: follow, limit: 100, query: query, since: since,
                                         source: source, until: until)))
-            if let follow, var previous = logsByComputer[computerId], previous.snapshot == follow {
+            if let follow, var previous = logsByComputer[key], previous.snapshot == follow {
                 let knownIDs = Set(previous.entries.map(\.id))
                 previous.entries.append(contentsOf: page.entries.filter { !knownIDs.contains($0.id) })
                 previous.newestAvailableTimestamp = page.newestAvailableTimestamp ?? previous.newestAvailableTimestamp
@@ -719,95 +785,102 @@ extension ComputersModel {
                 previous.timestampEstimated = previous.timestampEstimated || page.timestampEstimated
                 previous.unreadableRecords = previous.unreadableRecords == true || page.unreadableRecords == true
                 previous.unsupported = page.unsupported ?? previous.unsupported
-                logsByComputer[computerId] = previous
-            } else if cursor != nil, var previous = logsByComputer[computerId], previous.snapshot == page.snapshot {
+                logsByComputer[key] = previous
+            } else if cursor != nil, var previous = logsByComputer[key], previous.snapshot == page.snapshot {
                 previous.entries.append(contentsOf: page.entries)
                 previous.nextCursor = page.nextCursor
                 previous.totalMatches = page.totalMatches
                 previous.oldestAvailableTimestamp = page.oldestAvailableTimestamp
                 previous.unreadableRecords = page.unreadableRecords
                 previous.timestampEstimated = page.timestampEstimated
-                logsByComputer[computerId] = previous
+                logsByComputer[key] = previous
             } else {
-                logsByComputer[computerId] = page
+                logsByComputer[key] = page
             }
         } catch { actionError = error.localizedDescription }
     }
 
-    func exportLogs(computerId: String, destination: String, query: String? = nil,
+    /// Exports a computer's logs. The file is written on this Mac; the pages are read from the device that owns the computer.
+    func exportLogs(_ target: GuestReference, destination: String, query: String? = nil,
                     source: SiloWireLogSource? = nil, since: String? = nil, until: String? = nil,
                     aroundId: String? = nil) async {
-        let request = SiloWireLogsQueryParams(aroundId: aroundId, computerId: computerId, limit: 100,
-                                              query: query, since: since, source: source, until: until)
-        await perform("Export logs") {
+        let request = SiloWireLogsQueryParams(aroundId: aroundId, computerId: target.computerId, deviceId: target.deviceId,
+                                              limit: 100, query: query, since: since, source: source, until: until)
+        await perform("Export logs", on: nil) {
             try await self.client.invoke(SiloGeneratedMethods.logsExport(SiloWireLogsExportParams(
                 destination: destination, requests: [request])))
         }
     }
 
-    func loadStorage(computerId: String) async {
+    func loadStorage(_ target: GuestReference) async {
         do {
-            storageByComputer[computerId] = try await client.invoke(SiloGeneratedMethods.storageRead(
-                SiloWireStorageParams(computerId: computerId)))
+            storageByComputer[target.key] = try await client.invoke(SiloGeneratedMethods.storageRead(
+                SiloWireStorageParams(computerId: target.computerId, deviceId: target.deviceId)))
         } catch { actionError = error.localizedDescription }
     }
 
-    func reclaimStorage(computerId: String) async {
-        let params = SiloWireStorageParams(computerId: computerId)
-        await perform("Reclaim storage") { try await self.client.invoke(SiloGeneratedMethods.storageReclaim(params)) }
-        await loadStorage(computerId: computerId)
+    func reclaimStorage(_ target: GuestReference) async {
+        let params = SiloWireStorageParams(computerId: target.computerId, deviceId: target.deviceId)
+        await perform("Reclaim storage", on: target.deviceId) { try await self.client.invoke(SiloGeneratedMethods.storageReclaim(params)) }
+        await loadStorage(target)
     }
 
-    func loadExportState() async {
-        do { exportState = try await client.invoke(SiloGeneratedMethods.exportsState(SiloWireExportStateParams())) }
-        catch { actionError = error.localizedDescription }
+    func loadExportState(deviceId: String?) async {
+        do {
+            exportStates[GuestReference.ownerKey(deviceId)] = try await client.invoke(
+                SiloGeneratedMethods.exportsState(SiloWireExportStateParams(deviceId: deviceId)))
+        } catch { actionError = error.localizedDescription }
     }
 
-    func acknowledgeExportResult() async {
-        guard let operationId = exportState?.operationId else { return }
+    func acknowledgeExportResult(deviceId: String?) async {
+        guard let operationId = exportState(for: deviceId)?.operationId else { return }
         do {
             _ = try await client.invoke(SiloGeneratedMethods.exportsAcknowledge(
-                SiloWireExportAcknowledgeParams(expectedOperationId: operationId)))
-            await loadExportState()
+                SiloWireExportAcknowledgeParams(deviceId: deviceId, expectedOperationId: operationId)))
+            await loadExportState(deviceId: deviceId)
         } catch { actionError = error.localizedDescription }
     }
 
-    func dismissExportOperation(_ operation: SiloWireOperationClass) async {
-        guard let operationId = exportState?.operationId else { return }
+    func dismissExportOperation(_ operation: SiloWireOperationClass, deviceId: String?) async {
+        guard let operationId = exportState(for: deviceId)?.operationId else { return }
         do {
             let dismissed = try await client.invoke(SiloGeneratedMethods.exportsDismiss(
-                SiloWireExportDismissParams(expectedOperation: operation.backupOperation, expectedOperationId: operationId)))
+                SiloWireExportDismissParams(deviceId: deviceId, expectedOperation: operation.backupOperation,
+                                            expectedOperationId: operationId)))
             if !dismissed { actionError = "The export result changed before Fjord could dismiss it." }
-            await loadExportState()
+            await loadExportState(deviceId: deviceId)
         } catch { actionError = error.localizedDescription }
     }
 
-    func setExportDestination(_ path: String) async {
+    /// Sets the folder exports are written to, a path on the device that owns the computers.
+    func setExportDestination(_ path: String, deviceId: String?) async {
         do {
             _ = try await client.invoke(SiloGeneratedMethods.exportsDestinationSet(
-                SiloWireExportDestinationSetParams(path: path)))
-            await loadExportState()
+                SiloWireExportDestinationSetParams(deviceId: deviceId, path: path)))
+            await loadExportState(deviceId: deviceId)
         } catch { actionError = error.localizedDescription }
     }
 
-    func exportComputer(computerId: String, checkpointId: String? = nil) async {
-        guard let destination = exportState?.destination else {
+    func exportComputer(_ target: GuestReference, checkpointId: String? = nil) async {
+        guard let destination = exportState(for: target.deviceId)?.destination else {
             actionError = "Choose an export folder first."
             return
         }
-        let params = SiloWireExportCreateParams(checkpointId: checkpointId, computerIds: [computerId], destination: destination)
-        await perform("Export computer") { try await self.client.invoke(SiloGeneratedMethods.exportsCreate(params)) }
-        await loadExportState()
+        let params = SiloWireExportCreateParams(checkpointId: checkpointId, computerIds: [target.computerId],
+                                                destination: destination, deviceId: target.deviceId)
+        await perform("Export computer", on: target.deviceId) { try await self.client.invoke(SiloGeneratedMethods.exportsCreate(params)) }
+        await loadExportState(deviceId: target.deviceId)
     }
 
-    func inspectExportArchive(path: String) async {
+    func inspectExportArchive(path: String, deviceId: String?) async {
         archiveInspection = nil
         do {
             let job = try await client.invoke(SiloGeneratedMethods.exportsInspect(
-                SiloWireExportInspectParams(archivePath: path)))
-            jobActions[job.jobId] = "Inspect export archive"
-            let outcome = try await waitForFinish(job.jobId)
-            presentJobOutcome(outcome, action: "Inspect export archive")
+                SiloWireExportInspectParams(archivePath: path, deviceId: deviceId)))
+            let key = ComputerJobKey.make(deviceId: deviceId, jobId: job.jobId)
+            jobActions[key] = "Inspect export archive"
+            let outcome = try await waitForFinish(job.jobId, deviceId: deviceId)
+            presentJobOutcome(outcome, action: "Inspect export archive", deviceId: deviceId)
             guard let result = outcome.result else {
                 throw EngineClientError.invalidAction("The engine returned no archive inspection result.")
             }
@@ -816,7 +889,7 @@ extension ComputersModel {
         } catch { actionError = error.localizedDescription }
     }
 
-    func importComputer(archivePath: String, newName: String, sourceName: String? = nil) async {
+    func importComputer(archivePath: String, newName: String, sourceName: String? = nil, deviceId: String?) async {
         guard ComputerName.isValid(newName),
               let inspection = archiveInspection, inspection.valid, inspection.archive.archivePath == archivePath else {
             actionError = "Inspect a valid archive and choose a valid computer name first."
@@ -827,9 +900,10 @@ extension ComputersModel {
             actionError = "Choose which computer to import from this archive."
             return
         }
-        let params = SiloWireExportImportParams(archivePath: archivePath, newName: newName, sourceName: selectedSource)
-        await perform("Import computer") { try await self.client.invoke(SiloGeneratedMethods.exportsImport(params)) }
-        await loadExportState()
+        let params = SiloWireExportImportParams(archivePath: archivePath, deviceId: deviceId, newName: newName,
+                                                sourceName: selectedSource)
+        await perform("Import computer", on: deviceId) { try await self.client.invoke(SiloGeneratedMethods.exportsImport(params)) }
+        await loadExportState(deviceId: deviceId)
     }
 
     func loadConnections() async {
@@ -903,12 +977,12 @@ extension ComputersModel {
         if error != nil { throw EngineClientError.invalidAction("Terminal couldn't run the SSH setup command.") }
     }
 
-    func openScreen(for computerId: String) async {
+    func openScreen(for target: GuestReference) async {
         let requestID = UUID()
         viewerRequestID = requestID
-        guard let computer = inventory?.computer(computerId) else { return }
+        guard let computer = row(target) else { return }
         if computer.kind == .macos {
-            await showDisplay(computerId)
+            await showDisplay(target)
             return
         }
 
@@ -920,8 +994,7 @@ extension ComputersModel {
                 try await closeViewerConnection(existingViewer)
                 guard viewerRequestID == requestID else { return }
             }
-            let viewer = try await client.invoke(SiloGeneratedMethods.displayViewerOpen(
-                SiloWireComputerTargetParams(computerId: computerId)))
+            let viewer = try await client.invoke(SiloGeneratedMethods.displayViewerOpen(Self.reference(target)))
             guard let url = URL(string: viewer.url), url.scheme == "http", url.host == "127.0.0.1",
                   url.port != nil, viewer.cookie.domain == "127.0.0.1", viewer.cookie.path.hasPrefix("/"),
                   viewer.cookie.httpOnly else {
@@ -958,11 +1031,11 @@ extension ComputersModel {
         if pendingViewer?.connectionId == viewer.connectionId { pendingViewer = nil }
     }
 
-    private func waitForFeatureJob(_ jobId: String, label: String) async {
-        jobActions[jobId] = label
+    private func waitForFeatureJob(_ jobId: String, deviceId: String?, label: String) async {
+        jobActions[ComputerJobKey.make(deviceId: deviceId, jobId: jobId)] = label
         do {
-            let outcome = try await waitForFinish(jobId)
-            presentJobOutcome(outcome, action: label)
+            let outcome = try await waitForFinish(jobId, deviceId: deviceId)
+            presentJobOutcome(outcome, action: label, deviceId: deviceId)
         }
         catch { actionError = error.localizedDescription }
     }

@@ -275,9 +275,9 @@ struct AppContent: View {
                                leadingInset: leadingInset)
             case .computers:
                 ComputersView(store: store, navigator: navigator, leadingInset: leadingInset)
-            case .computerDetail(let id):
+            case .computerDetail(let target):
                 if store.computersEngineReady {
-                    ComputerDetailView(store: store, navigator: navigator, computerId: id, leadingInset: leadingInset)
+                    ComputerDetailView(store: store, navigator: navigator, target: target, leadingInset: leadingInset)
                 } else {
                     ComputersView(store: store, navigator: navigator, leadingInset: leadingInset)
                 }
@@ -317,9 +317,9 @@ struct AppContent: View {
             switch navigator.selection {
             case .computers:
                 await store.computers.activate()
-            case .computerDetail(let id):
+            case .computerDetail(let target):
                 await store.computers.activate()
-                await store.computers.loadCheckpoints(for: id)
+                await store.computers.loadCheckpoints(for: target)
             default:
                 await store.computers.deactivate()
             }

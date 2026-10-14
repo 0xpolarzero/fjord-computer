@@ -388,10 +388,10 @@ struct OperationJobSnapshot: Codable, Equatable, Sendable {
 enum EngineEvent: Equatable {
     case computersChanged(ComputersChangedPayload, deviceId: String? = nil)
     case connectionsDevicesChanged
-    case checkpointsChanged(CheckpointsChangedPayload)
-    case operationsQueueChanged(OperationsList)
-    case jobProgress(OperationJobProgress)
-    case jobFinished(OperationJobFinished)
+    case checkpointsChanged(CheckpointsChangedPayload, deviceId: String? = nil)
+    case operationsQueueChanged(OperationsList, deviceId: String? = nil)
+    case jobProgress(OperationJobProgress, deviceId: String? = nil)
+    case jobFinished(OperationJobFinished, deviceId: String? = nil)
     case guestFilesChanged(deviceId: String, payload: SiloWireGuestFilesChangedPayload)
     case settingsChanged(SiloWireSettingsSnapshot)
     case exportsChanged(SiloWireBackupState)
@@ -409,6 +409,19 @@ enum EngineEvent: Equatable {
         case .settingsChanged: "settings.changed"
         case .exportsChanged: "exports.changed"
         case .viewerPage: "display.viewer.page"
+        }
+    }
+
+    /// The same event as a controller's engine relays it from the device that owns the state.
+    func relayed(from deviceId: String) -> EngineEvent {
+        switch self {
+        case .computersChanged(let payload, _): .computersChanged(payload, deviceId: deviceId)
+        case .checkpointsChanged(let payload, _): .checkpointsChanged(payload, deviceId: deviceId)
+        case .operationsQueueChanged(let list, _): .operationsQueueChanged(list, deviceId: deviceId)
+        case .jobProgress(let progress, _): .jobProgress(progress, deviceId: deviceId)
+        case .jobFinished(let finished, _): .jobFinished(finished, deviceId: deviceId)
+        case .guestFilesChanged(_, let payload): .guestFilesChanged(deviceId: deviceId, payload: payload)
+        case .connectionsDevicesChanged, .settingsChanged, .exportsChanged, .viewerPage: self
         }
     }
 }
@@ -516,13 +529,19 @@ protocol EngineClient {
     func operationsList(deviceId: String?) async throws -> OperationsList
     func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot
     func operationsCancel(jobId: String, deviceId: String?) async throws
-    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String
+    /// `deviceIds` names the connected devices whose events this engine relays, with the source's `deviceId` on each.
+    func eventsSubscribe(events: [String], deviceIds: [String],
+                         handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String
     func eventsUnsubscribe(subscription: String) async
     func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws
     func engineDisconnect() async throws
 }
 
 extension EngineClient {
+    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String {
+        try await eventsSubscribe(events: events, deviceIds: [], handler: handler)
+    }
+
     func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
         _ call: SiloGeneratedMethodCall<Params, Result>
     ) async throws -> Result {
@@ -556,7 +575,8 @@ class UnavailableEngineClient: EngineClient {
     func operationsList(deviceId: String?) async throws -> OperationsList { try unavailable() }
     func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot { try unavailable() }
     func operationsCancel(jobId: String, deviceId: String?) async throws { throw EngineClientError.unavailable }
-    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String { try unavailable() }
+    func eventsSubscribe(events: [String], deviceIds: [String],
+                         handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String { try unavailable() }
     func eventsUnsubscribe(subscription: String) async {}
     func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws { throw EngineClientError.unavailable }
     func engineDisconnect() async throws {}
@@ -614,9 +634,54 @@ final class MockEngineClient: EngineClient {
             ],
             template: MacosTemplateSummary(macosVersion: "26.6.2", build: "25G83", current: true), minDiskGiB: 64))
 
+    /// A second Mac for demos and window shots. Its computers reuse the ids of This Mac's (`devID`, `linuxID`), as two engines'
+    /// ids do, so the owner is what tells them apart.
+    static let remoteDeviceID = "device-studio"
+    static let demoRemoteDevice = SiloWireDevice(address: "dev@studio.local", id: remoteDeviceID, name: "Studio Mac")
+    static let demoRemoteInventory = ComputerInventory(
+        linux: ApplicationSource(computers: [
+            ApplicationComputer(
+                kind: .linux,
+                configuration: ComputerConfiguration(id: linuxID, name: "ci-linux", cpus: 8, maxCPUs: 16,
+                                                     memoryGiB: 16, maxMemoryGiB: 64, workspaceStorageGiB: 128,
+                                                     runtimeStorageGiB: 32, desktop: nil),
+                purpose: "Local MicroSandbox", state: .running, stateDetail: "Running", canDismissError: false,
+                attention: nil, freshness: "fresh", checkpoints: [], pendingCheckpointRestore: nil,
+                checkpointOperation: nil, unfinishedRestore: nil),
+        ]),
+        macos: MacosComputersState(
+            supported: true, unsupportedReason: nil,
+            computers: [
+                MacosComputer(
+                    kind: .macos, id: devID, name: "studio-dev", cpus: 6, memoryGiB: 12, diskGiB: 96,
+                    osVersion: "macOS 26.6.2 (25G83)", state: .stopped, progress: nil, detail: nil,
+                    displayOpen: false, installed: true, setupComplete: true, needsPersonalizing: false,
+                    checkpoints: [
+                        ComputerCheckpoint(id: "checkpoint-studio-1", name: "Clean install",
+                                           createdAt: "2026-10-12T10:00:00Z", scope: .full, reason: .manual,
+                                           kind: .manual, sizeBytes: 2_100_000_000),
+                    ], checkpointOperation: nil, pendingRestore: nil),
+            ],
+            template: MacosTemplateSummary(macosVersion: "26.6.2", build: "25G83", current: true), minDiskGiB: 64))
+
+    /// Connects `demoRemoteDevice` as an engine of its own with `demoRemoteInventory`.
+    @discardableResult
+    func connectDemoRemoteDevice() -> MockEngineClient {
+        let remote = MockEngineClient(inventory: Self.demoRemoteInventory)
+        addPeer(Self.demoRemoteDevice, client: remote)
+        return remote
+    }
+
     private(set) var inventory: ComputerInventory
     var connectedDevices: [SiloWireDevice] = []
     var ownerInventories: [String: ComputerInventory] = [:]
+    /// Other devices as engines of their own: a call naming one of them by `deviceId` runs on its mock with its own
+    /// inventory, jobs and settings (so ids, jobs and secrets are owner-local as on the real engines), and its events
+    /// reach the subscribers that asked for that device.
+    private(set) var peers: [String: MockEngineClient] = [:]
+    private var relay: ((EngineEvent) -> Void)?
+    /// The `deviceIds` of each subscribe call, in order.
+    private(set) var subscribedDeviceIds: [[String]] = []
     var deviceFacts: DeviceFacts
     private(set) var createRequests: [ComputerCreateRequest] = []
     private(set) var forkRequests: [CheckpointForkRequest] = []
@@ -703,6 +768,7 @@ final class MockEngineClient: EngineClient {
 
     private struct Subscriber {
         var events: [String]
+        var deviceIds: [String] = []
         var sequence: UInt64
         var handler: @MainActor (EngineEventDelivery) -> Void
     }
@@ -719,7 +785,52 @@ final class MockEngineClient: EngineClient {
         currentProgress = Self.demoProgress
     }
 
-    func deviceFactsRead(deviceId: String? = nil) async throws -> DeviceFacts { deviceFacts }
+    /// Connects `client` as the engine of another device: it appears in `connections.devices.list` and answers every
+    /// method that names it. Its demo job progress is dropped, so only this device's progress shows.
+    func addPeer(_ device: SiloWireDevice, client: MockEngineClient) {
+        client.currentProgress = nil
+        client.relay = { [weak self] event in self?.publishRelayed(event, from: device.id) }
+        peers[device.id] = client
+        connectedDevices.removeAll { $0.id == device.id }
+        connectedDevices.append(device)
+    }
+
+    func removePeer(_ deviceId: String) {
+        peers[deviceId]?.relay = nil
+        peers[deviceId] = nil
+        connectedDevices.removeAll { $0.id == deviceId }
+    }
+
+    private func peer(_ deviceId: String?) -> MockEngineClient? { deviceId.flatMap { peers[$0] } }
+
+    private func publishRelayed(_ event: EngineEvent, from deviceId: String) {
+        let relayed = event.relayed(from: deviceId)
+        for id in Array(subscribers.keys) {
+            guard var subscriber = subscribers[id], subscriber.deviceIds.contains(deviceId),
+                  Self.matches(relayed.name, requested: subscriber.events) else { continue }
+            subscriber.sequence &+= 1
+            subscribers[id] = subscriber
+            subscriber.handler(.event(sequence: subscriber.sequence, event: relayed))
+        }
+    }
+
+    /// The owner an engine call names: `nil` for this mock itself.
+    private func routedPeer(_ params: some Encodable) -> MockEngineClient? {
+        guard !peers.isEmpty, let data = try? JSONEncoder().encode(params),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = object["deviceId"] as? String else { return nil }
+        return peers[id]
+    }
+
+    /// Methods whose reach is the controller's own machine, so another device's computer is refused (remote-all.md).
+    private static let localOnlyForRemote: Set<String> = [
+        "display.show", "display.close", "clipboard.transfer",
+    ]
+
+    func deviceFactsRead(deviceId: String? = nil) async throws -> DeviceFacts {
+        if let owner = peer(deviceId) { return try await owner.deviceFactsRead() }
+        return deviceFacts
+    }
 
     func connectionsDevicesList() async throws -> [SiloWireDevice] { connectedDevices }
 
@@ -732,6 +843,7 @@ final class MockEngineClient: EngineClient {
 
     func computersList(deviceId: String? = nil) async throws -> ComputerInventory {
         computersListCallCount += 1
+        if let owner = peer(deviceId) { return try await owner.computersList() }
         let snapshot = deviceId.flatMap { ownerInventories[$0] } ?? inventory
         if suspendNextComputersList {
             suspendNextComputersList = false
@@ -745,10 +857,12 @@ final class MockEngineClient: EngineClient {
     }
 
     func computersConfigurationRead(deviceId: String? = nil) async throws -> ComputerConfigurationRequest {
-        ComputerConfigurationRequest(schemaVersion: 1, computers: inventory.linux.computers.map(\.configuration))
+        if let owner = peer(deviceId) { return try await owner.computersConfigurationRead() }
+        return ComputerConfigurationRequest(schemaVersion: 1, computers: inventory.linux.computers.map(\.configuration))
     }
 
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult {
+        if let owner = peer(request.deviceId) { return try await owner.computersCreate(request) }
         if request.kind == .macos, let values = request.request {
             try validateComputerName(values.name)
             guard let limits = deviceFacts.macosHostLimits else {
@@ -826,6 +940,9 @@ final class MockEngineClient: EngineClient {
     }
 
     func computersStart(_ reference: ComputerReference) async throws -> ComputerJob {
+        if let owner = peer(reference.deviceId) {
+            return try await owner.computersStart(ComputerReference(computerId: reference.computerId))
+        }
         if let deviceId = reference.deviceId {
             guard var owned = ownerInventories[deviceId], let index = owned.linux.computers.firstIndex(where: { $0.id == reference.computerId }) else {
                 throw EngineClientError.notFound("This computer no longer exists.")
@@ -864,6 +981,9 @@ final class MockEngineClient: EngineClient {
     }
 
     func computersStop(_ reference: ComputerReference) async throws -> ComputerJob {
+        if let owner = peer(reference.deviceId) {
+            return try await owner.computersStop(ComputerReference(computerId: reference.computerId))
+        }
         let row = try requireComputer(reference.computerId)
         guard row.displayState == .running else { throw EngineClientError.invalidAction("This computer isn't running.") }
         let jobId = nextJobId()
@@ -895,6 +1015,9 @@ final class MockEngineClient: EngineClient {
     }
 
     func computersForceStop(_ reference: ComputerReference) async throws {
+        if let owner = peer(reference.deviceId) {
+            return try await owner.computersForceStop(ComputerReference(computerId: reference.computerId))
+        }
         guard case .macos = try requireComputer(reference.computerId) else {
             throw EngineClientError.unsupported("Force stop is only available for macOS computers.")
         }
@@ -902,6 +1025,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func computersDelete(_ request: ComputerDeleteRequest) async throws -> ComputerJob {
+        if let owner = peer(request.deviceId) { return try await owner.computersDelete(request) }
         let row = try requireComputer(request.computerId)
         deleteRequests.append(request)
         if case .linux(let computer) = row {
@@ -924,12 +1048,14 @@ final class MockEngineClient: EngineClient {
     }
 
     func checkpointsList(computerId: String, deviceId: String? = nil) async throws -> [ComputerCheckpoint] {
+        if let owner = peer(deviceId) { return try await owner.checkpointsList(computerId: computerId) }
         checkpointListCallCount += 1
         guard let row = inventory.computer(computerId) else { throw EngineClientError.notFound("This computer no longer exists.") }
         return row.checkpoints
     }
 
     func checkpointsCreate(_ request: CheckpointCreateRequest) async throws -> ComputerJob {
+        if let owner = peer(request.deviceId) { return try await owner.checkpointsCreate(request) }
         let row = try requireComputer(request.computerId)
         let jobId = nextJobId()
         let checkpoint = ComputerCheckpoint(id: UUID().uuidString.lowercased(), name: request.name,
@@ -946,6 +1072,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func checkpointsRestore(_ request: CheckpointRestoreRequest) async throws -> ComputerJob {
+        if let owner = peer(request.deviceId) { return try await owner.checkpointsRestore(request) }
         checkpointRestoreRequests.append(request)
         if suspendNextCheckpointRestore {
             suspendNextCheckpointRestore = false
@@ -977,6 +1104,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func checkpointsFork(_ request: CheckpointForkRequest) async throws -> ComputerJob {
+        if let owner = peer(request.deviceId) { return try await owner.checkpointsFork(request) }
         let source = try requireComputer(request.computerId)
         try validateComputerName(request.newName)
         forkRequests.append(request)
@@ -1018,6 +1146,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func checkpointsDelete(_ request: CheckpointDeleteRequest) async throws -> ComputerJob {
+        if let owner = peer(request.deviceId) { return try await owner.checkpointsDelete(request) }
         let row = try requireComputer(request.computerId)
         guard row.checkpoints.contains(where: { $0.id == request.checkpointId }) else {
             throw EngineClientError.notFound("This checkpoint no longer exists.")
@@ -1029,6 +1158,10 @@ final class MockEngineClient: EngineClient {
     }
 
     func displayShow(_ reference: ComputerReference) async throws {
+        if peer(reference.deviceId) != nil {
+            throw EngineClientError.coded(code: "unsupported_remote_operation",
+                                          message: "This computer's window opens on the Mac that owns it.")
+        }
         guard case .macos = try requireComputer(reference.computerId) else {
             throw EngineClientError.unsupported("A display is only available for a macOS computer.")
         }
@@ -1042,6 +1175,17 @@ final class MockEngineClient: EngineClient {
         _ call: SiloGeneratedMethodCall<Params, Result>
     ) async throws -> Result {
         generatedCalls.append(call.name)
+        if let owner = routedPeer(call.params) {
+            if Self.localOnlyForRemote.contains(call.name) {
+                throw EngineClientError.coded(code: "unsupported_remote_operation",
+                                              message: "\(call.name) is not available for a computer on another Mac yet.")
+            }
+            return try await owner.invoke(call)
+        }
+        if call.name == "logs.export", let first = try mockDecode(call.params, as: SiloWireLogsExportParams.self).requests.first,
+           let owner = peer(first.deviceId) {
+            return try await owner.invoke(call)
+        }
         switch call.name {
         case "settings.read":
             return try mockResult(settingsSnapshot, as: Result.self)
@@ -1502,6 +1646,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func operationsList(deviceId: String? = nil) async throws -> OperationsList {
+        if let owner = peer(deviceId) { return try await owner.operationsList() }
         operationsListCallCount += 1
         var snapshot = operationQueue
         snapshot.unacknowledgedJobIds = Array(Set(snapshot.unacknowledgedJobIds + Array(finished.keys))).sorted()
@@ -1509,6 +1654,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func operationsJobGet(jobId: String, deviceId: String? = nil) async throws -> OperationJobSnapshot {
+        if let owner = peer(deviceId) { return try await owner.operationsJobGet(jobId: jobId) }
         jobGetCallCount += 1
         if let result = finished[jobId] {
             return OperationJobSnapshot(jobId: jobId, state: .finished,
@@ -1519,6 +1665,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func operationsCancel(jobId: String, deviceId: String? = nil) async throws {
+        if let owner = peer(deviceId) { return try await owner.operationsCancel(jobId: jobId) }
         cancelRequests.append(jobId)
         if suspendNextCancelRequest {
             suspendNextCancelRequest = false
@@ -1544,8 +1691,10 @@ final class MockEngineClient: EngineClient {
         publish(.jobFinished(result))
     }
 
-    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String {
+    func eventsSubscribe(events: [String], deviceIds: [String],
+                         handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String {
         subscribeCallCount += 1
+        subscribedDeviceIds.append(deviceIds)
         if suspendNextSubscription {
             suspendNextSubscription = false
             await withCheckedContinuation { continuation in
@@ -1555,7 +1704,7 @@ final class MockEngineClient: EngineClient {
             }
         }
         let subscription = UUID().uuidString
-        subscribers[subscription] = Subscriber(events: events, sequence: 0, handler: handler)
+        subscribers[subscription] = Subscriber(events: events, deviceIds: deviceIds, sequence: 0, handler: handler)
         if let currentProgress, Self.matches("operations.job.progress", requested: events) {
             deliver(.jobProgress(currentProgress), to: subscription)
         }
@@ -1568,6 +1717,7 @@ final class MockEngineClient: EngineClient {
     }
 
     func operationsJobAcknowledge(jobId: String, deviceId: String? = nil) async throws {
+        if let owner = peer(deviceId) { return try await owner.operationsJobAcknowledge(jobId: jobId) }
         acknowledgedJobs.append(jobId)
         if suspendNextJobAcknowledge {
             suspendNextJobAcknowledge = false
@@ -1836,6 +1986,7 @@ final class MockEngineClient: EngineClient {
     }
 
     private func publish(_ event: EngineEvent) {
+        relay?(event)
         for id in Array(subscribers.keys) {
             guard var subscriber = subscribers[id], Self.matches(event.name, requested: subscriber.events) else { continue }
             subscriber.sequence &+= 1

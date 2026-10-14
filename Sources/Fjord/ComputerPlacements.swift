@@ -32,3 +32,10 @@ struct ComputerPlacementOption: Equatable, Identifiable {
     var id: String { "\(deviceId ?? "local")/\(computer.id)" }
     var location: SessionLocation { .computer(deviceId: deviceId, computerId: computer.id) }
 }
+
+/// A connected device whose computers could not be read.
+struct ComputerOwnerFailure: Equatable, Identifiable {
+    var device: SiloWireDevice
+    var message: String
+    var id: String { "owner/\(device.id)" }
+}

@@ -164,12 +164,12 @@ import Testing
         let rows = try #require(rig.store.computers.inventory?.allComputers)
         #expect(!rows.isEmpty)
         let items = rig.items.filter { $0.kind == .computer }
-        #expect(items.map(\.id) == rows.map { "computer:" + $0.id })
+        #expect(items.map(\.id) == rows.map { "computer:" + GuestReference.thisMac($0.id).key })
         let row = rows[0]
         let item = try #require(items.first)
         #expect(item.title == row.name && item.subtitle == "\(row.kind.title) · \(row.displayState.title)")
         item.actions[0].run()
-        #expect(rig.went == [.computerDetail(row.id)])
+        #expect(rig.went == [.computerDetail(.thisMac(row.id))])
         #expect(Rig(computers: false).items.filter { $0.kind == .computer }.isEmpty)
     }
 
@@ -177,7 +177,7 @@ import Testing
         let rig = Rig(computers: true)
         let rows = try #require(rig.store.computers.inventory?.allComputers)
         for item in rig.items where item.kind == .computer {
-            let row = try #require(rows.first { "computer:" + $0.id == item.id })
+            let row = try #require(rows.first { "computer:" + GuestReference.thisMac($0.id).key == item.id })
             #expect((item.dot == .running) == (row.displayState == .running))
         }
     }

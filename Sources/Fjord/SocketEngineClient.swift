@@ -480,8 +480,10 @@ final class SocketEngineClient: EngineClient {
         let _: SiloNull = try await invoke(SiloGeneratedMethods.operationsCancel(SiloWireCancelJobParams(deviceId: deviceId, jobId: jobId)))
     }
 
-    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String {
-        let result = try await invoke(SiloGeneratedMethods.eventsSubscribe(SiloWireEventsSubscribeParams(events: events)))
+    func eventsSubscribe(events: [String], deviceIds: [String],
+                         handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String {
+        let result = try await invoke(SiloGeneratedMethods.eventsSubscribe(
+            SiloWireEventsSubscribeParams(deviceIds: deviceIds.isEmpty ? nil : deviceIds, events: events)))
         let localId = UUID().uuidString.lowercased()
         subscriptions[localId] = Subscription(events: events, handler: handler, serverId: result.subscription, sequence: nil)
         subscriptionByServerId[result.subscription] = localId
@@ -831,20 +833,20 @@ final class SocketEngineClient: EngineClient {
             return .computersChanged(value, deviceId: envelope.deviceId)
         case .checkpointsChanged:
             guard let value = try? decoder.decode(CheckpointsChangedPayload.self, from: data) else { return nil }
-            return .checkpointsChanged(value)
+            return .checkpointsChanged(value, deviceId: envelope.deviceId)
         case .operationsQueueChanged:
             guard let value = try? decoder.decode(SiloWireOperationQueue.self, from: data) else { return nil }
             return .operationsQueueChanged(OperationsList(
                 running: value.running.map(projectQueueEntry), waiting: value.waiting.map(projectQueueEntry),
-                unacknowledgedJobIds: value.unacknowledgedJobIds))
+                unacknowledgedJobIds: value.unacknowledgedJobIds), deviceId: envelope.deviceId)
         case .operationsJobProgress:
             guard let value = try? decoder.decode(SiloWireJobProgress.self, from: data),
                   let progress = try? projectProgress(value) else { return nil }
-            return .jobProgress(progress)
+            return .jobProgress(progress, deviceId: envelope.deviceId)
         case .operationsJobFinished:
             guard let value = try? decoder.decode(SiloWireJobFinished.self, from: data) else { return nil }
             return .jobFinished(OperationJobFinished(jobId: value.jobId, result: value.result,
-                                                      error: value.error.map(projectError)))
+                                                      error: value.error.map(projectError)), deviceId: envelope.deviceId)
         case .guestFilesChanged:
             guard let value = try? decoder.decode(SiloWireGuestFilesChangedPayload.self, from: data) else { return nil }
             return .guestFilesChanged(deviceId: envelope.deviceId, payload: value)
