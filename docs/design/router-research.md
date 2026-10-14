@@ -243,6 +243,30 @@ land), so only changes that don't depend on ask gold are decided here.
   session the policy never started are skipped; a scripted pick with no pending ask is skipped; variant cards are
   deduplicated on canonical targets (a first sweep under-filled them and understated the gain).
 
+## Capability wording (2026-10-14, evals/router/explore/capabilities.py)
+
+`mark_seen` (mark a worth-a-look Router card seen) existed for the Router's own run, but the route's `change_fjord`
+criteria and `gate_setting` only named settings and Triage's categories, so "seen the docs" could be sent to the docs
+session. `capabilities-o` is `combo-o` with those two texts generated from one list of what Fjord itself does (settings,
+Triage's categories/rules/groups, marking a card seen, marking inbox things done or seen); everything else frozen
+(destinations, gates, order, `explore.final3:best` with the Swift weights, no refit).
+
+| set | combo-o wrong / send / loss | capabilities-o wrong / send / loss |
+|---|---|---|
+| acknowledgement cases (40, written on real boards) | 5.0% / 12.5% / 3.70 | 0.0% / 32.5% / 1.50 |
+| replay real B (162 submits) | 1.9% / 30.9% / 1.451 | 1.2% / 32.7% / 1.315 |
+| replay real A (231) | 1.7% / 21.2% / 1.506 | 0.9% / 19.9% / 1.329 |
+| bench realB (214) | 3.3% / 31.8% / 2.051 | 3.3% / 31.8% / 2.033 |
+| bench realA (397) | 3.0% / 27.0% / 2.015 | 2.8% / 27.0% / 1.960 |
+
+- Of the 22 acknowledgements whose gold is the Router: 2 went to a session before, none now; 10 go to the Router, 12
+  ask. None of the 18 meant for a session (negations, quotes, instructions to the session) went to the Router.
+- Real data: every interval includes 0; no measurable harm and a nominal drop in wrong sends. +~150 tokens a call, same
+  latency. 2,062 fresh Jev calls (~$0.30). Adopted in Swift, with both texts made from one list.
+- Limits: 40 written cases, gold for the mixed and approval-seen ones a judgement; real data has no Router-gold moments.
+  Reproduce from `evals/router`: `python3 -m explore.caps_ack`, then `v2.run.episodes … --format capabilities-o`, then
+  `python3 -m explore.caps_report episodes` and `bench`.
+
 ## Mistakes, and what they taught
 
 - **Sorted keys hid option order.** `jev.py` sent `json.dumps(sort_keys=True)`, so named options always reached Jev in
