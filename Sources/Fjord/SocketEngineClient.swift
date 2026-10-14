@@ -366,6 +366,17 @@ final class SocketEngineClient: EngineClient {
         self.protocolRange = protocolRange
     }
 
+    /// Opens the Unix socket and completes `engine.handshake` without issuing a domain request.
+    func connect() async throws -> SiloWireHandshakeResult {
+        _ = try await ensureTransport()
+        guard let handshakeResult else { throw EngineClientError.unavailable }
+        return handshakeResult
+    }
+
+    func updatesState() async throws -> SiloWireUpdateSnapshot {
+        try await invoke(SiloGeneratedMethods.updatesState(SiloWireEmptyParams()))
+    }
+
     func deviceFactsRead(deviceId: String?) async throws -> DeviceFacts {
         let wire = try await invoke(SiloGeneratedMethods.deviceFacts(SiloWireDeviceParams(deviceId: deviceId)))
         return DeviceFacts(

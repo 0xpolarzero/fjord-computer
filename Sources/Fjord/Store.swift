@@ -9,23 +9,22 @@ final class Store {
     /// Demo and snapshot runs: never touch the Keychain (a new build would stop on an access prompt).
     nonisolated static let isDemo = CommandLine.arguments.contains { ["--demo", "--snapshot", "--playground", "--playground-shots", "--window", "--window-shots"].contains($0) }
 
-    @ObservationIgnored let engineClient: any EngineClient
-    @ObservationIgnored let hasEngineConnection: Bool
+    @ObservationIgnored private(set) var engineClient: any EngineClient
+    private(set) var hasEngineConnection: Bool
+    @ObservationIgnored let engineLauncher: EngineLauncher?
     @ObservationIgnored let computers: ComputersModel
     @ObservationIgnored var routerPlacementShot = false
 
-    init(engineClient: (any EngineClient)? = nil) {
-        let socketRequested = CommandLine.arguments.contains("--socket-client")
+    init(engineClient: (any EngineClient)? = nil, engineLauncher: EngineLauncher? = nil) {
+        let offlineContext = Store.isDemo || UnderTest.isRunning
         let socketPath = ProcessInfo.processInfo.environment["FJORD_SILO_SOCKET_PATH"] ?? SocketEngineClient.defaultSocketPath
-        let defaultClient: (any EngineClient)? = if socketRequested && !Store.isDemo && !UnderTest.isRunning {
-            SocketEngineClient(path: socketPath)
-        } else {
-            MockEngineClient()
-        }
-        let client = engineClient ?? defaultClient
-        let selectedClient = client ?? UnavailableEngineClient()
+        let defaultClient: any EngineClient
+        if offlineContext { defaultClient = MockEngineClient() }
+        else { defaultClient = UnavailableEngineClient() }
+        let selectedClient = engineClient ?? defaultClient
         self.engineClient = selectedClient
-        self.hasEngineConnection = client != nil
+        self.hasEngineConnection = selectedClient is MockEngineClient || selectedClient is SocketEngineClient
+        self.engineLauncher = offlineContext ? nil : (engineLauncher ?? EngineLauncher(socketPath: socketPath))
         let computers = ComputersModel(client: selectedClient, initialInventory: (selectedClient as? MockEngineClient)?.inventory)
         self.computers = computers
         if selectedClient is SocketEngineClient {
@@ -40,6 +39,36 @@ final class Store {
                     computer: GuestReference(deviceId: nil, computerId: row.id))
             }
         }
+    }
+
+    var computersEngineReady: Bool { hasEngineConnection }
+
+    /// Probe an engine only when the user opens Computers. This can attach to Silo.app's shared owner but never registers
+    /// Fjord's LaunchAgent.
+    func inspectComputersEngine() async {
+        guard let engineLauncher else { return }
+        await engineLauncher.inspect()
+        await attachConnectedEngine()
+    }
+
+    /// The Computers page calls this only from its visible Enable action.
+    func enableComputersEngine() async {
+        guard let engineLauncher else { return }
+        await engineLauncher.enable()
+        await attachConnectedEngine()
+    }
+
+    func openEngineApprovalSettings() {
+        engineLauncher?.openApprovalSettings()
+    }
+
+    private func attachConnectedEngine() async {
+        guard let client = engineLauncher?.client else { return }
+        engineClient = client
+        hasEngineConnection = true
+        await computers.replaceClient(client)
+        do { try await computers.connect() }
+        catch { computers.actionError = error.localizedDescription }
     }
 
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).

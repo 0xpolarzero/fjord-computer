@@ -7,8 +7,19 @@ struct ComputersView: View {
     private var model: ComputersModel { store.computers }
 
     var body: some View {
+        Group {
+            if store.computersEngineReady {
+                computersPage
+            } else {
+                EngineEnablePage(store: store)
+            }
+        }
+        .task { await store.inspectComputersEngine() }
+    }
+
+    private var computersPage: some View {
         let rows = model.inventory?.allComputers ?? []
-        AppPage(title: "Computers", subtitle: rows.isEmpty ? "" : plural(rows.count, "computer"), leadingInset: leadingInset,
+        return AppPage(title: "Computers", subtitle: rows.isEmpty ? "" : plural(rows.count, "computer"), leadingInset: leadingInset,
                 column: (880, 20)) {
             Menu {
                 Button("Linux computer") {
@@ -70,6 +81,50 @@ struct ComputersView: View {
                 ComputerCreationSheet(store: store, kind: kind)
             }
         }
+    }
+}
+
+private struct EngineEnablePage: View {
+    let store: Store
+    private var launcher: EngineLauncher? { store.engineLauncher }
+    private var state: EngineLaunchState { launcher?.state ?? .missingBundle }
+
+    var body: some View {
+        AppPage(title: "Computers", subtitle: "Silo engine", trailing: { EmptyView() }, content: {
+            VStack(alignment: .leading, spacing: 14) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 26, weight: .regular))
+                    .foregroundStyle(CDS.Text.secondary)
+                Text("Computers run in Silo's shared engine")
+                    .font(CDS.sans(16, .semibold))
+                    .foregroundStyle(CDS.Text.primary)
+                Text(state.message)
+                    .font(CDS.sans(12))
+                    .foregroundStyle(CDS.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                switch state {
+                case .enableRequired:
+                    ActionButton("Enable Silo Engine") { Task { await store.enableComputersEngine() } }
+                case .awaitingApproval:
+                    HStack(spacing: 8) {
+                        ActionButton("Open Login Items Settings") { store.openEngineApprovalSettings() }
+                        ActionButton("Check approval") { Task { await store.inspectComputersEngine() } }
+                    }
+                case .failed(_):
+                    ActionButton("Retry") { Task { await store.enableComputersEngine() } }
+                case .missingBundle:
+                    ActionButton("Check again") { Task { await store.inspectComputersEngine() } }
+                case .updateBlocked, .connected:
+                    EmptyView()
+                case .unchecked, .checking, .registering, .waitingForEngine:
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .frame(maxWidth: 520, alignment: .leading)
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        })
     }
 }
 

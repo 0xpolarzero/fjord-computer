@@ -25,6 +25,9 @@ A Swift package (Swift tools 5.10, macOS 14+). The app is built into a bundle, w
 | `VERSION=1.2.3` | Sets the bundle version (default `0.0.0-dev`). |
 | `UNIVERSAL=1` | Builds for arm64 and x86_64, as releases do. |
 | `SIGN_IDENTITY="…"` | Signs with that identity, and fails if it isn't in your keychain. |
+| `SILO_REPO_PATH=/path/to/silo` | Uses that Silo checkout instead of `../microsandbox-workspaces`; it must match [`scripts/silod.commit`](scripts/silod.commit). |
+| `SILO_TARGET_DIR=/path/to/target` | Sets Cargo's `silod` build directory (default `build/silod-target`). |
+| `SILOD_PRODUCTION_CODE_REQUIREMENT="…"` | Overrides the code requirement compiled into production `silod`; otherwise the build pins the selected signing certificate, or the bundle identifier for ad-hoc builds. |
 
 Without `SIGN_IDENTITY`, local builds are signed with the release certificate (default name `Fjord Dev`) when it's in your keychain, and ad hoc otherwise. macOS treats every ad-hoc build as a new app, so Accessibility access has to be granted again each time. See [Signing certificate](#signing-certificate).
 
@@ -109,6 +112,7 @@ Pretends to be version 0.1.0: checks for, downloads and verifies the latest rele
 | Script | What it does |
 | --- | --- |
 | `scripts/build-app.sh` | Builds `build/Fjord.app` (see [Build and run](#build-and-run)). |
+| `scripts/build-silod.sh` | Builds and signs the pinned Silo engine app embedded by `build-app.sh`. |
 | `scripts/test.sh` | The test suite as CI runs it, output in `test.log`. |
 | `scripts/generate-engine-client.sh --check` | Recreates the Swift types and canonical method wrappers from the checked-in Silo schema and fails if generated files drift. |
 | `scripts/idle-cpu.sh` | Checks the release build's CPU stays under its limit at rest and with the window kept open, on the right edge and along the top, on demo data. Puts the bar on screen for minutes. |
@@ -127,7 +131,7 @@ scripts/generate-engine-client.sh --write
 
 The first command checks the checked-in output. The second regenerates `Sources/Fjord/Generated/SiloAPI.swift` and `SiloMethods.swift`. `npm ci` uses the committed lockfile; Node and npm are generation-time tooling only.
 
-Until `silod` is available, Fjord uses `MockEngineClient` by default. For socket-client development, launch Fjord with `--socket-client`. The client connects to `$HOME/.silo/engine.sock`; use `$HOME/.silo-dev/engine.sock` for the development channel or set `FJORD_SILO_SOCKET_PATH` to another Unix socket path. Demo and test launches always use the mock.
+`build-app.sh` builds the pinned `silod` crate from the Silo checkout and embeds its signed engine bundle and LaunchAgent plist. A regular Fjord launch never registers the agent. The Computers page first checks for an existing shared engine; the user must choose **Enable Silo Engine** before Fjord calls `SMAppService.agent.register()`. If macOS requires approval, Fjord opens Login Items in System Settings. Demo and test launches use `MockEngineClient`; ordinary launches start with an unavailable client until the engine connects. The socket defaults to `$HOME/.silo/engine.sock`; set `FJORD_SILO_SOCKET_PATH` to connect to another socket during development.
 
 ## Releasing
 
@@ -137,7 +141,7 @@ Push a version tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The `Release` workflow runs the tests, builds a universal app and publishes `Fjord-<version>.zip` and its `.sha256` to GitHub Releases.
+The `Release` workflow runs the tests, checks out the Silo commit recorded in `scripts/silod.commit`, builds a universal app and publishes `Fjord-<version>.zip` and its `.sha256` to GitHub Releases. If the Silo repository is private, configure the `SILO_SOURCE_TOKEN` secret with read access.
 
 Once Fjord is installed, it picks up later releases on its own. The updater installs a release only if its checksum matches and it is signed by the same certificate as the running copy.
 

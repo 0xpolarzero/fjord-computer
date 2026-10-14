@@ -53,11 +53,18 @@ PLIST
 # or SIGN_IDENTITY, which is then required) keeps both working across builds.
 IDENTITY="${SIGN_IDENTITY:-Fjord Dev}"
 if security find-identity -p codesigning | grep -q "\"$IDENTITY\""; then
-  codesign --force --timestamp=none --sign "$IDENTITY" "$APP"
+  SIGNING_IDENTITY="$IDENTITY"
 elif [ -n "${SIGN_IDENTITY:-}" ]; then
   echo "Signing identity \"$SIGN_IDENTITY\" not found" >&2
   exit 1
 else
-  codesign --force --sign - "$APP"
+  SIGNING_IDENTITY="-"
 fi
+scripts/build-silod.sh "$APP" "$SIGNING_IDENTITY"
+if [ "$SIGNING_IDENTITY" = "-" ]; then
+  codesign --force --sign - "$APP"
+else
+  codesign --force --timestamp=none --sign "$SIGNING_IDENTITY" "$APP"
+fi
+codesign --verify --deep --strict --verbose=2 "$APP"
 echo "Built $APP ($VERSION)"

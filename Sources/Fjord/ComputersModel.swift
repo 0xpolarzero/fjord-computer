@@ -96,7 +96,7 @@ final class ComputerViewerOperationGate {
 @MainActor
 @Observable
 final class ComputersModel {
-    let client: any EngineClient
+    private(set) var client: any EngineClient
     private(set) var inventory: ComputerInventory?
     private(set) var remoteOwnerInventories: [ComputerOwnerInventory] = []
     private(set) var placementError: String?
@@ -172,6 +172,36 @@ final class ComputersModel {
         inventory = initialInventory
     }
 
+    func replaceClient(_ client: any EngineClient) async {
+        let previousClient = self.client
+        wantsConnection = false
+        connectionAttemptID = nil
+        eventStreamID = nil
+        connectionTask?.cancel()
+        connectionTask = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        recoveryID = nil
+        isRecovering = false
+        bufferedEvents.removeAll()
+        isLoading = false
+        if let subscription {
+            self.subscription = nil
+            await previousClient.eventsUnsubscribe(subscription: subscription)
+        }
+        self.client = client
+        inventory = nil
+        remoteOwnerInventories = []
+        error = nil
+        actionError = nil
+        activeJob = nil
+        finishedJobs = [:]
+        operationQueue = .empty
+        stateRevision = 0
+        hasSequence = false
+        sequence = 0
+    }
+
     func connect() async throws {
         wantsConnection = true
         if let connectionTask {
@@ -195,6 +225,7 @@ final class ComputersModel {
                 }
             }
             let firstRead = try await self.client.computersList(deviceId: nil)
+            guard self.wantsConnection, self.connectionAttemptID == attemptID else { return }
             if self.inventory == nil {
                 self.inventory = firstRead
                 self.stateRevision &+= 1

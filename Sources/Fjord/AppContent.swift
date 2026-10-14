@@ -276,7 +276,11 @@ struct AppContent: View {
             case .computers:
                 ComputersView(store: store, navigator: navigator, leadingInset: leadingInset)
             case .computerDetail(let id):
-                ComputerDetailView(store: store, navigator: navigator, computerId: id, leadingInset: leadingInset)
+                if store.computersEngineReady {
+                    ComputerDetailView(store: store, navigator: navigator, computerId: id, leadingInset: leadingInset)
+                } else {
+                    ComputersView(store: store, navigator: navigator, leadingInset: leadingInset)
+                }
             case .computerRun(let id):
                 ComputerRunResultView(store: store, runID: id, leadingInset: leadingInset)
             case .settings:
