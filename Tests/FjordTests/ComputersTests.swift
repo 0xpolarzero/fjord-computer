@@ -104,6 +104,27 @@ import Testing
         #expect(model.actionError == nil)
     }
 
+    @Test func resourceEditPreservesACompetingConfigurationChangeDuringStop() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+        let computerID = MockEngineClient.linuxID
+        var competingInventory = client.inventory
+        let index = try #require(competingInventory.linux.computers.firstIndex { $0.id == computerID })
+        var competingConfiguration = competingInventory.linux.computers[index].configuration
+        competingConfiguration.cpus = 6
+        competingConfiguration.memoryGiB = 12
+        competingInventory.linux.computers[index].configuration = competingConfiguration
+
+        let edit = Task { await model.updateResources(for: computerID, cpus: 3, memoryGiB: 10) }
+        await waitUntil { client.stopRequests == [computerID] }
+        client.replaceInventory(competingInventory)
+        await edit.value
+
+        #expect(client.inventory.computer(computerID)?.resources == "6 CPU · 12 GB memory")
+        #expect(model.actionError?.localizedCaseInsensitiveContains("changed") == true)
+    }
+
     @Test func macosResourceEditStaysDisabledUntilTheWireContractExists() async {
         var inventory = MockEngineClient.demoInventory
         inventory.macos.computers = inventory.macos.computers.map { computer in

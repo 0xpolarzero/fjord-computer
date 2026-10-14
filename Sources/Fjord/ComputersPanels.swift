@@ -101,6 +101,7 @@ struct ComputerResourcesPanel: View {
     @State private var hostLimitsLoaded = false
     @State private var limitError: String?
     @State private var confirmsStop = false
+    @State private var displayedConfiguration: ComputerConfiguration?
 
     private var isRunning: Bool { row.displayState == .running }
     private var isMacos: Bool { row.kind == .macos }
@@ -146,6 +147,7 @@ struct ComputerResourcesPanel: View {
                 memoryGiB = computer.configuration.memoryGiB
                 maxCPUs = computer.configuration.maxCPUs
                 maxMemoryGiB = computer.configuration.maxMemoryGiB
+                displayedConfiguration = computer.configuration
                 hostLimitsLoaded = true
             case .macos(let computer):
                 cpus = Int(clamping: computer.cpus)
@@ -154,6 +156,14 @@ struct ComputerResourcesPanel: View {
                 maxMemoryGiB = max(4, memoryGiB)
                 hostLimitsLoaded = false
             }
+        }
+        .onChange(of: row.id) { _, _ in
+            guard case .linux(let computer) = row else { return }
+            cpus = computer.configuration.cpus
+            memoryGiB = computer.configuration.memoryGiB
+            maxCPUs = computer.configuration.maxCPUs
+            maxMemoryGiB = computer.configuration.maxMemoryGiB
+            displayedConfiguration = computer.configuration
         }
     }
 
@@ -166,7 +176,12 @@ struct ComputerResourcesPanel: View {
     private var minCPUs: Int { row.kind == .macos ? 2 : 1 }
     private var minMemory: Int { row.kind == .macos ? 4 : 1 }
 
-    private func save() { Task { await model.updateResources(for: row.id, cpus: cpus, memoryGiB: memoryGiB) } }
+    private func save() {
+        Task {
+            await model.updateResources(for: row.id, cpus: cpus, memoryGiB: memoryGiB,
+                                        expectedConfiguration: displayedConfiguration)
+        }
+    }
 }
 
 struct ComputerUsePanel: View {

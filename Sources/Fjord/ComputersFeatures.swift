@@ -172,10 +172,16 @@ extension ComputersModel {
         } catch { actionError = error.localizedDescription }
     }
 
-    func updateResources(for computerId: String, cpus: Int, memoryGiB: Int) async {
+    func updateResources(for computerId: String, cpus: Int, memoryGiB: Int,
+                         expectedConfiguration: ComputerConfiguration? = nil) async {
         guard var row = inventory?.computer(computerId) else { return }
-        guard case .linux = row else {
+        guard case .linux(let initialComputer) = row else {
             actionError = "Mac resource editing is coming soon while the engine API contract is being finalized."
+            return
+        }
+        let displayedConfiguration = expectedConfiguration ?? initialComputer.configuration
+        guard displayedConfiguration.id == computerId else {
+            actionError = "This computer changed while you were editing it. Refresh the values and try again."
             return
         }
         actionError = nil
@@ -197,15 +203,19 @@ extension ComputersModel {
             }
             switch row {
             case .linux(let computer):
+                guard computer.configuration == displayedConfiguration else {
+                    throw EngineClientError.invalidAction(
+                        "This computer's resources changed while you were editing. Refresh the values and reapply your changes.")
+                }
                 guard (1...computer.configuration.maxCPUs).contains(cpus),
                       (1...computer.configuration.maxMemoryGiB).contains(memoryGiB) else {
                     throw EngineClientError.invalidAction("CPU and memory values exceed the configured host limits.")
                 }
-                var updated = computer.configuration
+                var updated = displayedConfiguration
                 updated.cpus = cpus
                 updated.memoryGiB = memoryGiB
                 let change = SiloWireComputerConfigurationChange(configuration: updated,
-                                                                  expected: computer.configuration,
+                                                                  expected: displayedConfiguration,
                                                                   kind: .upsert)
                 let result = try await client.invoke(SiloGeneratedMethods.computersConfigurationChange(
                     SiloWireComputerConfigurationChangeParams(change: change, requestId: UUID().uuidString)))
