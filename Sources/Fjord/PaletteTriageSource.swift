@@ -197,26 +197,11 @@ enum PaletteTriageSource {
                            date: thing.updatedAt, weight: entry.isDone ? 0.6 : hidden ? 0.7 : 1, actions: actions)
     }
 
-    /// "Open its session": in the Router when the Router is on and draws it (its open card, else its working row), else the
-    /// session in the Claude app.
+    /// "Open its session": in the Router when it is on (`PaletteRouterSource.showSession`), else in the Claude app.
     private static func sessionAction(_ session: String, context: PaletteContext) -> PaletteAction {
         let store = context.store
-        let routerModel = context.routerModel
-        let go = context.go
         return PaletteAction(id: "session", title: "Open its session", symbol: "bubble.left.and.text.bubble.right") {
-            guard store.routerOn else { return store.openAgent(session) }
-            let page = store.routerZones
-            // A waiting card is drawn as its session's row.
-            if let card = store.router.cards.first(where: { $0.sessionID == session && $0.isOpen }),
-               page.zone(of: card.kind == .waiting ? RouterModel.workingID(session) : card.id) != nil {
-                routerModel.select(card.id, store: store)
-                go(.router)
-            } else if store.routerWorkingRows.contains(where: { $0.id == session }) {
-                go(.router)
-                routerModel.reveal(RouterModel.workingID(session))
-            } else {
-                store.openAgent(session)
-            }
+            if store.routerOn { PaletteRouterSource.showSession(session, context) } else { store.openAgent(session) }
         }
     }
 
