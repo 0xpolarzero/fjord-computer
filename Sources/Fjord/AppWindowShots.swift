@@ -359,6 +359,21 @@ enum AppWindowShots {
              }, appearance: .aqua),
         Shot(name: "router-brief-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 1640),
              compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .aqua),
+        // The Brief's history beside it: the latest rewrite and your answer opened to their diffs.
+        Shot(name: "router-brief-history", destination: { _ in .router }, sidebarHidden: true,
+             size: CGSize(width: 1600, height: 1420), compose: { model, store in
+                 Demo.routerDigest(store); model.pickBrief()
+                 model.digest.historyOpen = true
+                 if let history = store.routerDigest?.history {
+                     model.digest.expanded = [history[0].id, history[3].id]
+                 }
+             }, appearance: .aqua),
+        Shot(name: "router-brief-history-dark", destination: { _ in .router }, sidebarHidden: true,
+             size: CGSize(width: 1600, height: 1420), compose: { model, store in
+                 Demo.routerDigest(store); model.pickBrief()
+                 model.digest.historyOpen = true
+                 if let history = store.routerDigest?.history { model.digest.expanded = [history[1].id] }
+             }, appearance: .darkAqua),
         Shot(name: "router-canvas-lanesdata", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1000), compose: { model, store in
             Demo.routerLanes(store)
             model.pickCanvas()

@@ -408,62 +408,105 @@ enum Demo {
         ]
     }
 
-    /// The Brief over the lanes' day, as its agent would write it: what's for you, what's worth a look, then each project.
+    /// The Brief over the lanes' day, as its agent would write it: what's for you, what's worth a look, then each project;
+    /// and the five rewrites that led to it (sessions finishing, an answer of yours, a new project), each paragraph's text
+    /// chaining from one to the next.
     static func routerDigest(_ store: Store, now: Date = Date()) {
         routerLanes(store, now: now)
-        func p(_ name: String, _ text: String) -> RouterDigest.Project { .init(folder: "/Users/me/code/\(name)", text: text) }
-        store.routerDigest = RouterDigest(
-            forYou: """
-            Two OKs first: <need s="local_demo-release">publish Fjord 2.4</need> and \
-            <need s="local_demo-silo-guest">force-push silo's guest branch</need>. Then quick answers: \
-            <need s="local_demo-lcu">how lcu updates install</need>, <need s="local_demo-api">two rate-limit settings</need>, \
-            <need s="local_demo-zig">where the zig test goes</need>, and <need s="local_demo-linux">a sandbox plan</need> \
-            to approve. <need s="local_demo-theme">PR #88</need> is green and <need s="local_demo-login">the login fix</need> \
-            can go on. <need s="local_demo-calc">lcu-research is stuck</need> until the VPN is back.
-            """,
-            worthALook: """
-            <look s="local_demo-docs">The new lcu docs</look> weren't checked on mobile, and \
-            <look s="local_demo-site-copy">three landing-page headlines</look> are ready to pick from.
-            """,
+        func need(_ s: String, _ t: String) -> String { "<need s=\"local_demo-\(s)\">\(t)</need>" }
+        func look(_ s: String, _ t: String) -> String { "<look s=\"local_demo-\(s)\">\(t)</look>" }
+        func run(_ s: String, _ t: String) -> String { "<run s=\"local_demo-\(s)\">\(t)</run>" }
+        func folder(_ name: String) -> String { "/Users/me/code/\(name)" }
+
+        // For you, as each rewrite left it.
+        let answers = "\(need("lcu", "how lcu updates install")), \(need("api", "two rate-limit settings")), "
+            + "\(need("zig", "where the zig test goes")), and \(need("linux", "a sandbox plan")) to approve."
+        let pr = "\(need("theme", "PR #88")) is green"
+        let stuck = "\(need("calc", "lcu-research is stuck")) until the VPN is back."
+        let twoOKs = "Two OKs first: \(need("release", "publish Fjord 2.4")) and \(need("silo-guest", "force-push silo's guest branch")). "
+        let youA = "Quick answers: where sandbox storage lives, \(answers) \(pr). \(stuck)"
+        let youB = "Quick answers: \(answers) \(pr). \(stuck)"
+        let youC = "One OK first: \(need("silo-guest", "force-push silo's guest branch")). Then quick answers: \(answers) \(pr). \(stuck)"
+        let youD = "\(twoOKs)Then quick answers: \(answers) \(pr). \(stuck)"
+        let you = "\(twoOKs)Then quick answers: \(answers) \(pr) and \(need("login", "the login fix")) can go on. \(stuck)"
+
+        let lookA = "\(look("docs", "The new lcu docs")) weren't checked on mobile."
+        let lookNow = "\(look("docs", "The new lcu docs")) weren't checked on mobile, and "
+            + "\(look("site-copy", "three landing-page headlines")) are ready to pick from."
+
+        let tests = "\(run("lookout", "The test suite is running")), nothing has failed so far. The icon set is pushed."
+        let theme = "\(need("theme", "PR #88 is green")): merge it, then relaunch to check light mode."
+        let lookoutA = "Release 2.4 is building. The login fix waits on CI, and \(theme) \(tests)"
+        let lookoutB = "\(need("release", "2.4 is built with its notes")), waiting for your OK to publish and tag it. "
+            + "The login fix waits on CI, and \(theme) \(tests)"
+        let lookout = "\(need("release", "2.4 is built with its notes")), waiting for your OK to publish and tag it. "
+            + "\(need("login", "The login fix passed CI")) and can carry on, and \(theme) \(tests)"
+
+        let sandbox = "\(need("linux", "A plan to run the sandbox in a Firecracker microVM")) is ready for review. "
+            + "\(need("api", "The rate limiter")) needs two choices: per API key or per IP, and whether 100 a minute is right. "
+            + "\(run("ci", "CI is green")), with two reviewers still reading the changes; "
+            + "\(run("schema", "the schema migration")) waits for lookout's tests."
+        let sandboxA = "Sandbox storage asks where its cache should live: per project, or shared. \(sandbox)"
+
+        let siloRest = "\(run("silo-ckpt", "Checkpoint restore works")), but the 2 GB case is still slow. "
+            + "\(run("silo-rel", "v0.9 is tagged")); its release workflow is running."
+        let siloA = "\(run("silo-guest", "Rebasing the guest-agent branch on main.")) \(siloRest)"
+        let silo = "\(need("silo-guest", "The guest-agent branch is rebased")) and needs your OK to force-push. \(siloRest)"
+
+        let siteA = "\(run("site-og", "Social previews")) are rendering."
+        let site = "\(look("site-copy", "Three headline options")) for the landing page are drafted; picking one ships the page. "
+            + siteA
+
+        var digest = RouterDigest(
+            forYou: you, worthALook: lookNow,
             projects: [
-                p("lookout", """
-                <need s="local_demo-release">2.4 is built with its notes</need>, waiting for your OK to publish and tag it. \
-                <need s="local_demo-login">The login fix passed CI</need> and can carry on, and \
-                <need s="local_demo-theme">PR #88 is green</need>: merge it, then relaunch to check light mode. \
-                <run s="local_demo-lookout">The test suite is running</run>, nothing has failed so far. The icon set is pushed.
-                """),
-                p("microsandbox", """
-                <need s="local_demo-linux">A plan to run the sandbox in a Firecracker microVM</need> is ready for review. \
-                <need s="local_demo-api">The rate limiter</need> needs two choices: per API key or per IP, and whether \
-                100 a minute is right. <run s="local_demo-ci">CI is green</run>, with two reviewers still reading the \
-                changes; <run s="local_demo-schema">the schema migration</run> waits for lookout's tests.
-                """),
-                p("lcu", """
-                <need s="local_demo-lcu">Should updates install silently, or ask first?</need> \
-                <look s="local_demo-docs">The docs redesign is in</look>, not yet checked on mobile widths. \
-                <run s="local_demo-bump">The SDK bump</run> waits on CI.
-                """),
-                p("silo", """
-                <need s="local_demo-silo-guest">The guest-agent branch is rebased</need> and needs your OK to force-push. \
-                <run s="local_demo-silo-ckpt">Checkpoint restore works</run>, but the 2 GB case is still slow. \
-                <run s="local_demo-silo-rel">v0.9 is tagged</run>; its release workflow is running.
-                """),
-                p("lcu-research", """
-                <need s="local_demo-calc">Stuck: the staging database is unreachable while the VPN is down.</need>
-                """),
-                p("zig", """
-                Upstream wants a test before merging the symlink walk: \
-                <need s="local_demo-zig">in fs/test.zig, or a new file?</need>
-                """),
-                p("fjord-site", """
-                <look s="local_demo-site-copy">Three headline options</look> for the landing page are drafted; picking one \
-                ships the page. <run s="local_demo-site-og">Social previews</run> are rendering.
-                """),
-                p("dotfiles", """
-                <run s="local_demo-dots">Cleaning up the Ghostty config.</run>
-                """),
+                .init(folder: folder("lookout"), text: lookout),
+                .init(folder: folder("microsandbox"), text: sandbox),
+                .init(folder: folder("lcu"), text: "\(need("lcu", "Should updates install silently, or ask first?")) "
+                      + "\(look("docs", "The docs redesign is in")), not yet checked on mobile widths. "
+                      + "\(run("bump", "The SDK bump")) waits on CI."),
+                .init(folder: folder("silo"), text: silo),
+                .init(folder: folder("lcu-research"),
+                      text: need("calc", "Stuck: the staging database is unreachable while the VPN is down.")),
+                .init(folder: folder("zig"), text: "Upstream wants a test before merging the symlink walk: "
+                      + need("zig", "in fs/test.zig, or a new file?")),
+                .init(folder: folder("fjord-site"), text: site),
+                .init(folder: folder("dotfiles"), text: run("dots", "Cleaning up the Ghostty config.")),
             ],
             at: now.addingTimeInterval(-40))
+        typealias Change = RouterDigest.Revision.Change
+        digest.history = [
+            .init(at: now.addingTimeInterval(-40), trigger: .session("local_demo-login"),
+                  label: "The login fix passed CI and can go on",
+                  why: "CI on me/lookout#212 finished green. The session stopped to wait for it, so it's yours to tell it to go on.",
+                  changes: [Change(key: "lead-you", before: youD, after: you),
+                            Change(key: folder("lookout"), before: lookoutB, after: lookout)]),
+            .init(at: now.addingTimeInterval(-180), trigger: .session("local_demo-release"),
+                  label: "Fjord 2.4 is ready to publish",
+                  why: "The release session built 2.4 and its notes, and asks your OK before it publishes to the App Store and "
+                    + "pushes the v2.4.0 tag. Publishing can't be taken back, so it leads For you.",
+                  changes: [Change(key: "lead-you", before: youC, after: youD),
+                            Change(key: folder("lookout"), before: lookoutA, after: lookoutB)]),
+            .init(at: now.addingTimeInterval(-300), trigger: .session("local_demo-silo-guest"),
+                  label: "silo wants an OK to force-push its rebased branch",
+                  why: "The rebase on main is done with 3 conflicts resolved. A force-push rewrites the branch others may "
+                    + "have pulled, so it asks first.",
+                  changes: [Change(key: "lead-you", before: youB, after: youC),
+                            Change(key: folder("silo"), before: siloA, after: silo)]),
+            .init(at: now.addingTimeInterval(-420), trigger: .you("per project"),
+                  label: "You answered where sandbox storage lives",
+                  why: "You told the storage session to keep its cache per project. It went on with that, so the question "
+                    + "left the brief.",
+                  changes: [Change(key: "lead-you", before: youA, after: youB),
+                            Change(key: folder("microsandbox"), before: sandboxA, after: sandbox)]),
+            .init(at: now.addingTimeInterval(-1320), trigger: .session("local_demo-site-copy"),
+                  label: "Three landing-page headlines to pick from",
+                  why: "The copy session drafted three headline options. Nothing waits on them, so they're worth a look "
+                    + "rather than for you.",
+                  changes: [Change(key: "lead-look", before: lookA, after: lookNow),
+                            Change(key: folder("fjord-site"), before: siteA, after: site)]),
+        ]
+        store.routerDigest = digest
     }
 
     /// The Router changing Fjord itself: a record for each change (one taken back).

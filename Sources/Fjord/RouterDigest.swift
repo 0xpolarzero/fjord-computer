@@ -22,6 +22,104 @@ struct RouterDigest: Equatable {
     var worthALook: String
     var projects: [Project]
     var at: Date
+    /// Every rewrite, newest first: what set it off, what it changed and why.
+    var history: [Revision] = []
+
+    /// A rewrite of the brief: the event that set it off (a session's or yours), a label for it, why the text changed, and
+    /// each paragraph it changed, before and after.
+    struct Revision: Equatable, Identifiable {
+        enum Trigger: Equatable {
+            /// Something came in from a session.
+            case session(String)
+            /// You said something (to the Router or a session).
+            case you(String)
+        }
+
+        struct Change: Equatable {
+            /// The paragraph: "lead-you", "lead-look" or a project's folder.
+            let key: String
+            let before: String
+            let after: String
+        }
+
+        var id: String { "\(at.timeIntervalSince1970)" }
+        let at: Date
+        let trigger: Trigger
+        /// What changed, in a few words.
+        let label: String
+        /// Why, in a sentence: what the event was and what it means for you.
+        let why: String
+        let changes: [Change]
+    }
+}
+
+/// A word-by-word diff of two paragraphs' text, tags read out: the words kept, taken out and put in, in reading order.
+enum DigestDiff {
+    enum Word: Equatable {
+        case same(String), removed(String), added(String)
+    }
+
+    static func words(_ before: String, _ after: String) -> [Word] {
+        let a = plain(before), b = plain(after)
+        let diff = b.difference(from: a)
+        var removed = Set<Int>(), inserted = Set<Int>()
+        for change in diff {
+            switch change {
+            case .remove(let offset, _, _): removed.insert(offset)
+            case .insert(let offset, _, _): inserted.insert(offset)
+            }
+        }
+        // Walk both: what left a, where it stood, then what came into b.
+        var out: [Word] = []
+        var i = 0, j = 0
+        while i < a.count || j < b.count {
+            if i < a.count, removed.contains(i) { out.append(.removed(a[i])); i += 1; continue }
+            if j < b.count, inserted.contains(j) { out.append(.added(b[j])); j += 1; continue }
+            if i < a.count, j < b.count { out.append(.same(b[j])); i += 1; j += 1; continue }
+            if i < a.count { out.append(.removed(a[i])); i += 1 } else { out.append(.added(b[j])); j += 1 }
+        }
+        return trimmed(out)
+    }
+
+    /// The words kept, cut to a few on each side of a change, as a diff's context: a long run between two changes keeps
+    /// its ends with "…" between, one before the first change or after the last keeps only the end next to it.
+    static func trimmed(_ words: [Word], context: Int = 4) -> [Word] {
+        var out: [Word] = []
+        var run: [Word] = []
+        func flush(atEnd: Bool) {
+            let first = out.isEmpty
+            if run.count <= context * 2 + 1 || (first && atEnd) {
+                out += run
+            } else if first {
+                out += [.same("…")] + run.suffix(context)
+            } else if atEnd {
+                out += run.prefix(context) + [.same("…")]
+            } else {
+                out += run.prefix(context) + [.same("…")] + run.suffix(context)
+            }
+            run = []
+        }
+        for word in words {
+            if case .same = word { run.append(word); continue }
+            if !run.isEmpty { flush(atEnd: false) }
+            out.append(word)
+        }
+        if !run.isEmpty { flush(atEnd: true) }
+        return out
+    }
+
+    /// The paragraph's words, its tags dropped (their text kept).
+    static func plain(_ markup: String) -> [String] {
+        DigestMarkup.parse(markup).map { piece -> String in
+            switch piece {
+            case .text(let text): text
+            case .span(_, _, let text): text
+            }
+        }
+        .joined()
+        .split(whereSeparator: \.isWhitespace)
+        .map(String.init)
+    }
 }
 
 /// The text with its tags read out.
@@ -72,6 +170,10 @@ enum DigestMarkup {
     var hovered: String?
     /// "paragraph#session" opened under its paragraph.
     var open: String?
+    /// The brief's history beside it.
+    var historyOpen = false
+    /// The rewrites opened to their diff.
+    var expanded: Set<String> = []
 }
 
 // MARK: - Page
@@ -110,6 +212,14 @@ struct DigestPage: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        // The history, a column on the right, beside the text rather than over it.
+        .safeAreaInset(edge: .trailing, spacing: 0) {
+            if model.digest.historyOpen, let digest = store.routerDigest {
+                DigestHistory(store: store, model: model, digest: digest, folders: folders)
+                    .frame(width: DigestHistory.width)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
     }
 
     /// The lead: what's for you, then what's worth a look, each under its name in its colour.
@@ -119,6 +229,20 @@ struct DigestPage: View {
                 Text("Brief").font(CDS.sans(20, .semibold)).foregroundStyle(CDS.Text.primary)
                 Spacer()
                 Text("updated " + agoPhrase(digest.at)).font(CDS.sans(12)).foregroundStyle(CDS.Text.muted)
+                if !digest.history.isEmpty {
+                    let on = model.digest.historyOpen
+                    Button {
+                        withAnimation(Motion.spatial.resolved(reduce: false)) { model.digest.historyOpen.toggle() }
+                    } label: {
+                        Label("History \(digest.history.count)", systemImage: "clock.arrow.circlepath")
+                            .font(CDS.sans(12, .medium))
+                            .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
+                            .padding(.horizontal, 8).frame(height: 24)
+                            .background(Capsule().fill(on ? CDS.alpha(0.10) : CDS.alpha(0.05)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(on ? "Hide the brief's history" : "Show the brief's history")
+                }
             }
             DigestParagraph(store: store, model: model, page: page, items: items, key: "lead-you", markup: digest.forYou,
                             size: 16) {
@@ -237,6 +361,130 @@ private struct DigestParagraph<Title: View>: View {
     }
 }
 
+
+// MARK: - History
+
+/// The brief's history: each rewrite, newest first, as a line saying what changed, set off by what (a session, with its
+/// icon, or you) and when. Opened, it says why and shows each paragraph it changed, word by word: what went struck through,
+/// what came in on green.
+private struct DigestHistory: View {
+    let store: Store
+    let model: RouterModel
+    let digest: RouterDigest
+    let folders: [CanvasFolder]
+
+    static let width: CGFloat = 400
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Brief history").font(CDS.sans(13, .semibold)).foregroundStyle(CDS.Text.primary)
+                Spacer()
+                Text("\(digest.history.count) rewrites").font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
+            }
+            .padding(.horizontal, 16).frame(height: 44)
+            Rectangle().fill(CDS.border).frame(height: CDS.hairline)
+            Scrolling {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(digest.history) { revision in
+                        entry(revision)
+                        Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline).padding(.leading, 44)
+                    }
+                }
+                .padding(.bottom, LaneMetrics.bottom)
+            }
+        }
+        .background(CDS.Surface.s2)
+        .overlay(alignment: .leading) { Rectangle().fill(CDS.border).frame(width: CDS.hairline) }
+    }
+
+    private func entry(_ revision: RouterDigest.Revision) -> some View {
+        let open = model.digest.expanded.contains(revision.id)
+        return VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(Motion.spatial.resolved(reduce: false)) {
+                    if open { model.digest.expanded.remove(revision.id) } else { model.digest.expanded.insert(revision.id) }
+                }
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    trigger(revision.trigger)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(revision.label).font(CDS.sans(13, .medium)).foregroundStyle(CDS.Text.primary)
+                            .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                        Text(source(revision.trigger) + " · " + shortAgo(revision.at))
+                            .font(CDS.sans(11.5)).foregroundStyle(CDS.Text.muted).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(CDS.Text.muted).rotationEffect(.degrees(open ? 90 : 0)).padding(.top, 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(revision.why).font(CDS.sans(12.5)).foregroundStyle(CDS.Text.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(revision.changes.enumerated()), id: \.offset) { _, change in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(title(change.key)).font(CDS.sans(11, .semibold)).foregroundStyle(CDS.Text.muted)
+                            DigestFlow(spacing: 3.5, lineSpacing: 3) {
+                                ForEach(Array(DigestDiff.words(change.before, change.after).enumerated()), id: \.offset) { _, word in
+                                    diffWord(word)
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(CDS.alpha(0.035)))
+                    }
+                }
+                .padding(.leading, 34)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+
+    @ViewBuilder private func diffWord(_ word: DigestDiff.Word) -> some View {
+        switch word {
+        case .same(let w):
+            Text(w).font(CDS.sans(12.5)).foregroundStyle(CDS.Text.secondary)
+        case .removed(let w):
+            Text(w).font(CDS.sans(12.5)).strikethrough(color: Theme.red.opacity(0.8)).foregroundStyle(Theme.red.opacity(0.85))
+                .padding(.horizontal, 1).background(RoundedRectangle(cornerRadius: 3).fill(Theme.red.opacity(0.10)))
+        case .added(let w):
+            Text(w).font(CDS.sans(12.5, .medium)).foregroundStyle(Theme.green)
+                .padding(.horizontal, 1).background(RoundedRectangle(cornerRadius: 3).fill(Theme.green.opacity(0.14)))
+        }
+    }
+
+    /// Who set it off: the session's own icon, or you.
+    @ViewBuilder private func trigger(_ trigger: RouterDigest.Revision.Trigger) -> some View {
+        switch trigger {
+        case .session(let id):
+            SessionMark(store: store, session: id, size: 22)
+        case .you:
+            Image(systemName: "person.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(CDS.Text.accent)
+                .frame(width: 23, height: 23)
+                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(CDS.Text.accent.opacity(0.14)))
+        }
+    }
+
+    private func source(_ trigger: RouterDigest.Revision.Trigger) -> String {
+        switch trigger {
+        case .session(let id): store.claudeSessions[id]?.title ?? "A session"
+        case .you(let said): "You: “\(said)”"
+        }
+    }
+
+    private func title(_ key: String) -> String {
+        switch key {
+        case "lead-you": "For you"
+        case "lead-look": "Worth a look"
+        default: folders.first { $0.key == key }?.name ?? (key as NSString).lastPathComponent
+        }
+    }
+}
 
 /// What a highlight's session is at, in a mark and a colour: what it asks of you (its card's kind), worth a look, ready to go
 /// on, waiting, or working.
