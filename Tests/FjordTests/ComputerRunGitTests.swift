@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Fjord
 
-@Suite(.serialized) struct ComputerRunGitTests {
+@Suite(.serialized, .ownGuestRuntime) struct ComputerRunGitTests {
     @Test func freshCloneCanCreateRunBranchFromHeadWithoutFetchHead() throws {
         let fixture = try LocalGitFixture()
         let clone = try fixture.cloneSeed()

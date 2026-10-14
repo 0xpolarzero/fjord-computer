@@ -75,13 +75,25 @@ struct SettingsView: View {
     /// What Settings shows of the system: the login item and Accessibility access, as last read. Read once when first
     /// asked for, then again each time Settings shows (`read`), never as the page's view is made (which is on every redraw
     /// of what holds it).
-    @MainActor enum SystemState {
+    @MainActor final class SystemState {
         struct Known: Sendable { var launchAtLogin: Bool; var accessibility: Bool }
-        private static var last: Known?
+
+        /// The one the app uses. A test makes its own, so what other suites read of the system never lands in it.
+        static let shared = SystemState()
+        init() {}
+
+        static var known: Known { shared.known }
+        static func remember(launchAtLogin on: Bool) { shared.remember(launchAtLogin: on) }
+        static func read(ask: @Sendable () async -> Known = SystemState.ask) async -> (launchAtLogin: Bool?, accessibility: Bool) {
+            await shared.read(ask: ask)
+        }
+
+        private var last: Known?
+        private var asking = false
 
         /// What was last read, never asked on the main thread: before the first answer is in, off and not granted (and the
         /// system is asked, off it), which the page's own read on showing then corrects.
-        static var known: Known {
+        var known: Known {
             if let last { return last }
             if !asking {
                 asking = true
@@ -89,7 +101,6 @@ struct SettingsView: View {
             }
             return Known(launchAtLogin: false, accessibility: false)
         }
-        private static var asking = false
 
         /// The system asked, off the main thread.
         nonisolated static func ask() async -> Known {
@@ -99,9 +110,9 @@ struct SettingsView: View {
         }
 
         /// Bumped by each switch of the login item: an answer asked for before one is older than it.
-        private static var revision = 0
+        private var revision = 0
 
-        static func remember(launchAtLogin on: Bool) {
+        func remember(launchAtLogin on: Bool) {
             revision &+= 1
             // Before the system's first answer too: yours is what is known of it (an answer asked for before is older).
             last = Known(launchAtLogin: on, accessibility: last?.accessibility ?? false)
@@ -109,7 +120,7 @@ struct SettingsView: View {
 
         /// What the system says now; the login item nil when you switched it while it was being asked (the answer is
         /// from before your switch, which stands).
-        static func read(ask: @Sendable () async -> Known = SystemState.ask) async -> (launchAtLogin: Bool?, accessibility: Bool) {
+        func read(ask: @Sendable () async -> Known = SystemState.ask) async -> (launchAtLogin: Bool?, accessibility: Bool) {
             let asked = revision
             let now = await ask()
             let current = asked == revision

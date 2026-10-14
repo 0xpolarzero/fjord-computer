@@ -7,17 +7,17 @@ struct SettingsSystemStateTests {
     /// An answer from the system asked for before you switched the login item is older than your switch: it doesn't turn
     /// the switch back.
     @Test func aLoginItemReadFromBeforeYourSwitchDoesNotUndoIt() async {
-        typealias State = SettingsView.SystemState
+        let state = SettingsView.SystemState()  // its own: other suites' Settings pages read the shared one
         let gate = Gate()
-        let read = Task { await State.read { await gate.wait(); return .init(launchAtLogin: false, accessibility: true) } }
+        let read = Task { await state.read { await gate.wait(); return .init(launchAtLogin: false, accessibility: true) } }
         await waitUntil { gate.waiting }
-        State.remember(launchAtLogin: true)
+        state.remember(launchAtLogin: true)
         gate.open()
         let answer = await read.value
         #expect(answer.launchAtLogin == nil && answer.accessibility)
-        #expect(State.known.launchAtLogin, "the page made again opens on your switch, not on the older answer")
+        #expect(state.known.launchAtLogin, "the page made again opens on your switch, not on the older answer")
         // Asked after the switch: its answer stands.
-        let later = await State.read { .init(launchAtLogin: true, accessibility: true) }
+        let later = await state.read { .init(launchAtLogin: true, accessibility: true) }
         #expect(later.launchAtLogin == true)
     }
 

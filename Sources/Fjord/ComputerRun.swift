@@ -354,8 +354,23 @@ enum ComputerRunResource {
 final class ComputerRunCoordinator {
     enum Authorization { case qualified, blocked(String) }
 
-    private static var activeComputers = Set<String>()
-    private static var restoredComputers = Set<String>()
+    /// Which computers a run is on (`active`) or was left on (`restored`). Process-wide in the app; a test scopes its own, so
+    /// suites running side by side that share a computer's key never see each other's runs.
+    @MainActor final class Registry {
+        var active = Set<String>()
+        var restored = Set<String>()
+        static let app = Registry()
+        @TaskLocal nonisolated(unsafe) static var scoped: Registry?
+        static var current: Registry { scoped ?? app }
+    }
+    private static var activeComputers: Set<String> {
+        get { Registry.current.active }
+        set { Registry.current.active = newValue }
+    }
+    private static var restoredComputers: Set<String> {
+        get { Registry.current.restored }
+        set { Registry.current.restored = newValue }
+    }
     private let engine: any EngineClient
     private let guest: any GuestClient
     private let authorization: Authorization

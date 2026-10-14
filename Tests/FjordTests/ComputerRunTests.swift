@@ -3,7 +3,7 @@ import Testing
 @testable import Fjord
 
 @MainActor
-@Suite(.serialized) struct ComputerRunTests {
+@Suite(.serialized, .ownGuestRuntime) struct ComputerRunTests {
     private let computerID = MockEngineClient.linuxID
     private var target: GuestReference { GuestReference(deviceId: nil, computerId: computerID) }
 

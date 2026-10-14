@@ -3,7 +3,7 @@ import Testing
 @testable import Fjord
 
 @MainActor
-@Suite struct ComputersTests {
+@Suite(.ownGuestRuntime) struct ComputersTests {
     @Test func quitPromptNamesOnlyRunningComputers() throws {
         let prompt = try #require(ComputerQuitPrompt.make(inventory: MockEngineClient.demoInventory))
         #expect(prompt.runningComputers.map(\.name) == ["dev", "linux-1"])

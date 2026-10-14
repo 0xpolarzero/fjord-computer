@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 import Testing
 
-@Suite(.serialized) struct GuestRunSupervisorTests {
+@Suite(.serialized, .ownGuestRuntime) struct GuestRunSupervisorTests {
     @Test func standardUUIDConfigReachesClaude() throws {
         let fixture = try GuestRunFixture()
         try fixture.writeConfig(runID: "80000000-0000-4000-8000-000000000001", recordProof: false)
@@ -176,11 +176,11 @@ private final class GuestRunFixture {
         return process
     }
 
-    func waitForExit(_ process: Process, timeout: TimeInterval = 5) -> Bool {
+    func waitForExit(_ process: Process, timeout: TimeInterval = waitWatchdog) -> Bool {
         waitUntil(timeout: timeout) { !process.isRunning }
     }
 
-    func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+    func waitUntil(timeout: TimeInterval = waitWatchdog, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }

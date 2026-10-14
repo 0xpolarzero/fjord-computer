@@ -4,7 +4,7 @@ import Testing
 @testable import Fjord
 
 @MainActor
-@Suite(.serialized) struct ComputerRunResultShotTests {
+@Suite(.serialized, .ownGuestRuntime) struct ComputerRunResultShotTests {
     @Test func minimumHeightLongSummaryShotExercisesResultCardScrolling() throws {
         let shot = try #require(AppWindowShots.catalog.first { $0.name == "triage-computer-run-result-long-min" })
         #expect(shot.size == CGSize(width: AppWindowController.minSize.width,

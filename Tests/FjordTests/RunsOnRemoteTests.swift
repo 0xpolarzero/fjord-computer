@@ -5,7 +5,7 @@ import Testing
 /// Router "Runs on" for a computer owned by another device: every step addresses the owner by deviceId, and a computer
 /// with the same id on This Mac is never touched.
 @MainActor
-@Suite(.serialized) struct RunsOnRemoteTests {
+@Suite(.serialized, .ownGuestRuntime) struct RunsOnRemoteTests {
     private let deviceID = "device-2"
     private let computerID = "10000000-0000-4000-8000-0000000000b7"
     private var remote: GuestReference { GuestReference(deviceId: deviceID, computerId: computerID) }

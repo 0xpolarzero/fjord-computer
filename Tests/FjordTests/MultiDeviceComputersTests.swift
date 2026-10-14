@@ -5,7 +5,7 @@ import Testing
 /// The Computers tool as a controller: This Mac and every connected device are listed, and every action, job and event is
 /// scoped by the device that owns the computer. The demo remote device reuses the ids of This Mac's `dev` and `linux-1`.
 @MainActor
-@Suite(.serialized) struct MultiDeviceComputersTests {
+@Suite(.serialized, .ownGuestRuntime) struct MultiDeviceComputersTests {
     private let device = MockEngineClient.demoRemoteDevice
     private var remoteMac: GuestReference { GuestReference(deviceId: device.id, computerId: MockEngineClient.devID) }
     private var localMac: GuestReference { .thisMac(MockEngineClient.devID) }

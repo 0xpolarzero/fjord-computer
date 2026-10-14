@@ -123,7 +123,7 @@ private struct AccountPausingGuestClient: GuestClient {
     }
 }
 
-@Suite(.serialized) struct GuestRouterTests {
+@Suite(.serialized, .ownGuestRuntime) struct GuestRouterTests {
     private let computer = GuestReference(deviceId: "owner-1", computerId: "computer-1")
     private var localComputer: GuestReference { GuestReference(deviceId: nil, computerId: computer.computerId) }
     private var account: GuestAccount {

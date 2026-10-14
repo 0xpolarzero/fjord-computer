@@ -4,7 +4,12 @@ import Foundation
 /// App-lifetime guest observers. A tool invocation can finish while a Desktop SSH session is still waiting for the person
 /// to send; this object keeps file watches alive and reconciles them with the controller's Desktop metadata.
 @MainActor final class GuestRouterRuntime {
-    static let shared = GuestRouterRuntime()
+    /// The app's runtime, which every caller reaches as `shared`.
+    static let app = GuestRouterRuntime()
+    /// A runtime a test scopes to its own task (and the tasks that one starts): `stopAll` and `disableAll` from other
+    /// suites running side by side never reach the watchers and hooks of a test that has its own.
+    @TaskLocal nonisolated(unsafe) static var scoped: GuestRouterRuntime?
+    static var shared: GuestRouterRuntime { scoped ?? app }
 
     private weak var store: Store?
     private var clients: [String: any GuestClient] = [:]

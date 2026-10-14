@@ -5,7 +5,7 @@ import Testing
 /// Triage runs, the Computers page's references and the computer-removal hooks for computers owned by another device:
 /// every call names the owner, and a computer with the same id on This Mac is never read, started or cleaned up instead.
 @MainActor
-@Suite(.serialized) struct RemoteOwnersTests {
+@Suite(.serialized, .ownGuestRuntime) struct RemoteOwnersTests {
     private let deviceID = "device-2"
     private let computerID = "10000000-0000-4000-8000-0000000000c9"
     private var remote: GuestReference { GuestReference(deviceId: deviceID, computerId: computerID) }

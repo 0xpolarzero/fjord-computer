@@ -73,7 +73,7 @@ final class DiskCheckingPerformer: ActionPerformer {
 }
 
 @MainActor
-@Suite(.serialized) struct InboxActionsTests {
+@Suite(.serialized, .ownGuestRuntime) struct InboxActionsTests {
     private let session = CategoryAction.make(.askRouter(prompt: "Look at {title} by {author} ({repo}#{number}) {url}"))
 
     /// A store, the Router on with Triage (an action may start a session), whose category has `actions` and holds PRs with
