@@ -81,9 +81,9 @@ enum InboxJev {
             questions[id + "_importance"] = .score(levels: Importance.allCases.map(\.rawValue),
                 instructions: "How important is it that \(me) acts on \(id) soon, compared with the rest of a busy developer's inbox?")
         }
-        var state: [String: Any] = ["you": me, "note": note]
+        var state: [String: Any] = ["the user": me, "note": note]
         if !messages.isEmpty { state["messages"] = messages }
-        if !rated.isEmpty { state["asked of you"] = rated }
+        if !rated.isEmpty { state["asked of the user"] = rated }
         return (questions, state)
     }
 
@@ -209,9 +209,9 @@ enum InboxJev {
         let all = InboxEngine.messages(thing)
         let before = all.last { $0.at < m.at && $0.path == m.path }
         var out: [String: Any] = [
-            "on": name(thing), "your part": role(thing, context), "from": who(m.author),
+            "on": name(thing), "the user's part": role(thing, context), "from": who(m.author),
             "kind": m.path != nil ? "reply in a review thread" : (m.isReview ? "review" : "comment"),
-            "text": github(m.text, 2000), "mentions you": m.text.lowercased().contains("@" + context.me.lowercased()) ? "yes" : "no",
+            "text": github(m.text, 2000), "mentions the user": m.text.lowercased().contains("@" + context.me.lowercased()) ? "yes" : "no",
         ]
         // A file's name is the PR's (anyone's) words: in a field of its own, cleaned, bounded and fenced; `kind` stays fixed.
         if let path = m.path, !path.isEmpty { out["file of the review thread"] = UntrustedFence.github.fence(UntrustedText.clean(path, limit: 200)) }
@@ -222,8 +222,8 @@ enum InboxJev {
     private static func thingState(_ thing: Thing, context: InboxContext) -> [String: Any] {
         let me = context.me.lowercased()
         let teams = Set(context.myTeams.map { $0.lowercased() })
-        var asks = thing.requestedReviewers.contains { $0.lowercased() == me } ? "your review"
-            : thing.requestedReviewers.first { teams.contains($0.lowercased()) }.map { "a review from your team @\($0)" } ?? "assigned to you"
+        var asks = thing.requestedReviewers.contains { $0.lowercased() == me } ? "the user's review"
+            : thing.requestedReviewers.first { teams.contains($0.lowercased()) }.map { "a review from the user's team @\($0)" } ?? "assigned to the user"
         if let request = thing.reviewRequests.first(where: { $0.reviewer.lowercased() == me || teams.contains($0.reviewer.lowercased()) }) {
             asks += ", asked \(age(request.at, context.now)) ago"
         }

@@ -217,7 +217,10 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     }
 
     /// What was done, one phrase per item.
-    var doneLines: [String] {
+    var doneLines: [String] { lines(forModel: false) }
+
+    /// `doneLines`, worded for a model (the user, not "you") when `forModel`.
+    func lines(forModel: Bool) -> [String] {
         done.map { item in
             switch item {
             case .sent(let to, let text, _): "sent to \(to): \(Self.clip(text, 80))"
@@ -226,7 +229,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             case .changed(let id): "changed Fjord (\(id.uuidString.prefix(8)))"
             case .answered(let card): "answered \(card)"
             case .asked(let options): "asked which: " + options.joined(separator: " / ")
-            case .resolved(let card, let message): "addressed \(card) by your message: \(Self.clip(message, 80))"
+            case .resolved(let card, let message): "closed \(card) by \(forModel ? "the user\'s" : "your") message: \(Self.clip(message, 80))"
             case .failed(let reason): "failed: \(reason)"
             case .cancelled(let how): how.words
             }
@@ -295,8 +298,8 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         let who: String
         switch trigger {
         case .you(let text):
-            who = fromAction.map { "action of the category “\(UntrustedText.clean($0.category, limit: 40))”, your prompt: “\(Self.clip(text, 100))”" }
-                ?? "you: “\(Self.clip(text, 100))”"
+            who = fromAction.map { "action of the category “\(UntrustedText.clean($0.category, limit: 40))”, the user's prompt: “\(Self.clip(text, 100))”" }
+                ?? "the user: “\(Self.clip(text, 100))”"
         case .action(let category, let thing, _, _): who = "action of the category “\(UntrustedText.clean(category, limit: 40))” · \(UntrustedText.clean(thing, limit: 80))"
         case .session(_, let event): who = "session: \(Self.clip(event, 100))"
         case .system: who = "Fjord"
@@ -304,12 +307,12 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         var parts = [who]
         if let target = decision.target { parts.append("target \(target)") }
         if let intent = decision.intent ?? decision.label { parts.append(intent) }
-        let did = doneLines
+        let did = lines(forModel: true)
         if !did.isEmpty { parts.append(did.joined(separator: "; ")) }
         var line = "\(when) · " + parts.joined(separator: " → ")
         switch outcome {
-        case .reverted: line += " (you reverted this)"
-        case .corrected(let from, let to): line += " (you corrected this: not \(from), but \(to))"
+        case .reverted: line += " (the user reverted this)"
+        case .corrected(let from, let to): line += " (the user corrected this: not \(from), but \(to))"
         case .pending, .done: break
         }
         return line

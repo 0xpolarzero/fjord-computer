@@ -59,16 +59,16 @@ enum FjordTools {
     }
 
     private static let categoryRef = JSONShape.Field("category", .string("id or name"), "A category's id or name.")
-    private static let changeNote = " The change applies at once and the user gets a card in the history with its before and after, an Open button and a Revert button: don't repeat it back. Some changes wait for the user instead (an action that runs by itself, what a category with actions runs on, a deletion, many things marked, a setting the message didn't name): the answer says so, and nothing is applied until they click Apply."
+    private static let changeNote = " The change applies at once and the user gets a card in the history with its before and after, an Open button and a Revert button: don't repeat it back. Some changes wait for the user instead (an action that runs by itself, what a category with actions runs on, a deletion, many inbox things marked, a setting the message didn't name): the answer says so, and nothing is applied until they click Apply."
 
     static let tools: [Tool] = [
-        Tool(name: "list_categories", doc: "Lists Triage's inbox categories in priority order (a thing is in the first one a rule matches), each with its rules as JSON (the form create_category and update_category take), a plain-words summary of each rule, its actions and how many open and unread things it holds. Also says how many things are done.", fields: [], reads: true),
-        Tool(name: "get_category", doc: "One category as JSON (the form update_category takes), with its rules in plain words and its open things.", fields: [categoryRef], reads: true),
-        Tool(name: "create_category", doc: "Creates an inbox category: a named, coloured list of the PRs, issues and workflows that need the user, by rules. It goes last (or at `at`, 0 is first); a thing is in the first category that matches. Rejected, with every reason as the editor shows it, if a rule can never match. Actions run by themselves for things that come in: add one only when the user asked, and never a GitHub comment on your own.\(changeNote)\n\n\(FjordDocs.ruleGrammar)",
+        Tool(name: "list_categories", doc: "Lists Triage's inbox categories in priority order (an inbox thing is in the first one a rule matches), each with its rules as JSON (the form create_category and update_category take), a plain-words summary of each rule, its actions and how many open and unread inbox things it holds. Also says how many inbox things are archived.", fields: [], reads: true),
+        Tool(name: "get_category", doc: "One category as JSON (the form update_category takes), with its rules in plain words and its open inbox things.", fields: [categoryRef], reads: true),
+        Tool(name: "create_category", doc: "Creates an inbox category: a named, coloured list of the PRs, issues and workflows that need the user, by rules. It goes last (or at `at`, 0 is first); an inbox thing is in the first category that matches. Rejected, with every reason as the editor shows it, if a rule can never match. Actions run by themselves for things that come in: add one only when the user asked, and never a GitHub comment on your own.\(changeNote)\n\n\(FjordDocs.ruleGrammar)",
              fields: [.init("category", .named("Category"), "The category."), .init("at", .int, "Position, 0 is first. Left out: last.", fallback: .absent)]),
         Tool(name: "update_category", doc: "Changes a category. Give its `id` and the fields that change (name, symbol, color, rules, notifies, hidden, actions); fields left out keep their value, and `rules` or `actions`, when given, replace the whole list (keep each rule's `id` from get_category so its history stays). The same JSON and the same refusals as create_category.\(changeNote)",
              fields: [.init("category", .named("Category"), "The category's `id` and what changes.")]),
-        Tool(name: "delete_category", doc: "Deletes a category, the CI category too (hiding it with update_category keeps it, out of the bar): its things go to the next category that matches.\(changeNote)", fields: [categoryRef]),
+        Tool(name: "delete_category", doc: "Deletes a category, the CI category too (hiding it with update_category keeps it, out of the bar): its inbox things go to the next category that matches.\(changeNote)", fields: [categoryRef]),
         Tool(name: "reorder_categories", doc: "Sets the order of the categories, which is their priority. Name every category, in the new order.\(changeNote)",
              fields: [.init("order", .list(.string("id or name")), "Every category's id or name, first to last.")]),
         Tool(name: "list_groups", doc: "Lists the groups (named lists of people or repos usable as one value in any rule) with their members and the categories that use them.", fields: [], reads: true),
@@ -77,17 +77,17 @@ enum FjordTools {
         Tool(name: "update_group", doc: "Changes a group (its `id`, and what changes; `members`, when given, replaces the list). Rules using it follow. The kind can't change while rules use it.\(changeNote)",
              fields: [.init("group", .named("Group"), "The group's `id` and what changes.")]),
         Tool(name: "delete_group", doc: "Deletes a group no rule uses.\(changeNote)", fields: [.init("group", .string("id or name"), "A group's id or name.")]),
-        Tool(name: "list_inbox", doc: "Lists things in the inbox: id, title, repo#number, kind, category, the facts that put it there (\"2 unresolved\", \"last comment: @x\"), whether it is done or unread, author, last update and URL. Open ones by default, newest first.",
+        Tool(name: "list_inbox", doc: "Lists inbox things: id, title, repo#number, kind, category, the facts that put it there (\"2 unresolved\", \"last comment: @x\"), whether it is archived or unread, author, last update and URL. Open ones by default, newest first.",
              fields: [.init("category", .string("id or name"), "Only this category.", fallback: .absent),
                       .init("query", .string("words"), "Words that all appear in the title, repo, number, author, category or facts.", fallback: .absent),
-                      .init("state", .choice(["open", "done", "all"]), "Default open.", fallback: .absent),
+                      .init("state", .choice(["open", "archived", "all"]), "Default open.", fallback: .absent),
                       .init("limit", .int, "At most this many (default 50, at most 200).", fallback: .absent)], reads: true),
-        Tool(name: "explain_entry", doc: "Says why a thing is where it is: the category and rules that matched it and the facts, the other categories it would match but comes after, rules that are off until fixed, and the thing's own state (status, author, labels, checks…) for working out why it isn't somewhere.",
-             fields: [.init("entry", .string("thing id, owner/repo#n, or title words"), "The thing: its id from list_inbox, `owner/repo#12`, or words of its title.")], reads: true),
-        Tool(name: "mark_entries", doc: "Triage inbox things (GitHub PRs, issues, workflows), not Router cards: for a Router card (a Claude Code session) use mark_seen. State `done` archives them (it acknowledges their current facts; they come back only on a new fact); `seen` marks them read; `unread` marks seen ones unread again; `restore` puts archived (done) ones back in the inbox. Give `entries` or a whole `category` (its open ones for done, its unread for seen, its done ones for restore). At most 100.\(changeNote)",
-             fields: [.init("state", .choice(["done", "seen", "unread", "restore"]), "done = archive, seen = read, unread = unread again, restore = back from archived."),
-                      .init("entries", .list(.string("thing id, owner/repo#n, or title words")), "Things.", fallback: .absent),
-                      .init("category", .string("id or name"), "Every matching thing of this category.", fallback: .absent)]),
+        Tool(name: "explain_entry", doc: "Says why an inbox thing is where it is: the category and rules that matched it and the facts, the other categories it would match but comes after, rules that are off until fixed, and the inbox thing's own state (status, author, labels, checks…) for working out why it isn't somewhere.",
+             fields: [.init("entry", .string("thing id, owner/repo#n, or title words"), "The inbox thing: its id from list_inbox, `owner/repo#12`, or words of its title.")], reads: true),
+        Tool(name: "mark_entries", doc: "Triage inbox things (GitHub PRs, issues, workflows), not Router cards: for a Router card (a Claude Code session) use mark_seen. State `archived` archives them (it acknowledges their current facts; they come back only on a new fact); `seen` marks them read; `unread` marks seen ones unread again; `restore` puts archived ones back in the inbox. Give `entries` or a whole `category` (its open ones for archived, its unread for seen, its archived ones for restore). At most 100.\(changeNote)",
+             fields: [.init("state", .choice(["archived", "seen", "unread", "restore"]), "archived = archive, seen = read, unread = unread again, restore = back from archived."),
+                      .init("entries", .list(.string("thing id, owner/repo#n, or title words")), "Inbox things.", fallback: .absent),
+                      .init("category", .string("id or name"), "Every matching inbox thing of this category.", fallback: .absent)]),
         Tool(name: "get_settings", doc: "Lists the settings the Router may change, with their values and what they take. The GitHub token, the account, quitting and the Router's own switch are not among them.", fields: [], reads: true),
         Tool(name: "set_setting", doc: "Changes one setting (get_settings lists the keys and what each takes).\(changeNote)", fields: [],
              schema: ["type": "object", "additionalProperties": false, "required": ["key", "value"],
@@ -97,16 +97,16 @@ enum FjordTools {
                               "\(s.key): " + (String(data: (try? JSONSerialization.data(withJSONObject: s.schema, options: [.sortedKeys])) ?? Data(), encoding: .utf8) ?? "")
                           }.joined(separator: "; ")],
                       ]] as [String: Any]),
-        Tool(name: "mark_seen", doc: "Router cards (Claude Code sessions') worth a look, marked as seen when the user says they've seen or read them: they leave Now and the Brief. Not for GitHub things: use mark_entries for those. Name each by the `card` or `session` id the board tool gives, or words of its title; only cards the board says `canMarkSeen`: one that needs the user (a question, a plan, an OK) is answered, not marked seen.",
+        Tool(name: "mark_seen", doc: "Router cards (Claude Code sessions') worth a look, marked as seen when the user says they've seen or read them: they leave Now and the Brief. Not for inbox things (GitHub PRs, issues, workflows): use mark_entries for those. Name each by the `card` or `session` id the board tool gives, or words of its title; only cards the board says `canMarkSeen`: one that needs the user (a question, a plan, an OK) is answered, not marked seen.",
              fields: [.init("cards", .list(.string("session id or title words")), "The cards worth a look the user has seen.")]),
-        Tool(name: "archive_cards", doc: "Archives Router cards (Claude Code sessions'), any open one, even one that needs the user: for when the user says they will handle it themselves or don't need it. It is the Archive button: the card goes to the history, where Reopen brings it back. Name each by the `card` or `session` id the board tool gives, or words of its title; It only proposes: the change waits for the user's Apply on a card in the history (Revert brings the card back), and nothing is archived until they click it, so say in your reply that it waits for them. Not for GitHub things: use mark_entries.",
+        Tool(name: "archive_cards", doc: "Archives Router cards (Claude Code sessions'), any open one, even one that needs the user: for when the user says they will handle it themselves or don't need it. It is the Archive button: the card goes to the history, where Reopen brings it back. Name each by the `card` or `session` id the board tool gives, or words of its title; It only proposes: the change waits for the user's Apply on a card in the history (Revert brings the card back), and nothing is archived until they click it, so say in your reply that it waits for them. Not for inbox things (GitHub PRs, issues, workflows): use mark_entries.",
              fields: [.init("cards", .list(.string("session id or title words")), "The open cards the user named.")]),
         Tool(name: "reopen_card", doc: "Reopens a Router card the user archived lately (the board tool lists the latest archived ones, with `card`, title and when): it is back in Needs you or Worth a look. Name it by its `card` id or words of its title. It only proposes: the change waits for the user's Apply (Revert archives it again). Refused when its session has another open card, which reopening would replace. Say in your reply that it waits for them.",
              fields: [.init("card", .string("card id or title words"), "The archived card.")]),
         Tool(name: "mute_project", doc: "Mutes or unmutes a project's sessions in the Router, so their cards, notifications and the Brief leave it or come back. Name the project as the board tool shows it, with its path above it when two share a name (`customer-a/app`). It only proposes: the change waits for the user's Apply (Revert undoes it), so say in your reply that it waits for them. If the name fits more than one project, nothing is proposed and the choices are listed.",
              fields: [.init("project", .string("project name"), "The project, as the board's `projects` shows it."),
                       .init("muted", .bool, "true to mute it, false to unmute it.")]),
-        Tool(name: "stop_session", doc: "Proposes stopping what a running session is working on now: the change waits for the user's Apply, and a stop can't be undone, so say in your reply that it waits for them. It works only for the running turn when a message sent through Fjord started it (not one queued behind it), in a session whose Fjord plugin supports it (the answer says why when it can't); what the turn already did stays done.",
+        Tool(name: "stop_session", doc: "Proposes stopping what a running session is working on now: the change waits for the user's Apply, and a stop can't be undone, so say in your reply that it waits for them. It works only for the running turn when a message sent through Fjord started it (not one queued behind it), in a session whose Fjord plugin supports it (the answer says why when it can't); what the turn already did stays as it was.",
              fields: [.init("session", .string("session id or title words"), "The running session, by the `session` id the board tool gives or words of its title.")]),
         Tool(name: "list_known", doc: "The repos, people or teams Triage knows (from what it has fetched and what the user has), to fill a rule's values; also the special values and the groups of that kind.",
              fields: [.init("kind", .choice(["repos", "people", "teams"]), "What to list."),
@@ -228,7 +228,7 @@ extension RouterTools {
         var out: [String: Any] = [
             "thing": e.id, "ref": shownReference(e.thing), "kind": e.thing.kind.rawValue, "title": InboxJev.github(e.thing.title, 200),
             "category": store.categories.first { $0.id == e.categoryID }?.title ?? "", "categoryId": e.categoryID.uuidString,
-            "facts": e.facts.map { InboxJev.github($0.label, 160) }, "done": e.isDone, "unread": e.isUnread, "updated": stamp(e.thing.updatedAt),
+            "facts": e.facts.map { InboxJev.github($0.label, 160) }, "archived": e.isDone, "unread": e.isUnread, "updated": stamp(e.thing.updatedAt),
             "url": e.thing.url.absoluteString,
         ]
         if let author = e.thing.author?.login { out["author"] = InboxJev.github(author, 60) }
@@ -343,7 +343,7 @@ extension RouterTools {
 
     func listCategories(_ store: Store, _ args: [String: Any]) throws -> String {
         _ = try checked("list_categories", args)
-        return Self.json(["categories": store.categories.map { categoryJSON(store, $0) }, "done": store.doneEntries.count])
+        return Self.json(["categories": store.categories.map { categoryJSON(store, $0) }, "archived": store.doneEntries.count])
     }
 
     func getCategory(_ store: Store, _ args: [String: Any]) throws -> String {
@@ -508,7 +508,9 @@ extension RouterTools {
     // MARK: Inbox
 
     func listInbox(_ store: Store, _ args: [String: Any]) throws -> String {
-        let args = try checked("list_inbox", args)
+        var args = args
+        if args["state"] as? String == "done" { args["state"] = "archived" }   // the old word still works
+        args = try checked("list_inbox", args)
         let state = args["state"] as? String ?? "open"
         let limit = min(max((args["limit"] as? Int) ?? 50, 1), 200)
         let c = try (args["category"] as? String).map { try category(store, $0) }
@@ -518,7 +520,7 @@ extension RouterTools {
             rows = store.entries.sorted { ($0.isDone ? 1 : 0, $1.thing.updatedAt) < ($1.isDone ? 1 : 0, $0.thing.updatedAt) }
         }
         rows = rows.filter { e in
-            (c == nil || e.categoryID == c!.id) && (state == "all" || (state == "done") == e.isDone)
+            (c == nil || e.categoryID == c!.id) && (state == "all" || (state == "archived") == e.isDone)
         }
         return Self.json(["untrusted": Self.githubNote, "count": rows.count, "entries": rows.prefix(limit).map { entryJSON(store, $0) }])
     }
@@ -552,7 +554,7 @@ extension RouterTools {
         var inbox = "not in the inbox: no rule of any category matches it"
         if let entry {
             let name = store.categories.first { $0.id == entry.categoryID }?.title ?? ""
-            inbox = "in “\(name)”" + (entry.isDone ? ", done" : entry.isUnread ? ", unread" : "")
+            inbox = "in “\(name)”" + (entry.isDone ? ", archived" : entry.isUnread ? ", unread" : "")
         }
         var out: [String: Any] = [
             "untrusted": Self.githubNote, "thing": thing.id, "ref": shownReference(thing),
@@ -597,8 +599,11 @@ extension RouterTools {
     }
 
     func markEntries(_ store: Store, _ args: [String: Any]) throws -> String {
-        let args = try checked("mark_entries", args)
-        let state = try Self.string(args, "state")
+        var args = args
+        if args["state"] as? String == "done" { args["state"] = "archived" }   // the old word still works
+        args = try checked("mark_entries", args)
+        // The tool says `archived`; the stored change and its patch keep the word `done`.
+        let state = try Self.string(args, "state") == "archived" ? "done" : try Self.string(args, "state")
         let refs = try Self.strings(args, "entries")
         let c = try (args["category"] as? String).map { try category(store, $0) }
         guard !refs.isEmpty || c != nil else { throw Failure("Give `entries` or a `category`") }
@@ -618,7 +623,7 @@ extension RouterTools {
             default: $0.isDone
             }
         }
-        guard !wanted.isEmpty else { return Self.json(["changed": "nothing", "note": "Nothing to mark: those are already \(state == "restore" ? "open" : state)."]) }
+        guard !wanted.isEmpty else { return Self.json(["changed": "nothing", "note": "Nothing to mark: those are already \(state == "restore" ? "open" : state == "done" ? "archived" : state)."]) }
         guard wanted.count <= 100 else { throw Failure("That is \(wanted.count) things; at most 100 at a time") }
         // Worked out without touching anything: whether it waits is known before a mark changes.
         let now = Date()

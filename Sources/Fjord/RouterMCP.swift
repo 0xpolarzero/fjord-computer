@@ -716,7 +716,7 @@ final class RouterMCPServer: @unchecked Sendable {
             // The tier is the zone on the Router page; only a card worth a look can be marked seen (`mark_seen`), the others
             // are answered.
             let (tier, canMarkSeen) = store.routerTier(card, zones: zones)
-            var fields: [String: Any] = ["card": card.id, "kind": card.kind.rawValue, "tier": tier, "canMarkSeen": canMarkSeen,
+            var fields: [String: Any] = ["card": card.id, "kind": card.kind.modelName, "tier": tier, "canMarkSeen": canMarkSeen,
                                          "text": Self.fenced(card.text, 1200), "age": age(card.createdAt)]
             if let session = store.claudeSessions[card.sessionID] {
                 fields.merge(sessionFields(store, session, peers)) { a, _ in a }
@@ -814,7 +814,7 @@ final class RouterMCPServer: @unchecked Sendable {
             let folder = store.routerProjectFolder(sessionID: card.sessionID, fallback: card.folder)
             let project = store.routerSessionProject(card.sessionID).name
             out.append(Target(target: "answer:\(card.id)",
-                              hint: "Reply to the \(card.kind.rawValue) card of session “\(Self.hinted(card.title, 120))” (project \(Self.hinted(project, 80))): \(Self.hinted(card.text, 300))",
+                              hint: "Reply to the \(card.kind.modelName) card of session “\(Self.hinted(card.title, 120))” (project \(Self.hinted(project, 80))): \(Self.hinted(card.text, 300))",
                               title: card.title, project: project, sessionID: card.sessionID, folder: folder))
         }
         let (working, recent) = candidates(store, projects: projects)
@@ -1333,7 +1333,7 @@ final class RouterMCPServer: @unchecked Sendable {
                 return Self.json(["state": "ready_in_claude", "project": runsOn.name, "location": previous.location.key,
                                   "alias": previous.alias, "folder": previous.folder, "prompt": previous.prompt,
                                   "openedAt": ISO8601DateFormatter().string(from: previous.openedAt), "pendingStart": previous.id.uuidString,
-                                  "next": "This task is already prepared in Claude. Open its existing Router entry to continue."])
+                                  "next": "This task is already prepared in Claude. Open its existing session in Claude to continue."])
             }
             guard let reservation = guestRuntime.reserveStart(projectID: runsOn.id,
                 location: runsOn.placement.location, prompt: ready.text) else {

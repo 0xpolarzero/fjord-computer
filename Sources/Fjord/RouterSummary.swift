@@ -165,14 +165,14 @@ enum RouterSummaryContext {
         func last(_ card: RouterCard) -> Date { max(card.createdAt, card.addressedAt ?? card.createdAt) }
         let mine = cards.filter { $0.sessionID == subject.id && last($0) > since }.sorted { last($0) < last($1) }
         if !mine.isEmpty {
-            out.append("What it stopped on, or what became of it, since:")
+            out.append("What it stopped on, or how that closed, since:")
             for card in mine.suffix(perSection) {
-                var line = "- \(card.kind.rawValue), \(clock(card.createdAt))"
+                var line = "- \(card.kind.modelName), \(clock(card.createdAt))"
                 if let at = card.addressedAt {
-                    line += ", addressed \(clock(at))" + (card.addressedBy.map { " (\(reason($0)))" } ?? "")
+                    line += ", closed \(clock(at))" + (card.addressedBy.map { " (\(reason($0)))" } ?? "")
                 }
                 line += ": " + fence(card.text)
-                if let note = card.addressedNote { line += " Your message that resolved it: " + fence(note) }
+                if let note = card.addressedNote { line += " The user's message that closed it: " + fence(note) }
                 out.append(line)
             }
         }
@@ -187,14 +187,14 @@ enum RouterSummaryContext {
     /// How a card stopped being open, in words.
     static func reason(_ addressed: RouterCard.Addressed) -> String {
         switch addressed {
-        case .you: "you marked it"
-        case .reply: "you replied to the session"
+        case .you: "the user archived it or marked it seen"
+        case .reply: "the user replied to the session"
         case .router: "the Router messaged the session"
-        case .answered: "the question or plan was answered"
-        case .opened: "you opened the session"
+        case .answered: "its question or plan was answered"
+        case .opened: "the user opened the session"
         case .superseded: "a newer card replaced it"
         case .gone: "the session was archived or deleted"
-        case .settled: "it finished with nothing left for you"
+        case .settled: "it finished with nothing for the user to do"
         }
     }
 
@@ -237,14 +237,14 @@ extension Claude {
             let content = (obj["message"] as? [String: Any])?["content"]
             let at = (obj["timestamp"] as? String).flatMap { try? Date($0, strategy: stepTime) }
             if let text = content as? String {
-                if type == "user", let text = clip(text) { steps.append(.init(at: at, text: "You: " + text)) }
+                if type == "user", let text = clip(text) { steps.append(.init(at: at, text: "User: " + text)) }
                 continue
             }
             for part in (content as? [[String: Any]] ?? []).reversed() where steps.count < count {
                 switch part["type"] as? String {
                 case "text":
                     if let text = (part["text"] as? String).flatMap(clip) {
-                        steps.append(.init(at: at, text: (type == "user" ? "You: " : "Claude: ") + text))
+                        steps.append(.init(at: at, text: (type == "user" ? "User: " : "Claude: ") + text))
                     }
                 case "tool_use" where type == "assistant":
                     steps.append(.init(at: at, text: "Step: " + describe(tool: part["name"] as? String ?? "",
@@ -387,7 +387,7 @@ extension Store {
     static func canned(_ subject: RouterSummaryContext.Subject) -> String {
         let doing = subject.label.map { "It's on “\($0)”" } ?? "It's working"
         return doing + (subject.running.isEmpty ? ", and nothing has stalled since it started." :
-            ", with \(subject.running.count) things left running in the background; none has stalled.")
+            ", with \(subject.running.count) tasks left running in the background; none has stalled.")
     }
 
     private static func haiku(store: Store) -> Runner {

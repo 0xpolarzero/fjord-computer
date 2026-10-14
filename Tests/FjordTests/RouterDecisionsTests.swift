@@ -118,9 +118,9 @@ import Testing
         for d in [a, b, c] { s.logDecision(d) }
         let lines = s.recentDecisions(10, now: now).split(separator: "\n").map(String.init)
         #expect(lines.count == 3)
-        #expect(lines[0] == "5m ago · you: “tell docs to ship” → target Docs → sent to Docs: ship")
-        #expect(lines[1].hasSuffix("(you corrected this: not Docs, but Lookout dev)") && lines[1].hasPrefix("just now"))
-        #expect(lines[2].contains("you reverted this"))
+        #expect(lines[0] == "5m ago · the user: “tell docs to ship” → target Docs → sent to Docs: ship")
+        #expect(lines[1].hasSuffix("(the user corrected this: not Docs, but Lookout dev)") && lines[1].hasPrefix("just now"))
+        #expect(lines[2].contains("the user reverted this"))
         #expect(s.recentDecisions(2, now: now).split(separator: "\n").count == 2)
         #expect(Store().recentDecisions().isEmpty)
     }

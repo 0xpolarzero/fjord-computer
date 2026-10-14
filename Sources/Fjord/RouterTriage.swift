@@ -224,7 +224,7 @@ struct RouterTriage: Codable, Hashable {
     static func questions(options: [WaitOption]) -> [String: JevClient.Question] {
         var q: [String: JevClient.Question] = [
             "state": .choice(State.allCases.map(\.rawValue), hints: [
-                "done": "It completed the work it was asked for and reports it; nothing is asked of the user",
+                "done": "It finished its turn: it completed the work it was asked for and reports it; nothing is asked of the user",
                 "asks": "It needs the user's answer, decision, review, test or action now before it can go on: questions in prose, or something to choose or decide; it also covers follow-through left to the user (merge, try it, run something)",
                 "approval": "It asks permission before doing something consequential: pushing, publishing, deleting, driving the screen, spending money",
                 "blocked": "It hit an error, lacks access or a permission, or can't proceed without help",
@@ -244,7 +244,7 @@ struct RouterTriage: Codable, Hashable {
             ], instructions: "Where do this turn's code changes stand, according to the message? Pick unknown unless it says."),
             "waitingOn": .choice(WaitingOn.allCases.map(\.rawValue) + ["none"], hints: [
                 "ci": "CI or checks on a branch or pull request", "tests": "A test run", "deploy": "A deploy or release",
-                "session": "Another Claude session or agent", "review": "A review by someone other than the user", "rateLimit": "A rate limit or quota",
+                "session": "Another Claude Code session", "review": "A review by someone other than the user", "rateLimit": "A rate limit or quota",
                 "other": "Something else outside it", "none": "It isn't waiting on anything outside it",
             ], instructions: "If the session is waiting on something outside it before continuing, what is it?"),
         ]

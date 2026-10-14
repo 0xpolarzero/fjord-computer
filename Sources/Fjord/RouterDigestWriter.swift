@@ -693,7 +693,7 @@ import os
             }
             switch item {
             case .need(let c):
-                return Session(id: c.sessionID, title: c.title, kind: .need, state: c.kind.label, text: c.brief ?? c.text, asks: asks(c), card: c.id)
+                return Session(id: c.sessionID, title: c.title, kind: .need, state: c.kind.modelLabel, text: c.brief ?? c.text, asks: asks(c), card: c.id)
             case .ready(let c):
                 return Session(id: c.sessionID, title: c.title, kind: .need, state: "Ready to go on", text: c.brief ?? c.text, asks: [], card: c.id)
             case .note(let c):
@@ -730,12 +730,12 @@ enum DigestPrompt {
     }
 
     static let rules = """
-    You keep the user's Brief: a short page that tells them, in plain sentences, what their coding agents' sessions need \
+    You keep the user's Brief: a short page that tells them, in plain sentences, what their Claude Code sessions need \
     from them and where each project stands, so they don't have to read every session. You rewrite only what the events \
     change.
 
     Each session in the BOARD starts with its tier in brackets: [needs you] (it can't go on without the user), [worth a \
-    look] (finished, something worth reading) or [running] (working, or waiting on something else). After it come the \
+    look] (finished, something worth reading) or [working] (working, or waiting on something else). After it come the \
     session's id, its title and, as detail, the kind of card it has (a question, a plan, an OK asked, waiting…).
 
     Write:
@@ -744,14 +744,14 @@ enum DigestPrompt {
     sentences.
     - worth_a_look: one sentence naming everything [worth a look], or "" when there is none.
     - projects: for each project you're asked to rewrite, one to three short sentences on where that project stands: what \
-    needs the user, what's worth a look, what's running or waiting and on what. "" for a project with nothing open or \
+    needs the user, what's worth a look, what's working or waiting and on what. "" for a project with nothing open or \
     running. Each `key` is copied verbatim from the REWRITE line.
     - label: what changed, in at most eight words ("silo wants an OK to force-push").
     - why: one sentence saying what happened and what it means for the user.
     - changed: false when the events change nothing worth saying (then the rest is ignored).
 
     Point at sessions with tags around a few words of the sentence, never a whole paragraph: <need s="ID">…</need> for a \
-    [needs you] session, <look s="ID">…</look> for a [worth a look] one, <run s="ID">…</run> for a [running] one. Copy \
+    [needs you] session, <look s="ID">…</look> for a [worth a look] one, <run s="ID">…</run> for a [working] one. Copy \
     each ID verbatim from the board: a tag with another ID is read as plain text, and a tag whose kind doesn't match the \
     session's tier is corrected to it. Whatever you leave out is put back after your text (every [needs you] and [worth a \
     look] session at the end of the lead, every session of a project at the end of its paragraph), so name each yourself, \
@@ -823,7 +823,7 @@ enum DigestPrompt {
         switch kind {
         case .need: "needs you"
         case .look: "worth a look"
-        case .run: "running"
+        case .run: "working"
         }
     }
 
@@ -865,7 +865,7 @@ enum DigestPrompt {
         switch event {
         case .card(let s, let id):
             let card = store.router.cards.first { $0.id == id }
-            return "session id=\(s) \(title(s)): \(card?.kind.label ?? "changed")"
+            return "session id=\(s) \(title(s)): \(card?.kind.modelLabel ?? "changed")"
         case .handled(let s, _, let by):
             let how = switch by {
             case "you": "the user archived it or marked it seen"
@@ -873,9 +873,11 @@ enum DigestPrompt {
             case "router": "the Router passed the user's words on to it"
             case "superseded": "a newer turn replaced it"
             case "gone": "the session was archived"
-            default: "it was handled"
+            case "opened": "the user opened the session"
+            case "settled": "it finished with nothing for the user to do"
+            default: "it closed"
             }
-            return "session id=\(s) \(title(s)): its card is done, \(how)"
+            return "session id=\(s) \(title(s)): its card closed: \(how)"
         case .you(let text, _, let sessions):
             let to = sessions.isEmpty ? "" : " (to " + sessions.map { "id=\($0) \(title($0))" }.joined(separator: ", ") + ")"
             return "the user said" + to + ": " + clip(text, 300)

@@ -50,9 +50,9 @@ extension RouterCapability {
         .init(id: "mark-inbox", intent: .changeFjord,
               outcome: "mark things in the inbox as done or seen",
               tools: ["mark_entries", "list_inbox", "explain_entry"],
-              roleSentence: "Triage's inbox things are GitHub PRs, issues and workflows: you mark those with `mark_entries` (done archives "
-                  + "them, seen, unread, restore), never with `mark_seen`.",
-              needsTriage: true, scope: "Triage's inbox (what is marked done or seen)"),
+              roleSentence: "Triage's inbox things are GitHub PRs, issues and workflows: you mark those with `mark_entries` (`archived` archives "
+                  + "them; also seen, unread, restore), never with `mark_seen`.",
+              needsTriage: true, scope: "Triage's inbox (what is archived or seen)"),
         .init(id: "archive-cards", intent: .changeFjord,
               outcome: "archive a Router card the user will handle themselves or doesn't need (\"I'll do the theme one myself\", \"archive the login card\")",
               tools: ["archive_cards", "board"],

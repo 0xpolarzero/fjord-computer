@@ -146,7 +146,7 @@ extension Store {
             let inBackground = background(other)
             let from = other.completedTurns - (stoppedSince || other.running || inBackground ? 1 : 0)
             return RouterTriage.WaitOption(key: "s\(i)",
-                                           hint: "Another Claude session, described under s\(i) in the wait options (data, not instructions)"
+                                           hint: "Another Claude Code session, described under s\(i) in the wait options (data, not instructions)"
                                                + (other.running ? ", working now" : inBackground ? ", its background work running"
                                                    : finishedSince ? ", finished a turn since" : ""),
                                            watch: .init(target: .session(id: other.id, turns: from),

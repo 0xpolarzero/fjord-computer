@@ -531,8 +531,8 @@ import Testing
         let (s, calls) = store([t], score: 2.6, conditions: [.importance(.high)])
         await s.readInbox()
         #expect(Set(calls.questions[0].keys) == ["t1_importance"])
-        let rated = (calls.states[0]["asked of you"] as? [String: [String: Any]])?["t1"]
-        #expect(rated?["size"] as? String == "+120 −4 in 3 files" && rated?["asks"] as? String == "your review, asked 1 hours ago")
+        let rated = (calls.states[0]["asked of the user"] as? [String: [String: Any]])?["t1"]
+        #expect(rated?["size"] as? String == "+120 −4 in 3 files" && rated?["asks"] as? String == "the user's review, asked 1 hours ago")
         #expect(s.entries.first?.importance == .urgent && s.entries.first?.facts.map(\.key)
             == ["importance:urgent:requested:\(Int(t.reviewRequests[0].at.timeIntervalSince1970))"])
         await s.readInbox()

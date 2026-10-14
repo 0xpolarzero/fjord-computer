@@ -672,7 +672,7 @@ import Testing
         let entries = try #require(listed.json["entries"] as? [[String: Any]])
         #expect(entries.count == 2 && listed.json["count"] as? Int == 2)
         let first = try #require(entries.first { $0["thing"] as? String == "pr:a/one#1" })
-        #expect(first["ref"] as? String == InboxJev.github("a/one#1", 200) && first["category"] as? String == "Mine" && first["done"] as? Bool == false)
+        #expect(first["ref"] as? String == InboxJev.github("a/one#1", 200) && first["category"] as? String == "Mine" && first["archived"] as? Bool == false)
         #expect((first["facts"] as? [String]) == [InboxJev.github("Greptile 3/5", 160)])
         let found = await call(t, "list_inbox", ["query": "flaky", "category": "mine"])
         #expect((found.json["entries"] as? [[String: Any]])?.count == 1)

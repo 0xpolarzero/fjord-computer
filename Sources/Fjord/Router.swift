@@ -250,6 +250,11 @@ struct RouterCard: Codable, Identifiable, Hashable {
         /// something, test by hand): Jev's `next` (see RouterTriage.swift).
         case finish
 
+        /// The kind as a model reads it: "finished" for `done` (the enum value stays; it is saved).
+        var modelName: String { self == .done ? "finished" : rawValue }
+        /// The same as a label (`Done` is `Finished`).
+        var modelLabel: String { self == .done ? "Finished" : label }
+
         /// Made when a turn ends (the others while one waits).
         var isTurn: Bool { self != .question && self != .plan }
         /// The kind a build from before the triage reads instead (it knew only question, plan, done and stuck): saved as

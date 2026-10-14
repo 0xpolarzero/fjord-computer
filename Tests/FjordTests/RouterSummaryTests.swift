@@ -49,7 +49,7 @@ import Testing
         var linked = RouterDecision(at: now.addingTimeInterval(-90), trigger: .you("tell it to rebase"), done: [.answered(card: "x")])
         linked.links.sessions = ["s1"]
         let decisions = [linked, RouterDecision(at: now.addingTimeInterval(-80), trigger: .you("unrelated message"))]
-        let context = RouterSummaryContext.build(subject(), previous: previous, steps: [.init(at: nil, text: "You: fix it"),
+        let context = RouterSummaryContext.build(subject(), previous: previous, steps: [.init(at: nil, text: "User: fix it"),
                                                                                           .init(at: nil, text: "Step: Running swift test")],
                                                  cards: cards, decisions: decisions, now: now)
         #expect(context.contains("The session: <session-content untrusted=\"true\">Notifications</session-content> (project <session-content untrusted=\"true\">lookout</session-content>)"))
@@ -97,16 +97,16 @@ import Testing
         let stale = card("s1", .done, "Stale", "Long settled.", ago: 7200, addressed: 5000)
         let context = RouterSummaryContext.build(subject(), previous: nil, steps: [], cards: [old, stale], decisions: [], now: now)
         #expect(context.contains("Which badge colour?") && !context.contains("Long settled."))
-        #expect(context.contains("you replied to the session") && context.contains("Use amber"))
+        #expect(context.contains("the user replied to the session") && context.contains("Use amber"))
         let made = now.addingTimeInterval(-7200).formatted(date: .omitted, time: .shortened)
         let addressed = now.addingTimeInterval(-300).formatted(date: .omitted, time: .shortened)
-        #expect(context.contains("question, \(made), addressed \(addressed)"))
+        #expect(context.contains("question, \(made), closed \(addressed)"))
     }
 
     @Test func theTranscriptsStepsKeepTheirTimes() {
         let line = #"{"type":"user","timestamp":"2027-01-15T08:00:00.250Z","message":{"content":"go"}}"#
         let steps = Claude.recentTimedSteps(tail: Data(line.utf8))
-        #expect(steps.map(\.text) == ["You: go"])
+        #expect(steps.map(\.text) == ["User: go"])
         #expect(steps.first?.at.map { abs($0.timeIntervalSince1970 - 1_800_000_000.25) < 0.01 } == true)
     }
 
@@ -124,7 +124,7 @@ import Testing
             line(["type": "assistant", "message": ["content": [["type": "text", "text": "All   green."]]]]),
         ]
         let tail = Data(lines.joined(separator: "\n").utf8)
-        #expect(Claude.recentSteps(tail: tail) == ["You: first message", "Claude: On it.", "Step: Run the tests", "Claude: All green."])
+        #expect(Claude.recentSteps(tail: tail) == ["User: first message", "Claude: On it.", "Step: Run the tests", "Claude: All green."])
         #expect(Claude.recentSteps(tail: tail, count: 2) == ["Step: Run the tests", "Claude: All green."])
     }
 

@@ -1346,7 +1346,7 @@ import Testing
         guard case .corrected(let from, let to)? = decision(s, other)?.outcome else { Issue.record("not a correction"); return }
         #expect(from.contains("Fix the login bug") && to.contains("Update the docs"))
         // The correction is part of the next run's context.
-        #expect(s.recentDecisions(10).contains("you corrected this: not session “Fix the login bug”"))
+        #expect(s.recentDecisions(10).contains("the user corrected this: not session “Fix the login bug”"))
     }
 
     @Test func typingWhileAnAskWaitsIsAMessageOfItsOwnNeverAPick() async {
@@ -2380,7 +2380,7 @@ import Testing
         s.logDecision(RouterDecision(trigger: .you("earlier"), outcome: .done))
         let own = s.logDecision(RouterDecision(trigger: .you("this one")))
         let text = s.routerRunContext(message: "this one", excluding: own).text()
-        #expect(text.contains("earlier") && !text.contains("you: “this one”"))
+        #expect(text.contains("earlier") && !text.contains("the user: “this one”"))
         #expect(text.contains("[question] “Fix the login bug” (lookout)"), "the open card")
     }
 

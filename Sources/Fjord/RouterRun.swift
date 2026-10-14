@@ -80,7 +80,7 @@ extension Store {
         return RouterRunContext(
             cards: shownRouterCards.prefix(30).map {
                 let (tier, canMarkSeen) = routerTier($0, zones: zones)
-                return .init(id: $0.id, kind: $0.kind.rawValue, title: $0.title, project: folderName($0.folder ?? ""), text: $0.text,
+                return .init(id: $0.id, kind: $0.kind.modelName, title: $0.title, project: folderName($0.folder ?? ""), text: $0.text,
                              tier: tier, canMarkSeen: canMarkSeen)
             },
             working: routerWorkingRows.prefix(30).map { row in
