@@ -66,18 +66,12 @@ import Testing
         }
     }
 
-    @Test func everySessionIsListedWithItsOwnWeightAndArchivedOnesLast() throws {
+    @Test func everySessionIsListedWithItsOwnWeight() throws {
         let f = fixture()
-        let archived = try #require(f.store.claudeSessions.values.first { !$0.isArchived && !$0.running })
-        f.store.claudeSessions[archived.id]?.isArchived = true
-        f.store.claudeSessions[archived.id]?.lastActivity = Date()
         let output = PaletteRouterSource.make(f.context)
         let sessions = output.items.filter { $0.kind == .session }
         #expect(sessions.count == f.store.claudeSessions.count)
-        let item = try #require(sessions.first { $0.id == "session:" + archived.id })
-        #expect(item.weight == 0.5)
-        #expect(item.subtitle?.hasSuffix("Archived") == true)
-        for session in f.store.claudeSessions.values where !session.isArchived {
+        for session in f.store.claudeSessions.values {
             let item = try #require(sessions.first { $0.id == "session:" + session.id })
             let age = Date().timeIntervalSince(session.lastActivity)
             #expect(item.weight == (age < 86_400 ? 1.1 : age < 7 * 86_400 ? 1.0 : 0.8))

@@ -12,7 +12,6 @@ enum PaletteRouterSource {
         static let today = 1.1
         static let thisWeek = 1.0
         static let older = 0.8
-        static let archived = 0.5
     }
 
     /// What the palette finds in the Router: one pass over the cards and the sessions, with the lookups the rows share (a
@@ -27,8 +26,9 @@ enum PaletteRouterSource {
 
         // The Needs-you zone: what stops a session on you first (questions, plans, asks, OKs, a wait that is over), then what
         // is stuck or left to finish; oldest first within each.
+        let ready = Set(page.ready.map(\.id))
         let needing = (page.needs + page.ready).sorted {
-            let (a, b) = (urgency($0, ready: page.ready), urgency($1, ready: page.ready))
+            let (a, b) = (urgency($0, ready: ready), urgency($1, ready: ready))
             return a != b ? a < b : $0.createdMs < $1.createdMs
         }
         let needingIDs = Set(needing.map(\.id))
@@ -100,10 +100,10 @@ extension PaletteRouterSource {
 
     /// 0 for what stops a session on you (a question, a plan, asks, an OK, a wait that is over), 1 for stuck turns and last
     /// steps.
-    private static func urgency(_ card: RouterCard, ready: [RouterCard]) -> Int {
+    private static func urgency(_ card: RouterCard, ready: Set<String>) -> Int {
         switch card.kind {
         case .stuck, .finish, .done: 1
-        case .waiting: ready.contains { $0.id == card.id } ? 0 : 1
+        case .waiting: ready.contains(card.id) ? 0 : 1
         default: 0
         }
     }
@@ -152,10 +152,9 @@ extension PaletteRouterSource {
 
         var subtitle = project
         if session.running { subtitle += " · Working" }
-        if session.isArchived { subtitle += " · Archived" }
 
         let age = now.timeIntervalSince(session.lastActivity)
-        let weight = session.isArchived ? Weight.archived : age < 86_400 ? Weight.today : age < 7 * 86_400 ? Weight.thisWeek : Weight.older
+        let weight = age < 86_400 ? Weight.today : age < 7 * 86_400 ? Weight.thisWeek : Weight.older
         return PaletteItem(id: "session:" + id, kind: .session, title: session.title, subtitle: subtitle, keywords: keywords,
                            icon: .session(id), dot: row?.waitsForYou == true ? .attention : session.running ? .running : nil,
                            date: session.lastActivity, weight: weight, actions: actions)
