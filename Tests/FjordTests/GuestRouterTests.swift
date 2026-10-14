@@ -698,6 +698,41 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(FileManager.default.fileExists(atPath: snapshot.path) == false)
     }
 
+    @Test func guestTranscriptCacheReusesStableTailAndInvalidatesOnReplacementAndShrink() async throws {
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let cli = "cli-cache"
+        let directory = GuestRouterPaths.join(paths.projects, "workspace-repo")
+        let path = GuestRouterPaths.join(directory, "\(cli).jsonl")
+        func line(_ uuid: String, _ content: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "type": "user", "uuid": uuid, "cwd": "/workspace/repo",
+                "message": ["role": "user", "content": content],
+            ], options: [.sortedKeys]) + Data("\n".utf8)
+        }
+        try await guest.filesWrite(.init(computer: computer, path: path, data: line("one", "first"), mode: 0o600))
+        let reader = GuestTranscripts(client: guest, tailLimit: 4096)
+
+        let first = try #require(try await reader.read(computer: computer, projectsRoot: paths.projects, cliSessionID: cli))
+        let afterFirst = await guest.callLog().filter { $0 == "read:\(path)" }.count
+        let second = try #require(try await reader.read(computer: computer, projectsRoot: paths.projects, cliSessionID: cli))
+        let afterSecond = await guest.callLog().filter { $0 == "read:\(path)" }.count
+        #expect(first == second)
+        #expect(afterFirst == 2)
+        #expect(afterSecond == afterFirst + 1)
+
+        try await guest.filesWrite(.init(computer: computer, path: path, data: line("two", "replacement"), mode: 0o600))
+        let replaced = try #require(try await reader.read(computer: computer, projectsRoot: paths.projects, cliSessionID: cli))
+        #expect(replaced.inode == first.inode)
+        #expect(replaced.mtimeMs != first.mtimeMs)
+        #expect(replaced.messages.map(\.uuid) == ["two"])
+
+        try await guest.filesWrite(.init(computer: computer, path: path, data: line("three", "x"), mode: 0o600))
+        let shrunk = try #require(try await reader.read(computer: computer, projectsRoot: paths.projects, cliSessionID: cli))
+        #expect(shrunk.size < replaced.size)
+        #expect(shrunk.messages.map(\.uuid) == ["three"])
+    }
+
     @MainActor @Test func routerGuestStartPersistsReadyStateBeforeOpenWithoutSendingPrompt() async throws {
         let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-router-guest-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
