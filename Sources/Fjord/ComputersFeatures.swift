@@ -12,6 +12,21 @@ enum ComputerDetailSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum ComputerFilesPath {
+    static func root(for kind: ComputerKind) -> String? {
+        kind == .linux ? "/workspace" : nil
+    }
+
+    static func parent(of path: String, kind: ComputerKind) -> String? {
+        guard let root = root(for: kind) else { return nil }
+        let normalized = (path as NSString).standardizingPath
+        guard normalized != root else { return root }
+        guard normalized.hasPrefix(root + "/") else { return root }
+        let parent = (normalized as NSString).deletingLastPathComponent
+        return parent == root || parent.hasPrefix(root + "/") ? parent : root
+    }
+}
+
 enum ComputerNetworkPolicy {
     static let hiddenDesktopPort = 6901
 }
@@ -252,7 +267,11 @@ extension ComputersModel {
         } catch { actionError = error.localizedDescription }
     }
 
-    func loadFiles(computerId: String, path: String = "/", offset: UInt64 = 0, snapshotId: String? = nil) async {
+    func loadFiles(computerId: String, path requestedPath: String? = nil,
+                   offset: UInt64 = 0, snapshotId: String? = nil) async {
+        guard let kind = inventory?.computer(computerId)?.kind,
+              let root = ComputerFilesPath.root(for: kind) else { return }
+        let path = requestedPath ?? root
         do {
             let result = try await client.invoke(SiloGeneratedMethods.filesList(SiloWireFileListParams(
                 computerId: computerId, offset: offset, path: path, snapshotId: snapshotId)))

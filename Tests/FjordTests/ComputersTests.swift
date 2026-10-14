@@ -250,8 +250,8 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
         await model.loadFiles(computerId: MockEngineClient.linuxID)
-        await model.uploadFiles(computerId: MockEngineClient.linuxID, directory: "/", paths: ["/tmp/notes.txt"])
-        await model.downloadFile(computerId: MockEngineClient.linuxID, path: "/notes.txt", destination: "/tmp/notes-copy.txt")
+        await model.uploadFiles(computerId: MockEngineClient.linuxID, directory: "/workspace", paths: ["/tmp/notes.txt"])
+        await model.downloadFile(computerId: MockEngineClient.linuxID, path: "/workspace/notes.txt", destination: "/tmp/notes-copy.txt")
 
         #expect(model.fileLists[MockEngineClient.linuxID]?.entries.contains { $0.name == "notes.txt" } == true)
         #expect(client.generatedCalls.contains("files.list"))

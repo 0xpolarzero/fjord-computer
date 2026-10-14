@@ -205,51 +205,66 @@ struct ComputerFilesPanel: View {
     let row: ComputerRow
     let model: ComputersModel
     private var listing: SiloWireFileListResult? { model.fileLists[row.id] }
-    private var path: String { model.filePaths[row.id] ?? "/" }
+    private var root: String? { ComputerFilesPath.root(for: row.kind) }
+    private var path: String { model.filePaths[row.id] ?? root ?? "" }
 
     var body: some View {
         ComputerPanel(title: "Files", action: {
-            HStack(spacing: 7) {
-                ActionButton("Upload") { chooseUpload() }
-                ActionButton("Refresh") { Task { await model.loadFiles(computerId: row.id, path: path) } }
+            if root != nil {
+                HStack(spacing: 7) {
+                    ActionButton("Upload") { chooseUpload() }
+                    ActionButton("Refresh") { Task { await model.loadFiles(computerId: row.id, path: path) } }
+                }
             }
         }) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    ActionButton("Up") { Task { await model.loadFiles(computerId: row.id, path: parent(path)) } }
-                        .disabled(path == "/")
-                    Text(path).font(CDS.sans(10).monospaced()).foregroundStyle(CDS.Text.muted).lineLimit(1)
-                }
-                .padding(.bottom, 10)
-                if let listing {
-                    ForEach(listing.entries, id: \.path) { entry in
-                        HStack(spacing: 9) {
-                            Image(systemName: entry.kind == .folder ? "folder" : "doc.text")
-                                .foregroundStyle(CDS.Text.secondary).frame(width: 16)
-                            if entry.kind == .folder {
-                                Button(entry.name) { Task { await model.loadFiles(computerId: row.id, path: entry.path) } }
-                                    .buttonStyle(.plain).font(CDS.sans(11)).foregroundStyle(CDS.Text.primary)
-                                Spacer()
-                            } else {
-                                Text(entry.name).font(CDS.sans(11)).foregroundStyle(CDS.Text.primary)
-                                Spacer()
-                                ActionButton("Download") { chooseDownload(entry) }
+            if root == nil {
+                Label("Mac file browsing is coming soon.", systemImage: "clock")
+                    .font(CDS.sans(11, .medium)).foregroundStyle(CDS.Text.secondary)
+                Text("The engine API does not define a macOS Files root yet.")
+                    .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 8) {
+                        ActionButton("Up") {
+                            if let parent = ComputerFilesPath.parent(of: path, kind: row.kind) {
+                                Task { await model.loadFiles(computerId: row.id, path: parent) }
                             }
                         }
-                        .padding(.vertical, 7)
-                        SettingsDivider()
+                        .disabled(path == root)
+                        Text(path).font(CDS.sans(10).monospaced()).foregroundStyle(CDS.Text.muted).lineLimit(1)
                     }
-                    if let offset = listing.nextOffset {
-                        ActionButton("Load more") {
-                            Task { await model.loadFiles(computerId: row.id, path: path, offset: offset, snapshotId: listing.snapshotId) }
+                    .padding(.bottom, 10)
+                    if let listing {
+                        ForEach(listing.entries, id: \.path) { entry in
+                            HStack(spacing: 9) {
+                                Image(systemName: entry.kind == .folder ? "folder" : "doc.text")
+                                    .foregroundStyle(CDS.Text.secondary).frame(width: 16)
+                                if entry.kind == .folder {
+                                    Button(entry.name) { Task { await model.loadFiles(computerId: row.id, path: entry.path) } }
+                                        .buttonStyle(.plain).font(CDS.sans(11)).foregroundStyle(CDS.Text.primary)
+                                    Spacer()
+                                } else {
+                                    Text(entry.name).font(CDS.sans(11)).foregroundStyle(CDS.Text.primary)
+                                    Spacer()
+                                    ActionButton("Download") { chooseDownload(entry) }
+                                }
+                            }
+                            .padding(.vertical, 7)
+                            SettingsDivider()
                         }
-                        .padding(.top, 9)
+                        if let offset = listing.nextOffset {
+                            ActionButton("Load more") {
+                                Task { await model.loadFiles(computerId: row.id, path: path, offset: offset,
+                                                             snapshotId: listing.snapshotId) }
+                            }
+                            .padding(.top, 9)
+                        }
+                    } else {
+                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 22)
                     }
-                } else {
-                    ProgressView().frame(maxWidth: .infinity).padding(.vertical, 22)
+                    Text("The engine limits viewer-origin uploads to Downloads.")
+                        .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted).padding(.top, 9)
                 }
-                Text("The engine limits viewer-origin uploads to Downloads.")
-                    .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted).padding(.top, 9)
             }
         }
     }
@@ -272,11 +287,6 @@ struct ComputerFilesPanel: View {
         Task { await model.downloadFile(computerId: row.id, path: entry.path, destination: url.standardizedFileURL.path) }
     }
 
-    private func parent(_ path: String) -> String {
-        guard path != "/" else { return "/" }
-        let value = (path as NSString).deletingLastPathComponent
-        return value.isEmpty ? "/" : value
-    }
 }
 
 struct ComputerNetworkPanel: View {
