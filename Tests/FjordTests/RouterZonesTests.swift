@@ -47,15 +47,46 @@ import Testing
         #expect(model.pane == .now)
     }
 
-    @Test func aSectionsChipOpensItAndGoesThereThenFoldsIt() {
+    @Test func soloShowsOnlyTheSoloedStatesAndWinsOverMute() {
+        var filter = RouterFilter()
+        #expect(filter.isClear && CanvasGroup.allCases.allSatisfy(filter.shows))
+        filter.toggleMute(.working)
+        #expect(!filter.shows(.working) && filter.shows(.needs) && !filter.isClear)
+        filter.toggleSolo(.needs)
+        #expect(filter.shows(.needs) && !filter.shows(.notes) && !filter.shows(.working))
+        // Several solos show their union; a state both soloed and muted shows, as on a mixer.
+        filter.toggleSolo(.working)
+        #expect(filter.shows(.needs) && filter.shows(.working) && !filter.shows(.waiting))
+        filter.toggleSolo(.working)
+        filter.toggleSolo(.needs)
+        #expect(!filter.shows(.working) && filter.shows(.needs))
+        filter.clear()
+        #expect(filter.isClear && filter.shows(.working))
+    }
+
+    @Test func revealingAStateUnmutesItAndJoinsTheSolos() {
+        var filter = RouterFilter(solo: [.working], mute: [.needs])
+        filter.reveal(.needs)
+        #expect(filter.shows(.needs) && filter.shows(.working) && filter.mute.isEmpty)
+        var muted = RouterFilter(mute: [.notes, .needs])
+        muted.reveal(.notes)
+        #expect(muted.shows(.notes) && muted.solo.isEmpty && !muted.shows(.needs))
+    }
+
+    @Test func theListLeavesOutWhatTheFilterHides() {
+        let store = demo()
+        Demo.routerTriage(store)
         let model = RouterModel()
-        model.show(.history)
-        #expect(model.folded.contains(.working))
-        model.chip(.working)
-        #expect(model.pane == .now && model.zoneRequest?.id == "working")
-        model.setFolded(.working, false)
-        model.chip(.working)
-        #expect(model.zoneRequest?.id == RouterZone.foldPrefix + "working")
+        let page = model.zones(store)
+        #expect(!page.working.isEmpty && !page.needs.isEmpty)
+        model.filter.solo = [.working]
+        let shown = model.listZones(store)
+        #expect(shown.needs.isEmpty && shown.ready.isEmpty && shown.asks.isEmpty && shown.notes.isEmpty)
+        #expect(shown.working == page.working)
+        // The same value the canvas reads.
+        model.filter = RouterFilter(mute: [.working])
+        #expect(model.listZones(store).working.isEmpty && model.listZones(store).needs == page.needs)
+        #expect(model.sections(store).needs == page.needs + page.ready)
     }
 
     @Test func eachItemOfNowIsInItsSection() throws {

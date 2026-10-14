@@ -504,7 +504,9 @@ final class RouterModel {
             defaults?.set(layout.rawValue, forKey: RouterLayout.key)
         }
     }
-    /// What the canvas keeps while the window lives: its camera, filter and folds (RouterCanvas.swift).
+    /// The states soloed and muted, the same in the list and on the canvas (RouterFilter.swift).
+    var filter = RouterFilter()
+    /// What the canvas keeps while the window lives: its camera and folds (RouterCanvas.swift).
     let canvas: RouterCanvasState
 
     init(defaults: UserDefaults? = nil) {
@@ -607,7 +609,7 @@ final class RouterModel {
     func sections(_ store: Store) -> (needs: [RouterCard], done: [RouterCard], earlier: [RouterCard]) {
         // Only what the page shows, as it shows it: a finished turn whose session still runs things isn't there yet; a wait
         // over that is yours to continue is at the end of Needs you. What a search leaves out isn't there either.
-        let page = zones(store)
+        let page = layout == .canvas ? zones(store) : listZones(store)
         let byID = Dictionary(store.router.cards.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let earlier = history(store).compactMap { entry -> RouterCard? in
             guard case .card(let card) = entry, let now = byID[card.id], !now.isOpen else { return nil }
@@ -619,7 +621,7 @@ final class RouterModel {
             let open = Dictionary((page.needs + page.ready + page.notes).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let all = RouterCanvasModel.make(page: page, done: canvasDone(store), muted: Set(store.agents.mutedFolders),
                                              name: store.routerProjectGroupName, color: store.routerProjectGroupColor,
-                                             filter: canvas.filter, showsAll: true,
+                                             filter: filter, showsAll: true,
                                              projectKey: { store.routerProjectGroupKey(sessionID: $0, folder: $1) },
                                              projectSource: store.routerProjectGroupSource)
             let order = RouterCanvasModel.order(all, folded: canvas.folded)
@@ -707,6 +709,11 @@ final class RouterModel {
         if let card = store.router.cards.first(where: { $0.id == id }) {
             // A session waiting is a row under Working; one whose wait is over and is yours to continue, a row of Needs you.
             show(card.isOpen ? .now : .history)
+            // The state it is in shows, if the chips hid it.
+            if card.isOpen, let zone = zones(store).zone(of: card.kind == .waiting && store.routerTier(card) != .needsYou
+                                                         ? Self.workingID(card.sessionID) : id), !filter.shows(zone: zone) {
+                filter.reveal(CanvasGroup(zone))
+            }
             if card.isOpen, card.kind == .waiting {
                 if shows { reveal(store.routerTier(card) == .needsYou ? id : Self.workingID(card.sessionID)) }
                 return
@@ -720,17 +727,11 @@ final class RouterModel {
     static let endID = "end"
     nonisolated static func workingID(_ session: String) -> String { "working#" + session }
 
-    /// A section of Now asked for: opened and scrolled to (its id), or folded (`RouterZone.foldPrefix` and its id).
+    /// A section of Now asked for: opened and scrolled to (its id).
     var zoneRequest: ScrollRequest?
     func jump(to zone: RouterZone) {
         show(.now)
         zoneRequest = ScrollRequest(id: zone.rawValue, seq: (zoneRequest?.seq ?? 0) + 1)
-    }
-
-    /// A section's chip: a folded one opens and the page goes there, an open one folds.
-    func chip(_ zone: RouterZone) {
-        guard !shownFolds.contains(zone) else { return jump(to: zone) }
-        zoneRequest = ScrollRequest(id: RouterZone.foldPrefix + zone.rawValue, seq: (zoneRequest?.seq ?? 0) + 1)
     }
 
     /// Asks the page to scroll to an item (a card, a message, a working session's card) and, for a moment, to mark it.

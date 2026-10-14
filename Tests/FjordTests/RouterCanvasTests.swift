@@ -70,10 +70,10 @@ import Testing
     @Test func aPickIntoAGroupTheChipsLeaveOutShowsItsGroup() throws {
         let store = demo()
         let model = canvas(store)
-        model.canvas.filter = [.working]
+        model.filter.solo = [.working]
         let need = try #require(model.zones(store).needs.first)
         model.select(need.id, store: store)
-        #expect(model.canvas.filter == [.working, .needs])
+        #expect(model.filter.solo == [.working, .needs])
         #expect(RouterCanvasModel.order(model.canvasFolders(store, page: model.zones(store))).contains(need.id))
     }
 
@@ -120,10 +120,10 @@ import Testing
         let keys = RouterKeys(store: store, model: model) { closed = true }
         let need = try #require(model.zones(store).needs.first { store.pendingForm(for: $0)?.isPlan != true })
         model.select(need.id, store: store)
-        model.canvas.filter = [.needs]
+        model.filter.solo = [.needs]
         #expect(keys.key(key(kVK_Escape), responder: nil) && model.replyTo == nil && model.expandedNeed == need.id)
-        #expect(keys.key(key(kVK_Escape), responder: nil) && model.expandedNeed == nil && model.canvas.filter == [.needs])
-        #expect(keys.key(key(kVK_Escape), responder: nil) && model.canvas.filter.isEmpty && !closed)
+        #expect(keys.key(key(kVK_Escape), responder: nil) && model.expandedNeed == nil && model.filter.solo == [.needs])
+        #expect(keys.key(key(kVK_Escape), responder: nil) && model.filter.isClear && !closed)
         #expect(keys.key(key(kVK_Escape), responder: nil) && closed)
     }
 
@@ -140,15 +140,15 @@ import Testing
     @Test func aChipShowsOnlyItsGroupInPlaceAndASecondClickShowsAllAgain() throws {
         let store = demo()
         let model = canvas(store)
-        model.canvas.toggleFilter(.working)
+        model.filter.toggleSolo(.working)
         let folders = model.canvasFolders(store, page: model.zones(store))
         #expect(folders.allSatisfy { $0.shown.allSatisfy { $0.group == .working } })
         // Hidden in place: the groups are still there.
         #expect(folders.contains { $0.groups.contains { $0.hidden } })
         // Only what is drawn is walked.
         #expect(model.sections(store).needs.isEmpty)
-        model.canvas.toggleFilter(.working)
-        #expect(model.canvas.filter.isEmpty)
+        model.filter.toggleSolo(.working)
+        #expect(model.filter.isClear)
     }
 
     @Test func aWorkingRowOpensThroughTheCanvasAndFoldsTheCardOpen() throws {

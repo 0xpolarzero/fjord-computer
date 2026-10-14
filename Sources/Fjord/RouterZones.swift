@@ -44,9 +44,6 @@ enum RouterZone: String, CaseIterable, Identifiable {
     /// Waiting and Working run on their own: folded to a line until you open them.
     static let foldedAtFirst: Set<RouterZone> = [.waiting, .working]
 
-    /// A request to fold the section (its chip, clicked while it is open).
-    static let foldPrefix = "fold#"
-
     /// What the page scrolls to for the section, its header at the top.
     var anchorID: String { "zone#" + rawValue }
 

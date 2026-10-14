@@ -386,6 +386,8 @@ private struct NowColumn: View {
 
     var body: some View {
         let page = model.zones(store)
+        // What the chips' solos and mutes leave; the chips count the whole page.
+        let shown = page.filtered(model.filter)
         // A session moving between the zones is the same card travelling, unless it has one in both.
         let once = Dictionary(grouping: page.needs.map(\.sessionID), by: { $0 }).filter { $0.value.count == 1 }.keys
         let travelling = Set(once).subtracting(Set(page.working.map(\.id)))
@@ -393,7 +395,7 @@ private struct NowColumn: View {
         if #available(macOS 26, *) {
             // The chips and the Router's status line are the column's bar: Now runs under it and the page's top bar, with a
             // hard edge, as its sections' headers pin under it (glass-plan §5.3).
-            RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
+            RouterNow(store: store, model: model, page: shown, height: height, ns: ns, travelling: travelling,
                       travellingWorking: travellingWorking)
                 .flightFrame("now")
                 .safeAreaBar(edge: .top, spacing: 0) { chips(page) }
@@ -401,7 +403,7 @@ private struct NowColumn: View {
         } else {
             VStack(spacing: 0) {
                 chips(page)
-                RouterNow(store: store, model: model, page: page, height: height, ns: ns, travelling: travelling,
+                RouterNow(store: store, model: model, page: shown, height: height, ns: ns, travelling: travelling,
                           travellingWorking: travellingWorking)
                     .flightFrame("now")
             }
@@ -579,8 +581,8 @@ private struct MarkAllRead: View {
     }
 }
 
-/// A chip for each section of Now with something in it, its count, lit while the section is open: a click on a folded one
-/// opens it and takes the page there, on an open one folds it.
+/// A chip for each section of Now with something in it, its count, with Solo and Mute on each and Clear after them: the
+/// canvas's chips are the same (RouterFilter.swift).
 private struct ZoneChips: View {
     let model: RouterModel
     let page: RouterPage
@@ -589,61 +591,22 @@ private struct ZoneChips: View {
     @Environment(\.routerGutter) private var gutter
 
     var body: some View {
-        let zones = RouterZone.allCases.filter { page.count($0) > 0 }
-        if !zones.isEmpty {
+        let counts = RouterZone.allCases.map { (CanvasGroup($0), page.count($0)) }.filter { $0.1 > 0 }
+        if !counts.isEmpty {
             ViewThatFits(in: .horizontal) {
-                row(zones, named: true)
-                row(zones, named: false)
+                RouterFilterRow(model: model, counts: counts, named: true)
+                RouterFilterRow(model: model, counts: counts, named: false)
             }
             .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
             .padding(.leading, compact ? 0 : gutter)
             .padding(.trailing, gutter)
         }
     }
-
-    private func row(_ zones: [RouterZone], named: Bool) -> some View {
-        HStack(spacing: 4) {
-            ForEach(zones) { zone in
-                ZoneChip(zone: zone, count: page.count(zone), named: named, open: !model.shownFolds.contains(zone)) {
-                    model.chip(zone)
-                }
-                .flightTarget("chip:\(zone.rawValue)", radius: ZoneChip.height / 2)
-            }
-        }
-        .fixedSize()
-    }
 }
 
-struct ZoneChip: View {
+struct ZoneChip {
     /// The chips' height, and the switch's beside them.
     static let height: CGFloat = 20
-    let zone: RouterZone
-    let count: Int
-    let named: Bool
-    let open: Bool
-    let action: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: zone.symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(zone.tint)
-                if named { Text(zone.title).cdsText((12, 16), .regular, hovered ? CDS.Text.primary : CDS.Text.secondary) }
-                Text("\(count)").cdsText((12, 16), .medium, zone == .needs ? CDS.Fill.warning : CDS.Text.muted).monospacedDigit()
-            }
-            .padding(.horizontal, 7)
-            .frame(height: Self.height)
-            .background(Capsule().fill(open ? CDS.Fill.secondary : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
-            .overlay { if open { Capsule().strokeBorder(CDS.border, lineWidth: 1) } }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .help(open ? "Fold \(zone.title)" : "Show \(zone.title)")
-        .accessibilityLabel("\(zone.title), \(count)")
-        .accessibilityValue(open ? "Open" : "Folded")
-        .accessibilityHint(open ? "Folds it" : "Opens it and goes to it")
-    }
 }
 
 extension RouterZone {
@@ -1717,7 +1680,7 @@ private struct RouterNow: View {
     /// The sections shown: Needs you always (it says when nothing needs you), the others with something in them; while
     /// a search is on, only those with a match.
     private var zones: [RouterZone] {
-        RouterZone.allCases.filter { ($0 == .needs && !model.searching) || page.count($0) > 0 }
+        RouterZone.allCases.filter { ($0 == .needs && !model.searching && model.filter.shows(zone: $0)) || page.count($0) > 0 }
     }
 
     var body: some View {
@@ -1728,7 +1691,10 @@ private struct RouterNow: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         AwayStripView(store: store, model: model).padding(.bottom, 4)
-                        if zones.isEmpty { RouterNothingFound() }
+                        if zones.isEmpty {
+                            if model.filter.isClear { RouterNothingFound() }
+                            else { RouterNothingFound(text: "Nothing matches · Esc to clear", symbol: "line.3.horizontal.decrease") }
+                        }
                         ForEach(zones) { zone in
                             let isFolded = folded.contains(zone) && page.count(zone) > 0
                             Color.clear.frame(height: 0).id(zone.anchorID)
@@ -1769,9 +1735,6 @@ private struct RouterNow: View {
                     if let zone = RouterZone(rawValue: request.id) {
                         open(zone)
                         pending = Pending(zone.anchorID, anchor: .top)
-                    } else if request.id.hasPrefix(RouterZone.foldPrefix),
-                              let zone = RouterZone(rawValue: String(request.id.dropFirst(RouterZone.foldPrefix.count))) {
-                        if !model.shownFolds.contains(zone) { toggle(zone, proxy: proxy) }
                     }
                 }
                 .onChange(of: pending) { perform(proxy) }

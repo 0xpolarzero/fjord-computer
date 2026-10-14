@@ -20,7 +20,7 @@ import Testing
                  entry: AgentEntry(id: session), label: session)
     }
 
-    private func make(_ page: RouterPage, done: [RouterCard] = [], muted: Set<String> = [], filter: Set<CanvasGroup> = [],
+    private func make(_ page: RouterPage, done: [RouterCard] = [], muted: Set<String> = [], filter: RouterFilter = RouterFilter(),
                       picked: Set<String> = [], expanded: Set<String> = [], showsAll: Bool = false) -> [CanvasFolder] {
         RouterCanvasModel.make(page: page, done: done, muted: muted, name: { $0.isEmpty ? "Scratch" : URL(fileURLWithPath: $0).lastPathComponent },
                                color: { _ in .blue }, filter: filter, picked: picked, expanded: expanded, showsAll: showsAll)
@@ -113,7 +113,7 @@ import Testing
             return Dictionary(uniqueKeysWithValues: zip(folders.map(\.key), c))
         }
         let base = columns(make(page))
-        #expect(columns(make(page, filter: [.working])) == base)
+        #expect(columns(make(page, filter: RouterFilter(solo: [.working]))) == base)
         #expect(columns(make(page, expanded: ["/code/a#notes"])) == base)
         #expect(columns(make(page, picked: ["n5"])) == base)
     }
@@ -307,7 +307,7 @@ import Testing
         var page = RouterPage()
         page.needs = [card("q", "a", "/code/app")]
         page.working = [row("w", "/code/app")]
-        let folder = try #require(make(page, filter: [.working]).first)
+        let folder = try #require(make(page, filter: RouterFilter(solo: [.working])).first)
         #expect(folder.groups.map(\.hidden) == [true, false])
         #expect(RouterCanvasModel.order([folder]) == [RouterModel.workingID("w")])
         #expect(RouterCanvasModel.order([folder], folded: { _ in true }).isEmpty)
@@ -371,9 +371,8 @@ import Testing
         #expect(RouterCanvasModel.target(forReveal: RouterModel.workingID("v"), in: folders) == RouterModel.workingID("v"))
         // A section of Now: its group's first item, frame by frame (busiest first: b has a note).
         #expect(RouterCanvasModel.target(forReveal: RouterZone.working.rawValue, in: folders) == RouterModel.workingID("v"))
-        // The history's end, a section's fold, a frame folded away.
+        // The history's end, a frame folded away.
         #expect(RouterCanvasModel.target(forReveal: RouterModel.endID, in: folders) == nil)
-        #expect(RouterCanvasModel.target(forReveal: RouterZone.foldPrefix + "working", in: folders) == nil)
         #expect(RouterCanvasModel.target(forReveal: "d", in: folders, folded: { $0.doneOnly }) == nil)
         #expect(RouterCanvasModel.target(forReveal: "d", in: folders) == "d")
     }

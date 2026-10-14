@@ -68,9 +68,9 @@ final class RouterKeys {
             // On the canvas, the history's panel over it closes.
             else if model.layout == .canvas, model.pane == .history { model.show(.now) }
             else if let plan, model.layout != .canvas || model.canvas.backedOutOf != plan.id { model.revisingPlan = plan.id }
-            // On the canvas: the card open on it folds, then its filter goes, before the window closes.
+            // On the canvas: the card open on it folds; then the solos and mutes go, before the window closes.
             else if model.layout == .canvas, model.foldCanvasNode(store) {}
-            else if model.layout == .canvas, !model.canvas.filter.isEmpty { model.canvas.filter = [] }
+            else if !model.filter.isClear { model.filter.clear() }
             else { close() }
             return true
         }

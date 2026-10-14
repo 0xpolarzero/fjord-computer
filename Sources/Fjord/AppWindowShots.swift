@@ -235,6 +235,16 @@ enum AppWindowShots {
             for zone in RouterZone.allCases { model.setFolded(zone, false) }
             model.expandedNeed = store.router.cards.first { $0.kind == .asks }?.id
         }),
+        Shot(name: "router-filter-solo", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
+            Demo.routerTriage(store)
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
+            model.filter.solo = [.needs, .working]
+        }),
+        Shot(name: "router-filter-mute", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
+            Demo.routerTriage(store)
+            for zone in RouterZone.allCases { model.setFolded(zone, false) }
+            model.filter.mute = [.working, .waiting]
+        }),
         Shot(name: "router-triage-waiting", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             Demo.routerTriage(store)
             for zone in RouterZone.allCases { model.setFolded(zone, false) }
@@ -305,7 +315,18 @@ enum AppWindowShots {
         Shot(name: "router-canvas-filter", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             Demo.routerTriage(store)
             model.pickCanvas()
-            model.canvas.filter = [.needs, .working]
+            model.filter.solo = [.needs, .working]
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-filter-solo", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.pickCanvas()
+            model.filter.solo = [.working]
+            model.filter.mute = [.needs]
+        }, appearance: .darkAqua),
+        Shot(name: "router-canvas-filter-mute", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            Demo.routerTriage(store)
+            model.pickCanvas()
+            model.filter.mute = [.working, .waiting]
         }, appearance: .aqua),
         // The frames of finished sessions only, opened from their fold.
         Shot(name: "router-canvas-done-open", destination: { _ in .router }, size: canvasSize, compose: { model, store in

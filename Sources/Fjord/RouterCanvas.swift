@@ -85,8 +85,6 @@ final class RouterCanvasState {
     let pan: CanvasPan
     /// The frame being dragged or resized.
     let drag = CanvasFrameDrag()
-    /// The groups shown, none for all.
-    var filter: Set<CanvasGroup> = []
     /// Folds of yours over a frame's own (a frame of finished sessions only folds), by folder.
     var folderFolds: [String: Bool] {
         didSet {
@@ -165,7 +163,7 @@ final class RouterCanvasState {
         var colors: [String: Int]
         var names: [String: String]
         var named: Set<String>?
-        var filter: Set<CanvasGroup>
+        var filter: RouterFilter
         var picked: Set<String>
         var expanded: Set<String>
         var searching: Bool
@@ -357,11 +355,6 @@ final class RouterCanvasState {
         camera.transform = CanvasTransform(origin: CGPoint(x: free.minX - rect.minX, y: free.minY - rect.minY), scale: 1)
     }
 
-    /// A chip: only its group shown (with the others lit), or, lit, not.
-    func toggleFilter(_ group: CanvasGroup) {
-        if filter.contains(group) { filter.remove(group) } else { filter.insert(group) }
-    }
-
     /// Whether `rect` (content space) shows in the viewport's room, at least in part.
     func shows(_ rect: CGRect) -> Bool {
         let t = camera.transform
@@ -455,7 +448,7 @@ extension RouterModel {
         // Not Jev's highlight: it moves as you type, and the group would widen and narrow under you.
         let inputs = RouterCanvasState.FolderInputs(store: ObjectIdentifier(store), page: page, done: canvasDone(store),
             muted: store.agents.mutedFolders, colors: store.agents.folderColors, names: store.folderNames,
-            named: store.namedFoldersSeen, filter: canvas.filter, picked: Set([selection, expandedNeed].compactMap { $0 }),
+            named: store.namedFoldersSeen, filter: filter, picked: Set([selection, expandedNeed].compactMap { $0 }),
             expanded: canvas.expandedMore, searching: searching, guestProjects: store.router.runsOnProjects,
             guestStarts: store.router.pendingDesktopStarts)
         if let memo = canvas.folderMemo, memo.inputs == inputs { return memo.folders }
@@ -545,8 +538,8 @@ extension RouterModel {
                                                   projectSource: store.routerProjectGroupSource)
             .first(where: { $0.groups.contains { $0.items.contains { $0.id == node } } }),
               let group = folder.groups.first(where: { $0.items.contains { $0.id == node } })?.group else { return }
-        // The chips light the groups shown: its own lit with them.
-        if !canvas.filter.isEmpty, !canvas.filter.contains(group) { canvas.filter.insert(group) }
+        // The chips say which groups show: its own does too.
+        if !filter.shows(group) { filter.reveal(group) }
         if canvas.folded(folder) { canvas.folderFolds[folder.key] = folder.doneOnly ? false : nil }
     }
 
@@ -846,13 +839,12 @@ extension View {
 
 // MARK: - Floating controls
 
-/// The canvas's chips, floating at its top left: one per group with something in it, its count, lit while the canvas shows
-/// only the lit groups (none lit: all). A chip filters, in place: nothing folds or scrolls.
+/// The canvas's chips, floating at its top left: one per group with something in it, its count, with Solo and Mute on each
+/// and Clear after them (`RouterFilterRow`). A chip filters, in place: nothing folds or scrolls.
 struct CanvasChips: View {
     let store: Store
     let model: RouterModel
     let page: RouterPage
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // The sessions done that aren't live on the page, as the frames' Done groups hold them.
@@ -866,8 +858,8 @@ struct CanvasChips: View {
             HStack(spacing: 8) {
                 if !counts.isEmpty {
                     ViewThatFits(in: .horizontal) {
-                        row(counts, named: true)
-                        row(counts, named: false)
+                        RouterFilterRow(model: model, counts: counts, named: true, overview: overview)
+                        RouterFilterRow(model: model, counts: counts, named: false, overview: overview)
                     }
                 }
                 // The list says it in its Needs you header; the canvas has none.
@@ -886,55 +878,8 @@ struct CanvasChips: View {
         }
     }
 
-    private func row(_ counts: [(CanvasGroup, Int)], named: Bool) -> some View {
-        HStack(spacing: 4) {
-            ForEach(counts, id: \.0) { group, count in
-                CanvasChip(group: group, count: count, named: named, lit: model.canvas.filter.contains(group),
-                           overview: group == .working ? overview : nil) {
-                    withAnimation(Motion.spatial.resolved(reduce: reduceMotion)) { model.canvas.toggleFilter(group) }
-                }
-                .flightTarget(group.zone.map { "chip:\($0.rawValue)" })
-            }
-        }
-        .fixedSize()
-    }
-
     /// What the Working sessions are on, as Now's folded Working line says it.
     private var overview: String? { RouterOverviewLine.text(store.overviewItems(page.working, now: Date())) }
-}
-
-/// A group's chip on the canvas: the look of Now's section chips (`ZoneChip`), lit while the canvas shows only it (and the
-/// others lit).
-struct CanvasChip: View {
-    let group: CanvasGroup
-    let count: Int
-    let named: Bool
-    let lit: Bool
-    var overview: String? = nil
-    let action: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                CanvasGroupGlyph(group: group)
-                if named { Text(group.title).cdsText((12, 16), .regular, hovered || lit ? CDS.Text.primary : CDS.Text.secondary) }
-                Text("\(count)").cdsText((12, 16), .medium, group == .needs ? CDS.Fill.warning : CDS.Text.muted).monospacedDigit()
-            }
-            .padding(.horizontal, 7)
-            .frame(height: ZoneChip.height)
-            .background(Capsule().fill(lit ? CDS.Fill.secondary : hovered ? CDS.Fill.ghostHover : CDS.alpha(0.04)))
-            .overlay { if lit { Capsule().strokeBorder(CDS.border, lineWidth: 1) } }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .help(overview ?? (lit ? "Show it with the rest" : "Show only \(group.title)"))
-        .accessibilityLabel("\(group.title), \(count)")
-        .accessibilityValue(lit ? "Shown only" : "")
-        .accessibilityAddTraits(lit ? .isSelected : [])
-        .accessibilityHint(lit ? "Shows everything again" : "Shows only it on the canvas")
-    }
 }
 
 /// The canvas's buttons, floating at its top right: Summarize what's running, zoom out and in, Fit, Reset layout once a frame
@@ -1043,7 +988,7 @@ struct CanvasNotices: View {
         let away = store.routerAttention.strip?.line(store.routerShownCards) != nil
         let busy = store.routerDispatcher.isBusy
         // The chips left nothing to show (a search that did is said above).
-        let filtered = !nothing && !model.canvas.filter.isEmpty && model.canvasFolders(store, page: page).allSatisfy { $0.shown.isEmpty }
+        let filtered = !nothing && !model.filter.isClear && model.canvasFolders(store, page: page).allSatisfy { $0.shown.isEmpty }
         // The questions the Router asks back are over the composer, with the messages they hold (`FlightStack`).
         if away || busy || nothing || filtered {
             VStack(alignment: .leading, spacing: 6) {

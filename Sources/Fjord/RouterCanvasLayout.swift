@@ -104,7 +104,7 @@ enum RouterCanvasModel {
     /// ("folder#group") whose "+n more" was opened; `picked`: what is picked or marked, always drawn; `showsAll`: a search
     /// is on, every match drawn.
     static func make(page: RouterPage, done: [RouterCard], muted: Set<String> = [], name: (String) -> String,
-                     color: (String) -> Color?, filter: Set<CanvasGroup> = [], picked: Set<String> = [],
+                     color: (String) -> Color?, filter: RouterFilter = RouterFilter(), picked: Set<String> = [],
                      expanded: Set<String> = [], showsAll: Bool = false,
                      projectKey: (String, String) -> String = { _, folder in folder },
                      projectSource: (String) -> String = { $0 }) -> [CanvasFolder] {
@@ -139,7 +139,7 @@ enum RouterCanvasModel {
                 let opened = (group == .notes || group == .done) && !showsAll && expanded.contains("\(key)#\(group.rawValue)")
                     && all.count > shown + 1
                 return .init(group: group, items: drawn, more: all.count - drawn.count,
-                             hidden: !filter.isEmpty && !filter.contains(group), less: opened)
+                             hidden: !filter.shows(group), less: opened)
             }
             return CanvasFolder(key: key, name: name(key), color: key.isEmpty ? nil : color(key), groups: groups)
         }
