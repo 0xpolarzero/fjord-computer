@@ -2073,6 +2073,18 @@ import Testing
         #expect(text.contains("[question] “Fix the login bug” (lookout)"), "the open card")
     }
 
+    @Test func aDoneCardHiddenForRunningTasksIsLeftOutOfTheRunsCardList() {
+        let (s, _, _) = setup()
+        s.claudeSessions["local_b"] = ClaudeSession(id: "local_b", title: "Hidden finish", folder: "/code/lookout", lastActivity: Date(), running: false, cliID: "cli-b")
+        s.router.cards.append(RouterCard(id: "local_b#t1", sessionID: "local_b", kind: .done, title: "Hidden finish", folder: "/code/lookout",
+                                         text: "Done.", createdAt: Date()))
+        #expect(s.routerRunContext(message: "x").text().contains("Hidden finish"))
+        s.claudeTasks = ["local_b": [ClaudeTask(id: "t", kind: .command, title: "Tests", since: Date())]]
+        let text = s.routerRunContext(message: "x").text()
+        #expect(!text.contains("Hidden finish") && text.contains("Fix the login bug"))
+        #expect(!s.shownRouterCards.contains { $0.id == "local_b#t1" } && !s.routerZones.notes.contains { $0.id == "local_b#t1" })
+    }
+
     @Test func eachIntentGetsOnlyTheToolsItNeeds() {
         let read = RouterRun.toolNames(.question, triage: true)
         #expect(read.contains("board") && read.contains("list_categories") && read.contains("list_inbox") && read.contains("get_settings"))

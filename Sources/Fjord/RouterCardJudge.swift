@@ -91,9 +91,11 @@ enum CardJudge {
     /// them (a turn's questions; one question alone isn't asked), else on its own (those an earlier message left, read
     /// against the next). None when he is unsure, fails, takes longer than `timeout` or isn't there. `card`: for the log.
     static func skipped(_ asked: [(question: String, read: String)], message: String, card: String, contrast: Bool,
-                        ask asker: JevAsker?, timeout: Duration = timeout) async -> [String] {
+                        numbers: [Int]? = nil, ask asker: JevAsker?, timeout: Duration = timeout) async -> [String] {
         guard asked.count >= (contrast ? 2 : 1), asker != nil else { return [] }
-        let keys = asked.indices.map { "q\($0 + 1)" }
+        // Numbered as the session asked them (`numbers`, 1-based, when `asked` is only the ones left), so "no to question 2"
+        // is still question 2.
+        let keys = asked.indices.map { "q\(numbers?.indices.contains($0) == true ? numbers![$0] : $0 + 1)" }
         var questions: [String: JevClient.Question] = [:]
         for key in keys {
             questions[key] = .noul(instructions: respondsQuestion.instructions.replacingOccurrences(of: "%@", with: key),
@@ -125,8 +127,9 @@ enum CardJudge {
         let asked = questions(card, form: form)
         if asked.count > 1 {
             // The questions still waiting, each a yes or no of the same call: answered, or not.
-            let waiting = asked.filter { q in card.left?.contains(q.question) ?? true }
-            let keys = waiting.indices.map { "q\($0 + 1)" }
+            let numbered = asked.enumerated().filter { _, q in card.left?.contains(q.question) ?? true }
+            let waiting = numbered.map(\.element)
+            let keys = numbered.map { "q\($0.offset + 1)" }
             var questions: [String: JevClient.Question] = [:]
             for key in keys {
                 questions[key] = .noul(instructions: "Does the user's message clearly answer question \(key) the session asked? Answer no unless it clearly does.",
@@ -203,12 +206,14 @@ extension Store {
     /// at a time. A card the meantime opened again, or addressed otherwise, is left alone.
     func checkSkipped(session: String, message: String, cleared: [RouterCard], pending: RouterCard?, asker: JevAsker?,
                       timeout: Duration = CardJudge.timeout) async {
-        var asked: [(card: RouterCard, questions: [(question: String, read: String)], contrast: Bool)] = cleared.map { card in
-            (card, CardJudge.questions(card, form: nil), true)
+        var asked: [(card: RouterCard, questions: [(question: String, read: String)], contrast: Bool, numbers: [Int]?)] = cleared.map { card in
+            (card, CardJudge.questions(card, form: nil), true, nil)
         }
         if let pending, !cleared.contains(where: { $0.id == pending.id }) {
             let left = pending.skipped ?? []
-            asked.append((pending, left.map { q in (q, pending.asks?.first { $0.question == q }?.read ?? q) }, false))
+            let all = pending.asks ?? []
+            asked.append((pending, left.map { q in (q, all.first { $0.question == q }?.read ?? q) }, false,
+                          left.map { q in (all.firstIndex { $0.question == q } ?? 0) + 1 }))
         }
         // A turn that asked one thing is cleared with nothing kept: Jev is not asked.
         asked = asked.filter { $0.questions.count >= ($0.contrast ? 2 : 1) }
@@ -217,10 +222,10 @@ extension Store {
         let generation = jevGate.generation
         let slots = jevGate.cardSlots
         let found = await withTaskGroup(of: (RouterCard, [String]).self) { group in
-            for (card, questions, contrast) in asked {
+            for (card, questions, contrast, numbers) in asked {
                 group.addTask {
                     await slots.acquire()
-                    let skipped = await CardJudge.skipped(questions, message: message, card: card.id, contrast: contrast, ask: ask,
+                    let skipped = await CardJudge.skipped(questions, message: message, card: card.id, contrast: contrast, numbers: numbers, ask: ask,
                                                           timeout: timeout)
                     await slots.release()
                     return (card, skipped)

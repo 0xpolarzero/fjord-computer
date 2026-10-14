@@ -167,6 +167,10 @@ extension Store {
         if now != routerTasksKept { bumpRouterTasks(now) }
     }
 
+    /// The open cards the page shows: a done card whose session still runs subagents or commands is hidden there, so the
+    /// Router's runs don't list it either (the zones, and so `mark_seen`, don't have it).
+    var shownRouterCards: [RouterCard] { routerShownCards.filter(\.isOpen) }
+
     /// The Router's cards less those the page doesn't show (`RouterPage.shows`): what the keys and the away strip go by.
     var routerShownCards: [RouterCard] {
         let tasks = routerTasks

@@ -295,8 +295,15 @@ struct RouterTriage: Codable, Hashable {
         t.unverified = (answers["unverified"]?.yes ?? 0) >= 0.7
         t.work = sure("work", 0.6).flatMap(Work.init) ?? .unknown
         if t.state == .waiting {
-            t.waitingOn = sure("waitingOn", 0.5).flatMap(WaitingOn.init) ?? .other
-            if let key = sure("waitTarget", 0.6) { t.watch = options.first { $0.key == key }?.watch }
+            let on = sure("waitingOn", 0.5)
+            let target = sure("waitTarget", 0.6)
+            if on == "none", target == nil || target == "none" {
+                // Waiting on nothing outside the session is no wait (no watch could ever resolve it): the card ranks as its kind does.
+                t.state = nil
+            } else {
+                t.waitingOn = on.flatMap(WaitingOn.init) ?? .other
+                if let target { t.watch = options.first { $0.key == target }?.watch }
+            }
         }
         return t
     }

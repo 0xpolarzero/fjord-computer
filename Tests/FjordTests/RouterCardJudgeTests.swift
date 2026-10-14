@@ -72,7 +72,7 @@ import Testing
     /// for its text.
     private func yes(_ p: @escaping (String) -> Double) -> JevAsker {
         { questions, state in
-            let asked = state.values.first { $0.contains("q0:") || $0.contains("q1:") } ?? ""
+            let asked = state.values.first { $0.contains("q0:") || $0.contains("q1:") || $0.contains("q2:") } ?? ""
             var out: [String: JevClient.Answer] = [:]
             for key in questions.keys {
                 let line = asked.split(separator: "\n").first { $0.hasPrefix("\(key): ") }.map(String.init) ?? ""
@@ -100,6 +100,8 @@ import Testing
             asked = questions
             return try await self.yes { _ in 0.9 }(questions, state)
         })
+        // Numbered as the form asked it: the one left is still question 2.
+        #expect(Set(asked.keys) == ["q2"])
         #expect(calls == 2 && asked.count == 1 && !s.router.cards[0].isOpen && s.router.cards[0].left == nil)
     }
 
@@ -128,10 +130,11 @@ import Testing
         #expect(RouterFeed.unanswered(s.router.cards, "a", turns: 3)?.id == "a#t3")
         var again: [String] = []
         await s.judgeCards(session: "a", message: "and ship it today", eligible: s.openCardRevisions(session: "a"), asker: { questions, state in
-            again = (state.values.first { $0.contains("q1:") } ?? "").split(separator: "\n").map(String.init).filter { $0.hasPrefix("q") }
+            again = (state.values.first { $0.contains("q2:") } ?? "").split(separator: "\n").map(String.init).filter { $0.hasPrefix("q") }
             return try await self.yes { _ in 0.9 }(questions, state)
         }, timeout: Self.patient)
-        #expect(again.count == 1 && again[0].contains("q1: Ship today?"))
+        // The one left keeps its number from the turn: question 2.
+        #expect(again.count == 1 && again[0].contains("q2: Ship today?"))
         #expect(s.router.cards[0].skipped == nil && RouterFeed.unanswered(s.router.cards, "a", turns: 3) == nil)
     }
 

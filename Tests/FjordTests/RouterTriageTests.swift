@@ -90,6 +90,18 @@ import Testing
         #expect(none.watch == nil && none.waitingLabel == "CI")
     }
 
+    @Test func aWaitingTurnWithNothingToWaitOnIsNoWait() {
+        let watch = RouterTriage.Watch(target: .ci(thing: "pr:o/r#1"), label: "CI on o/r#1")
+        let options = [RouterTriage.WaitOption(key: "c0", hint: "CI", watch: watch)]
+        for target in [nil, "none"] {
+            let t = RouterTriage.parse(answers(state: "waiting", waitingOn: "none", target: target), options: options, source: "")
+            #expect(t.state == nil && t.waitingOn == nil && t.watch == nil)
+        }
+        // A named watch is still a wait.
+        let named = RouterTriage.parse(answers(state: "waiting", waitingOn: "none", target: "c0"), options: options, source: "")
+        #expect(named.state == .waiting && named.watch == watch)
+    }
+
     @Test func theCallAsksEverythingAtOnce() {
         let options = [RouterTriage.WaitOption(key: "s0", hint: "x", watch: .init(target: .session(id: "b", turns: 1), label: "b"))]
         let q = RouterTriage.questions(options: options)

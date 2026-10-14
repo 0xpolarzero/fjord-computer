@@ -78,7 +78,7 @@ extension Store {
                           now: Date = Date()) -> RouterRunContext {
         let zones = routerZones
         return RouterRunContext(
-            cards: openRouterCards.prefix(30).map {
+            cards: shownRouterCards.prefix(30).map {
                 let (tier, canMarkSeen) = routerTier($0, zones: zones)
                 return .init(id: $0.id, kind: $0.kind.rawValue, title: $0.title, project: folderName($0.folder ?? ""), text: $0.text,
                              tier: tier, canMarkSeen: canMarkSeen)
@@ -220,8 +220,10 @@ enum RouterRun {
     static func run(_ intent: Intent, input: String, tools: RouterTools, store: Store, binary: String,
                     timeout: TimeInterval = RouterRun.timeout) async throws -> Answer {
         guard let home = store.routerFiles?.routerHome else { throw RouterTools.Failure("The Router can't run here (no folder for its files)") }
-        let allowed = toolNames(intent, triage: store.triageOn)
-        let specs = specs(intent, triage: store.triageOn)
+        // Read once: Triage switched during the setup below changes nothing about this run (tools, role and arguments agree).
+        let triage = store.triageOn
+        let allowed = toolNames(intent, triage: triage)
+        let specs = specs(intent, triage: triage)
         let server = RouterMCPServer { body in
             // One ticket for the whole request: a batch's later entries can't act after a Stop its first one waited out.
             let ticket = tools.ticket()
@@ -239,7 +241,7 @@ enum RouterRun {
         try await OffMain.run { Swift.Result { try PrivateFile.write(data, to: config) } }.get()
         defer { try? FileManager.default.removeItem(at: config) }
         let output = try await tools.tracked { handle in
-            try await OneShot.run(binary, arguments(intent, config: config.path, triage: store.triageOn), cwd: home, input: Data(input.utf8),
+            try await OneShot.run(binary, arguments(intent, config: config.path, triage: triage), cwd: home, input: Data(input.utf8),
                                   timeout: timeout, handle: handle)
         }
         return try parse(output)

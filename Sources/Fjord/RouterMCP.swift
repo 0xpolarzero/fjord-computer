@@ -656,9 +656,11 @@ final class RouterMCPServer: @unchecked Sendable {
         SessionFence.fence(UntrustedText.clean(text, limit: limit, oneLine: false))
     }
 
-    /// A short string a session wrote (a title, a header, an option), cleaned onto one line and bounded; fencing every one
-    /// would drown the JSON, so the board says as a whole that its values are data.
-    private static func short(_ text: String, _ limit: Int = 120) -> String { UntrustedText.clean(text, limit: limit) }
+    /// A short string a session wrote (a title, a header, an option), cleaned onto one line, bounded, then fenced (the bound
+    /// comes first, so it never cuts a fence tag).
+    private static func short(_ text: String, _ limit: Int = 120) -> String {
+        SessionFence.fence(UntrustedText.clean(text, limit: limit))
+    }
 
     /// The Brief as the board shows it: its lead and each project's paragraph in plain words (the session tags removed),
     /// bounded as a whole and fenced.
@@ -710,7 +712,7 @@ final class RouterMCPServer: @unchecked Sendable {
         let peers = await peers(store)
         var cards: [[String: Any]] = []
         let zones = store.routerZones
-        for card in store.openRouterCards {
+        for card in store.shownRouterCards {
             // The tier is the zone on the Router page; only a card worth a look can be marked seen (`mark_seen`), the others
             // are answered.
             let (tier, canMarkSeen) = store.routerTier(card, zones: zones)

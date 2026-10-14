@@ -194,6 +194,9 @@ extension RouterTools {
         }
     }
 
+    /// The reference as the model reads it: the repo, workflow name and branch are GitHub's words, so bounded and fenced.
+    private func shownReference(_ t: Thing) -> String { InboxJev.github(reference(t), 200) }
+
     private func stamp(_ date: Date) -> String { Shapes.formatDate(date) }
 
     private func categoryJSON(_ store: Store, _ c: InboxCategory, counts: Bool = true) -> [String: Any] {
@@ -210,12 +213,12 @@ extension RouterTools {
 
     private func entryJSON(_ store: Store, _ e: InboxEntry) -> [String: Any] {
         var out: [String: Any] = [
-            "thing": e.id, "ref": reference(e.thing), "kind": e.thing.kind.rawValue, "title": InboxJev.github(e.thing.title, 200),
+            "thing": e.id, "ref": shownReference(e.thing), "kind": e.thing.kind.rawValue, "title": InboxJev.github(e.thing.title, 200),
             "category": store.categories.first { $0.id == e.categoryID }?.title ?? "", "categoryId": e.categoryID.uuidString,
-            "facts": e.facts.map(\.label), "done": e.isDone, "unread": e.isUnread, "updated": stamp(e.thing.updatedAt),
+            "facts": e.facts.map { InboxJev.github($0.label, 160) }, "done": e.isDone, "unread": e.isUnread, "updated": stamp(e.thing.updatedAt),
             "url": e.thing.url.absoluteString,
         ]
-        if let author = e.thing.author?.login { out["author"] = UntrustedText.clean(author, limit: 60) }
+        if let author = e.thing.author?.login { out["author"] = InboxJev.github(author, 60) }
         return out
     }
 
@@ -233,7 +236,7 @@ extension RouterTools {
         }
         if found.count == 1 { return found[0] }
         if found.isEmpty { return nil }
-        throw Failure("“\(q)” fits \(found.count) things: " + found.prefix(5).map { "\(reference($0.thing)) \(InboxJev.github($0.thing.title, 120))" }.joined(separator: "; ") + ". Use a thing id from list_inbox.")
+        throw Failure("“\(q)” fits \(found.count) things: " + found.prefix(5).map { "\(shownReference($0.thing)) \(InboxJev.github($0.thing.title, 120))" }.joined(separator: "; ") + ". Use a thing id from list_inbox.")
     }
 
     /// The record of a change, for the card. A change to what an earlier change of this turn touched joins that one's
@@ -527,7 +530,7 @@ extension RouterTools {
                     continue
                 }
                 guard let facts = InboxEngine.facts(rule, thing, marks: store.marks[thing.id], context: context) else { continue }
-                matched.append(["rule": i, "summary": words.summary(rule), "facts": facts.map(\.label)])
+                matched.append(["rule": i, "summary": words.summary(rule), "facts": facts.map { InboxJev.github($0.label, 160) }])
             }
             guard !matched.isEmpty else { continue }
             let hit: [String: Any] = ["category": category.title, "categoryId": category.id.uuidString, "rules": matched]
@@ -539,13 +542,13 @@ extension RouterTools {
             inbox = "in “\(name)”" + (entry.isDone ? ", done" : entry.isUnread ? ", unread" : "")
         }
         var out: [String: Any] = [
-            "untrusted": Self.githubNote, "thing": thing.id, "ref": reference(thing),
+            "untrusted": Self.githubNote, "thing": thing.id, "ref": shownReference(thing),
             "title": InboxJev.github(thing.title, 200), "kind": thing.kind.rawValue, "inbox": inbox,
-            "status": thing.status.rawValue, "labels": thing.labels.map { UntrustedText.clean($0, limit: 60) },
-            "assignees": thing.assignees.map { UntrustedText.clean($0, limit: 60) },
-            "requestedReviewers": thing.requestedReviewers.map { UntrustedText.clean($0, limit: 60) }, "hasConflicts": thing.hasConflicts,
+            "status": thing.status.rawValue, "labels": thing.labels.map { InboxJev.github($0, 60) },
+            "assignees": thing.assignees.map { InboxJev.github($0, 60) },
+            "requestedReviewers": thing.requestedReviewers.map { InboxJev.github($0, 60) }, "hasConflicts": thing.hasConflicts,
         ]
-        if let author = thing.author { out["author"] = author.login + (author.isBot ? " (bot)" : "") + ", " + author.association.rawValue }
+        if let author = thing.author { out["author"] = InboxJev.github(author.login, 60) + (author.isBot ? " (bot)" : "") + ", " + author.association.rawValue }
         if let checks = thing.checks { out["checks"] = checks.rawValue }
         if let importance = entry?.importance { out["importanceByJev"] = importance.rawValue }
         if let label = entry?.label { out["labelByJev"] = label.rawValue }
