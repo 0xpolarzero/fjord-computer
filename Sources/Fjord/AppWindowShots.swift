@@ -339,6 +339,26 @@ enum AppWindowShots {
             Demo.routerLanes(store)
             model.pickLanes()
         }, appearance: .aqua),
+        // The Brief (a prototype): the day written as prose, at rest, a highlight hovered, one opened, dark, narrow.
+        Shot(name: "router-brief", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340),
+             compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .aqua),
+        Shot(name: "router-brief-dark", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340),
+             compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .darkAqua),
+        Shot(name: "router-brief-hover", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340),
+             compose: { model, store in
+                 Demo.routerDigest(store); model.pickBrief()
+                 model.digest.hovered = "/Users/me/code/microsandbox#local_demo-api"
+             }, appearance: .aqua),
+        Shot(name: "router-brief-open", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1700),
+             compose: { model, store in
+                 Demo.routerDigest(store); model.pickBrief()
+                 model.digest.open = "/Users/me/code/microsandbox#local_demo-api"
+                 if let card = store.router.cards.first(where: { $0.sessionID == "local_demo-api" && $0.isOpen }) {
+                     model.select(card.id, store: store, reveal: false)
+                 }
+             }, appearance: .aqua),
+        Shot(name: "router-brief-narrow", destination: { _ in .router }, size: CGSize(width: 1000, height: 1500),
+             compose: { model, store in Demo.routerDigest(store); model.pickBrief() }, appearance: .aqua),
         Shot(name: "router-canvas-lanesdata", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1000), compose: { model, store in
             Demo.routerLanes(store)
             model.pickCanvas()

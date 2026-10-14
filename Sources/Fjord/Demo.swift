@@ -408,6 +408,64 @@ enum Demo {
         ]
     }
 
+    /// The Brief over the lanes' day, as its agent would write it: what's for you, what's worth a look, then each project.
+    static func routerDigest(_ store: Store, now: Date = Date()) {
+        routerLanes(store, now: now)
+        func p(_ name: String, _ text: String) -> RouterDigest.Project { .init(folder: "/Users/me/code/\(name)", text: text) }
+        store.routerDigest = RouterDigest(
+            forYou: """
+            Two OKs first: <need s="local_demo-release">publish Fjord 2.4</need> and \
+            <need s="local_demo-silo-guest">force-push silo's guest branch</need>. Then quick answers: \
+            <need s="local_demo-lcu">how lcu updates install</need>, <need s="local_demo-api">two rate-limit settings</need>, \
+            <need s="local_demo-zig">where the zig test goes</need>, and <need s="local_demo-linux">a sandbox plan</need> \
+            to approve. <need s="local_demo-theme">PR #88</need> is green and <need s="local_demo-login">the login fix</need> \
+            can go on. <need s="local_demo-calc">lcu-research is stuck</need> until the VPN is back.
+            """,
+            worthALook: """
+            <look s="local_demo-docs">The new lcu docs</look> weren't checked on mobile, and \
+            <look s="local_demo-site-copy">three landing-page headlines</look> are ready to pick from.
+            """,
+            projects: [
+                p("lookout", """
+                <need s="local_demo-release">2.4 is built with its notes</need>, waiting for your OK to publish and tag it. \
+                <need s="local_demo-login">The login fix passed CI</need> and can carry on, and \
+                <need s="local_demo-theme">PR #88 is green</need>: merge it, then relaunch to check light mode. \
+                <run s="local_demo-lookout">The test suite is running</run>, nothing has failed so far. The icon set is pushed.
+                """),
+                p("microsandbox", """
+                <need s="local_demo-linux">A plan to run the sandbox in a Firecracker microVM</need> is ready for review. \
+                <need s="local_demo-api">The rate limiter</need> needs two choices: per API key or per IP, and whether \
+                100 a minute is right. <run s="local_demo-ci">CI is green</run>, with two reviewers still reading the \
+                changes; <run s="local_demo-schema">the schema migration</run> waits for lookout's tests.
+                """),
+                p("lcu", """
+                <need s="local_demo-lcu">Should updates install silently, or ask first?</need> \
+                <look s="local_demo-docs">The docs redesign is in</look>, not yet checked on mobile widths. \
+                <run s="local_demo-bump">The SDK bump</run> waits on CI.
+                """),
+                p("silo", """
+                <need s="local_demo-silo-guest">The guest-agent branch is rebased</need> and needs your OK to force-push. \
+                <run s="local_demo-silo-ckpt">Checkpoint restore works</run>, but the 2 GB case is still slow. \
+                <run s="local_demo-silo-rel">v0.9 is tagged</run>; its release workflow is running.
+                """),
+                p("lcu-research", """
+                <need s="local_demo-calc">Stuck: the staging database is unreachable while the VPN is down.</need>
+                """),
+                p("zig", """
+                Upstream wants a test before merging the symlink walk: \
+                <need s="local_demo-zig">in fs/test.zig, or a new file?</need>
+                """),
+                p("fjord-site", """
+                <look s="local_demo-site-copy">Three headline options</look> for the landing page are drafted; picking one \
+                ships the page. <run s="local_demo-site-og">Social previews</run> are rendering.
+                """),
+                p("dotfiles", """
+                <run s="local_demo-dots">Cleaning up the Ghostty config.</run>
+                """),
+            ],
+            at: now.addingTimeInterval(-40))
+    }
+
     /// The Router changing Fjord itself: a record for each change (one taken back).
     private static func fjordChanges(_ store: Store, _ now: Date) -> [FjordChange] {
         let look = InboxCategory(

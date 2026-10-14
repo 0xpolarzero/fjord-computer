@@ -15,6 +15,8 @@ final class Store {
     @ObservationIgnored let computers: ComputersModel
     @ObservationIgnored var routerPlacementShot = false
     @ObservationIgnored private var engineConnectAttempt: Task<Void, Never>?
+    /// The Brief's text (a prototype, RouterDigest.swift): only the demo writes it yet.
+    var routerDigest: RouterDigest?
 
     init(engineClient: (any EngineClient)? = nil, engineLauncher: EngineLauncher? = nil) {
         let offlineContext = Store.isDemo || UnderTest.isRunning

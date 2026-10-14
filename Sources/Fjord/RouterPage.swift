@@ -267,6 +267,8 @@ struct RouterPageView: View {
             CanvasPage(store: store, model: model)
         } else if model.layout == .lanes {
             LanesPage(store: store, model: model)
+        } else if model.layout == .brief {
+            DigestPage(store: store, model: model)
         } else {
             columns
         }

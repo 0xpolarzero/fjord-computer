@@ -14,6 +14,11 @@ extension RouterModel {
     func pickLanes() {
         layout = .lanes
     }
+
+    /// The Brief picked (shots).
+    func pickBrief() {
+        layout = .brief
+    }
 }
 
 /// The Router's page as a canvas: the canvas over all of it under the top bar, its chips (and what Now's list says over
@@ -87,6 +92,8 @@ struct RouterLayoutSwitch: View {
                         help: "Beta: each project a frame on an infinite canvas; pan, pinch, drag a frame to move it, double-click to fit")
                 segment(.lanes, "Lanes", icon: "rectangle.split.3x1",
                         help: "Prototype: a project to a row, a state to a column; what needs you numbered in visit order")
+                segment(.brief, "Brief", icon: "text.alignleft",
+                        help: "Prototype: what's going on, written for you; hover a highlight for its card, click to answer it")
             }
             .padding(1)
             .frame(height: ZoneChip.height)

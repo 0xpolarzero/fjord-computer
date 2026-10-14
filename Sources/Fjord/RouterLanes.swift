@@ -130,7 +130,7 @@ struct LanesPage: View {
 
 /// A scroll view, or in a shot run the content flat from the top: the shots' capture doesn't draw a scroll view's content
 /// on the Router's page (why the list's shots come out empty).
-private struct Scrolling<Content: View>: View {
+struct Scrolling<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {

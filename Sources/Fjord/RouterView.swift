@@ -508,6 +508,8 @@ final class RouterModel {
     var filter = RouterFilter()
     /// What the canvas keeps while the window lives: its camera and folds (RouterCanvas.swift).
     let canvas: RouterCanvasState
+    /// What the Brief keeps (RouterDigest.swift).
+    let digest = RouterDigestState()
 
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
