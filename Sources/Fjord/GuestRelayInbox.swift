@@ -137,7 +137,11 @@ struct GuestRelayInbox: Sendable {
     private func waitForAck(watch: GuestFilesWatch, path: String, computer: GuestReference) async throws -> String {
         try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
-                for await event in watch.events where event.path == path {
+                for await event in watch.events {
+                    let hint = event.path.hasSuffix("/") ? String(event.path.dropLast()) : event.path
+                    let coversAcknowledgement = hint == path
+                        || (hint == "/" ? path.hasPrefix("/") : path.hasPrefix(hint + "/"))
+                    guard coversAcknowledgement else { continue }
                     if let ack = try await readAck(path, computer: computer) { return ack }
                 }
                 throw CancellationError()

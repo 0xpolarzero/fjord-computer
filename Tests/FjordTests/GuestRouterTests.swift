@@ -245,6 +245,28 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(await guest.removalRecords().last?.1.count == 2)
     }
 
+    @Test func guestRelayConsumesCoalescedFolderAcknowledgementHintsImmediately() async throws {
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let cli = "cli-coalesced-ack"
+        let nonce = "abcdef0123456789abcdef0123456789"
+        let folder = GuestRouterPaths.join(paths.inbox, cli)
+        let messagePath = GuestRouterPaths.join(folder, "\(nonce).msg")
+        let ackPath = GuestRouterPaths.join(folder, "\(nonce).ack")
+        await guest.acknowledgeWhenMessageIsAdmitted(computer: computer, messagePath: messagePath,
+                                                      ackPath: ackPath, data: Data("ok".utf8), hintPath: folder)
+        await guest.failNextRead(computer: computer, path: ackPath, with: .notFound(ackPath))
+        await guest.failNextRead(computer: computer, path: ackPath, with: .notFound(ackPath))
+        let signed = "⟦fjord v1 \(cli) \(nonce) 1800000000000 \(String(repeating: "a", count: 64))⟧\nRun checks"
+        let started = Date.timeIntervalSinceReferenceDate
+
+        let ack = try await GuestRelayInbox(client: guest, timeout: 0.4).deliver(signed, to: cli, computer: computer)
+        let elapsed = Date.timeIntervalSinceReferenceDate - started
+
+        #expect(ack == "ok")
+        #expect(elapsed < 0.3)
+    }
+
     @Test func guestClockSamplesTheGuestNodeRuntime() async throws {
         let guest = client()
         let milliseconds: Int64 = 1_800_000_000_000

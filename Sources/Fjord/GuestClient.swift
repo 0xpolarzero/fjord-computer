@@ -151,7 +151,7 @@ actor MockGuestClient: GuestClient {
     private var execResults: [String: GuestExecResult] = [:]
     private var readFailures: [String: [GuestClientFailure]] = [:]
     private var postAdmissionWriteFailures: [String: GuestClientFailure] = [:]
-    private var acknowledgementsOnAdmission: [String: (path: String, data: Data)] = [:]
+    private var acknowledgementsOnAdmission: [String: (path: String, data: Data, hintPath: String?)] = [:]
     private var pausedExecs: Set<String> = []
     private var blockedExecs: Set<String> = []
     private var execPauseWaiters: [String: CheckedContinuation<Void, Never>] = [:]
@@ -232,7 +232,7 @@ actor MockGuestClient: GuestClient {
             let acknowledgementKey = Self.fileKey(request.computer, acknowledgement.path)
             files[acknowledgementKey] = File(data: acknowledgement.data, mode: 0o600, mtimeMs: nextTime, inode: nextInode)
             nextInode += 1
-            publish(computer: request.computer, path: acknowledgement.path)
+            publish(computer: request.computer, path: acknowledgement.hintPath ?? acknowledgement.path)
         }
         if let failure = postAdmissionWriteFailures.removeValue(forKey: key) { throw failure }
         return GuestFileWriteResult(size: Int64(request.data.count), mtimeMs: nextTime, inode: inode)
@@ -302,8 +302,9 @@ actor MockGuestClient: GuestClient {
         postAdmissionWriteFailures[Self.fileKey(computer, path)] = failure
     }
 
-    func acknowledgeWhenMessageIsAdmitted(computer: GuestReference, messagePath: String, ackPath: String, data: Data) {
-        acknowledgementsOnAdmission[Self.fileKey(computer, messagePath)] = (ackPath, data)
+    func acknowledgeWhenMessageIsAdmitted(computer: GuestReference, messagePath: String, ackPath: String, data: Data,
+                                          hintPath: String? = nil) {
+        acknowledgementsOnAdmission[Self.fileKey(computer, messagePath)] = (ackPath, data, hintPath)
     }
 
     func pauseNextExec(argv: [String]) { pausedExecs.insert(argv.joined(separator: "\u{1f}")) }
