@@ -33,7 +33,7 @@ Rendered with `FJORD_THEME=dark .build/debug/Fjord --window-shots` and visually 
 ## Verification
 
 - `swift build`: passed after the shared Triage/run source settled.
-- `scripts/test.sh`: invoked once after confirming no test runner was active. It stopped during test-target compilation, before tests executed, on nested `#require` macro errors in the concurrent Triage-owned `Tests/FjordTests/ComputerRunTests.swift` (lines 437, 439, and 442). The script restored the pre-existing `test.log` after the run.
+- `scripts/test.sh`: the first attempt stopped during test-target compilation on nested `#require` macro errors in the concurrent Triage-owned `Tests/FjordTests/ComputerRunTests.swift`; that owner fixed them. The first full run then exposed an incorrect resource-summary expectation in `ComputersTests`; the test now includes the unchanged disk size. The final serialized run passed all 1,687 tests in 163 suites. The pre-existing `test.log` was restored after each invocation.
 - `git diff --check` and Swift parser checks on the Computers-owned sources passed before the final test run.
 
 ## Limits
