@@ -80,7 +80,7 @@ struct CategoriesView: View {
         .onChange(of: store.newCategoryRequest, initial: true) { _, asked in
             guard asked else { return }
             store.newCategoryRequest = false
-            create(in: nil)
+            if Self.startsDraft(whileEditing: editing) { create(in: nil) }
         }
         .onChange(of: hub?.groupRequest, initial: true) { _, request in
             guard let request, let id = UUID(uuidString: request.id) else { return }
@@ -125,6 +125,9 @@ struct CategoriesView: View {
         draft = made
         editing = .new
     }
+
+    /// Whether a request for New category opens a draft: not while one is open already, whose unsaved fields it would drop.
+    static func startsDraft(whileEditing editing: CategoryEditing?) -> Bool { editing != .new }
 
     /// What New category starts from: no name, the first colour not yet used, one rule (every PR for you).
     static func newDraft(after categories: [InboxCategory]) -> InboxCategory {

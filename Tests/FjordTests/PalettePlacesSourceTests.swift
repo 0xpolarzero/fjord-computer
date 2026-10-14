@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Fjord
 
@@ -222,6 +224,77 @@ import Testing
         try #require(rig.item("command:new-category")).actions[0].run()
         #expect(rig.store.newCategoryRequest)
         #expect(rig.went == [.categories])
+    }
+
+    @Test func repeatingNewCategoryKeepsADraftThatIsOpen() {
+        #expect(CategoriesView.startsDraft(whileEditing: nil))
+        #expect(CategoriesView.startsDraft(whileEditing: .existing(UUID())))
+        #expect(!CategoriesView.startsDraft(whileEditing: .new))
+    }
+
+    @Test func theTypeSafeKeyIsOfferedOnlyWhereSettingsShowsItsField() {
+        let rig = Rig(router: true)
+        rig.store.agents.iconsEnabled = false
+        #expect(rig.item("setting:claude.key") == nil && rig.item("setting:claude.icons") != nil)
+        rig.store.agents.iconsEnabled = true
+        #expect(rig.item("setting:claude.key") != nil)
+    }
+
+    @Test func theRetentionRowIsOfferedOnlyWhileAutomaticCheckpointsAreOn() {
+        let rig = Rig(computers: true)
+        #expect(rig.item("setting:computer-defaults.retention") != nil)
+        var snapshot = rig.store.computers.engineSettings
+            ?? SiloWireSettingsSnapshot(onboardingDraft: .null, revision: 1,
+                                        settings: SiloWireSettingsValues(automaticCheckpointRetentionCount: 3,
+                                                                         startComputersAtLaunch: false, startupComputerIds: []),
+                                        writeProtected: false)
+        snapshot.settings.automaticCheckpointRetentionCount = 0
+        rig.store.computers.engineSettings = snapshot
+        #expect(rig.item("setting:computer-defaults.retention") == nil)
+        #expect(rig.item("setting:computer-defaults.checkpoints") != nil && rig.item("setting:computer-defaults.launch") != nil)
+    }
+
+    /// How far Settings scrolls when asked for a section, in a window too short to show the page.
+    private func scrollOffset(toward anchor: String) async -> CGFloat {
+        let rig = Rig(router: true, computers: true)
+        rig.hub.settingsScroll = ScrollRequest(id: anchor, seq: 1)
+        let size = CGSize(width: 520, height: 400)
+        let hosting = NSHostingView(rootView: SettingsView(store: rig.store, hub: rig.hub).frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        window.orderFrontRegardless()
+        defer { window.close() }
+        func scrollView(in view: NSView) -> NSScrollView? {
+            if let found = view as? NSScrollView { return found }
+            for sub in view.subviews { if let found = scrollView(in: sub) { return found } }
+            return nil
+        }
+        // The page takes the request once it has appeared; it is then cleared.
+        for _ in 0..<100 where rig.hub.settingsScroll != nil {
+            try? await Task.sleep(for: .milliseconds(20))
+            hosting.layoutSubtreeIfNeeded()
+        }
+        for _ in 0..<5 {
+            try? await Task.sleep(for: .milliseconds(20))
+            hosting.layoutSubtreeIfNeeded()
+        }
+        return scrollView(in: hosting)?.contentView.bounds.origin.y ?? -1
+    }
+
+    @Test func settingsScrollsToEverySectionAnchor() async {
+        var offsets: [String: CGFloat] = [:]
+        for anchor in SettingsView.anchors { offsets[anchor] = await scrollOffset(toward: anchor) }
+        // The first section is at the top already; every other one is somewhere below it.
+        for anchor in SettingsView.anchors where anchor != SettingsView.toolsID {
+            #expect((offsets[anchor] ?? -1) > 0, "\(anchor) did not scroll: \(offsets)")
+        }
+        // Each to its own place: a section further down the page is further down.
+        let down = SettingsView.anchors.dropFirst().compactMap { offsets[$0] }
+        #expect(down.first == down.min() && Set(down).count > 3, "\(offsets)")
+        // An anchor that isn't there goes nowhere.
+        #expect(await scrollOffset(toward: "no-such-section") == 0)
     }
 
     @Test func buildingItIsCheap() {

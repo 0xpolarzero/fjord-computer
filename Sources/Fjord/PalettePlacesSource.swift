@@ -88,11 +88,13 @@ enum PalettePlacesSource {
             SettingsRowSpec(slug: "computers", title: "Computers", keywords: ["silo", "vms", "machines", "tool"]),
         ]))
         if store.computersOn && store.computersEngineReady {
-            sections.append(SettingsSectionSpec(anchor: SettingsView.computerDefaultsID, title: "Computer defaults", keywords: ["computers"], rows: [
-                SettingsRowSpec(slug: "checkpoints", title: "Automatic checkpoints", keywords: ["snapshots", "backup"]),
-                SettingsRowSpec(slug: "retention", title: "Retain automatic checkpoints", keywords: ["snapshots", "keep", "how many"]),
-                SettingsRowSpec(slug: "launch", title: "Start computers at launch", keywords: ["autostart", "boot", "startup"]),
-            ]))
+            var defaults = [SettingsRowSpec(slug: "checkpoints", title: "Automatic checkpoints", keywords: ["snapshots", "backup"])]
+            // Off (a count of zero), the retention row is hidden, as in Settings.
+            if (store.computers.engineSettings?.settings.automaticCheckpointRetentionCount ?? 3) > 0 {
+                defaults.append(SettingsRowSpec(slug: "retention", title: "Retain automatic checkpoints", keywords: ["snapshots", "keep", "how many"]))
+            }
+            defaults.append(SettingsRowSpec(slug: "launch", title: "Start computers at launch", keywords: ["autostart", "boot", "startup"]))
+            sections.append(SettingsSectionSpec(anchor: SettingsView.computerDefaultsID, title: "Computer defaults", keywords: ["computers"], rows: defaults))
             sections.append(SettingsSectionSpec(anchor: SettingsView.connectedMacsID, title: "Connected Macs", keywords: ["computers", "remote"], rows: [
                 SettingsRowSpec(slug: "allow", title: "Allow other Macs to connect", keywords: ["host", "ssh", "remote", "share"]),
                 SettingsRowSpec(slug: "add", title: "Add a Mac", keywords: ["ssh", "address", "connect", "remote", "host"]),
@@ -118,10 +120,11 @@ enum PalettePlacesSource {
             if store.triageOn {
                 rows.append(SettingsRowSpec(slug: "comments", title: "Let Jev label new comments", keywords: ["jev", "typesafe", "privacy", "inbox", "noise"]))
             }
-            rows += [
-                SettingsRowSpec(slug: "icons", title: "Icons picked for you", keywords: ["session icons", "jev", "typesafe", "avatars"]),
-                SettingsRowSpec(slug: "key", title: "TypeSafe API key", keywords: ["key", "api", "jev", "typesafe", "keychain"]),
-            ]
+            rows.append(SettingsRowSpec(slug: "icons", title: "Icons picked for you", keywords: ["session icons", "jev", "typesafe", "avatars"]))
+            // The key's field is under the icons switch: shown only while it is on.
+            if store.agents.iconsEnabled {
+                rows.append(SettingsRowSpec(slug: "key", title: "TypeSafe API key", keywords: ["key", "api", "jev", "typesafe", "keychain"]))
+            }
             sections.append(SettingsSectionSpec(anchor: SettingsView.claudeID, title: "Claude", keywords: ["router"], rows: rows))
         }
         if store.triageOn || store.routerOn {
