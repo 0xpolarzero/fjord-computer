@@ -70,15 +70,22 @@ struct GuestRelayInbox: Sendable {
 
         let watch = try await client.filesWatch(computer: computer, paths: [sessionFolder])
         do {
-            if let gate, let refusal = await MainActor.run(body: gate) {
-                receipt.state = .refused
-                await onState(receipt)
-                throw Failure.refused(refusal)
+            func checkGate() async throws {
+                if let gate, let refusal = await MainActor.run(body: gate) {
+                    receipt.state = .refused
+                    await onState(receipt)
+                    throw Failure.refused(refusal)
+                }
             }
+            try await checkGate()
             if let ack = try await readAck(ackPath, computer: computer) {
                 return try await finish(ack, computer: computer, messagePath: messagePath, ackPath: ackPath, receipt: receipt)
             }
             if try await messageExists(messagePath, payload: signedText, computer: computer) == false {
+                // The reads above are awaited: what the gate saw before them may be gone (Discard, the Router turned off), so
+                // it is asked again, and the task's cancellation looked at, right before the write.
+                try Task.checkCancellation()
+                try await checkGate()
                 let message = GuestFileWriteRequest(computer: computer, path: messagePath, data: Data(signedText.utf8), mode: 0o600,
                                                     createParents: true, replace: .never)
                 do { _ = try await client.filesWrite(message) }

@@ -210,7 +210,8 @@ extension Store {
     /// (not waiting, or no longer kept).
     @discardableResult
     func applyFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
-        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
+        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending,
+              router.changes[i].applying == nil else { return nil }
         var change = router.changes[i]
         // A stop tells the session's plugin, which takes a moment: it is applied on its own, and the card follows.
         if case .cardAction(.stop) = change.patch {
@@ -247,7 +248,8 @@ extension Store {
     /// Lets a waiting change go: nothing of it was applied, and nothing is.
     @discardableResult
     func discardFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
-        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
+        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending,
+              router.changes[i].applying == nil else { return nil }
         var change = router.changes[i]
         change.revertedAt = now
         change.revertNote = "Discarded"

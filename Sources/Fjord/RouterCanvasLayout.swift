@@ -112,7 +112,7 @@ enum RouterCanvasModel {
         var order: [String] = []
         func add(_ item: CanvasItem, _ folder: String, _ group: CanvasGroup) {
             let key = projectKey(item.sessionID, folder)
-            guard !muted.contains(projectSource(key)) else { return }
+            guard !muted.contains(key), !muted.contains(projectSource(key)) else { return }
             if items[key] == nil { order.append(key) }
             items[key, default: [:]][group, default: []].append(item)
         }

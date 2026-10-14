@@ -137,7 +137,10 @@ extension RouterTools {
         case .failure(let why):
             throw Failure("“\(Self.short(target.title, 60))”: \(why.message); nothing was proposed")
         case .success(let found):
-            let title = propose(store, .stop(session: target.id, title: UntrustedText.clean(target.title, limit: 60), decision: found.entry.id, nonce: found.delivery.nonce))
+            let place = store.stopIdentity(session: target.id)
+            let title = propose(store, .stop(session: target.id, title: UntrustedText.clean(target.title, limit: 60),
+                                             project: UntrustedText.clean(place.project, limit: 40), place: UntrustedText.clean(place.place, limit: 40),
+                                             since: found.delivery.at, decision: found.entry.id, nonce: found.delivery.nonce))
             return proposed([title], refused: [], what: "stopped")
         }
     }

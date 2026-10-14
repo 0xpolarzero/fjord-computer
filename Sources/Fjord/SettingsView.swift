@@ -503,7 +503,9 @@ private struct RouterSettings: View {
     @ViewBuilder private var mutedFolders: some View {
         let muted = store.agents.mutedFolders
         let unmuted = store.knownFolders.filter { !muted.contains($0) }
-        let name = { (folder: String) in folder.isEmpty ? "Scratch chats" : store.folderName(folder) }
+        let name = { (folder: String) in
+            folder.isEmpty ? "Scratch chats" : folder.hasPrefix("guest-project:") ? store.routerProjectGroupName(folder) : store.folderName(folder)
+        }
         SettingsRow("Muted folders", info: ("Muted folders", "The Router ignores their sessions: no cards, nothing listed"),
                     below: AnyView(Group {
                         if muted.isEmpty {
@@ -511,7 +513,7 @@ private struct RouterSettings: View {
                         } else {
                             SettingsNest {
                                 ForEach(muted, id: \.self) { folder in
-                                    SettingsRow(name(folder), description: folder.isEmpty ? nil : folder) {
+                                    SettingsRow(name(folder), description: folder.isEmpty || folder.hasPrefix("guest-project:") ? nil : folder) {
                                         Button("Unmute") { store.setFolderMuted(folder, false) }
                                             .buttonStyle(SettingsButtonStyle(size: .sm))
                                             .accessibilityLabel("Unmute \(name(folder))")

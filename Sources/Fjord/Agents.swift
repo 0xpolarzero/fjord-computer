@@ -222,7 +222,7 @@ extension Store {
     private func buildAgentCache(_ state: AgentsState, _ sessions: [String: ClaudeSession],
                                  _ activity: [String: ClaudeActivity], _ tasks: [String: [ClaudeTask]]) -> AgentCache {
         let byID = Dictionary(state.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let muted = Set(state.mutedFolders)
+        let muted = mutedSessionFolders(state.mutedFolders, among: Array(sessions.values))
         // Sessions stay while they work or wait to be read, and for an hour after their last activity; then only a
         // search finds them.
         let now = Date(), cutoff = now.addingTimeInterval(-Self.recentWindow)
@@ -502,7 +502,7 @@ extension Store {
             }
             return (session.id, session)
         }, uniquingKeysWith: { a, _ in a })
-        let muted = Set(state.mutedFolders)
+        let muted = mutedSessionFolders(state.mutedFolders, among: live)
         let previousDots = state.appUnread.map(Set.init)
         // The session shown in the app right now: the most recently focused one, if the app is in front.
         let viewing = claudeFrontmost ? live.max { ($0.lastFocused ?? .distantPast) < ($1.lastFocused ?? .distantPast) }?.id : nil

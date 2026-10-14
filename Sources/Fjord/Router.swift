@@ -1023,7 +1023,7 @@ extension Store {
             RouterFeed.reconcile(&state, sessions: Array(claudeSessions.values), activity: claudeActivity, forms: forms, now: now)
         }
         RouterFeed.update(&state, sessions: Array(claudeSessions.values), activity: claudeActivity,
-                          muted: Set(agents.mutedFolders), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
+                          muted: mutedSessionFolders(agents.mutedFolders, among: Array(claudeSessions.values)), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
                           inventory: claudeTaskInventory, listed: claudeSessionsListed, now: now)
         applyTurnSummaries(&state)
         if state != router {

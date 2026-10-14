@@ -13,8 +13,10 @@ enum CardAction: Codable, Hashable {
     case reopen(card: String, title: String, project: String)
     /// `project`: the canonical Router project key (`Store.routerProjectGroupKey`), which `mutedFolders` holds.
     case mute(project: String, name: String, muted: Bool)
-    /// `decision`, `nonce`: the delivery that started the session's running turn when it was proposed.
-    case stop(session: String, title: String, decision: UUID, nonce: String)
+    /// `project`, `place`: the session's project and where it runs (this Mac, or a guest computer's name); `since`: when
+    /// the turn started. They tell two sessions of one title apart. `decision`, `nonce`: the delivery that started the
+    /// session's running turn when it was proposed.
+    case stop(session: String, title: String, project: String, place: String, since: Date, decision: UUID, nonce: String)
 
     var isMute: Bool { if case .mute = self { true } else { false } }
     var isRevertible: Bool { if case .stop = self { false } else { true } }
@@ -34,8 +36,14 @@ enum CardAction: Codable, Hashable {
         case .archive(_, let title, let project): "Archive “\(title)” (\(project))"
         case .reopen(_, let title, let project): "Reopen “\(title)” (\(project))"
         case .mute(_, let name, let muted): "\(muted ? "Mute" : "Unmute") project \(name)"
-        case .stop(_, let title, _, _): "Stop the turn of “\(title)”"
+        case .stop(_, let title, _, _, _, _, _): "Stop “\(title)” (\(stopWhere))"
         }
+    }
+
+    /// A stop's identity in a line: the project, where it runs and when the turn started.
+    var stopWhere: String {
+        guard case .stop(_, _, let project, let place, let since, _, _) = self else { return "" }
+        return "\(project), \(place), since \(since.formatted(date: .omitted, time: .shortened))"
     }
 
     var before: String {
@@ -43,7 +51,7 @@ enum CardAction: Codable, Hashable {
         case .archive(_, let title, _): "“\(title)”: open on the Router page"
         case .reopen(_, let title, _): "“\(title)”: archived"
         case .mute(_, let name, let muted): "\(name): \(muted ? "not muted" : "muted")"
-        case .stop(_, let title, _, _): "“\(title)”: working on a turn"
+        case .stop(_, let title, _, _, _, _, _): "“\(title)” (\(stopWhere)): working on a turn"
         }
     }
 
@@ -52,15 +60,15 @@ enum CardAction: Codable, Hashable {
         case .archive(_, let title, _): "“\(title)”: archived, in the history"
         case .reopen(_, let title, _): "“\(title)”: open on the Router page again"
         case .mute(_, let name, let muted): "\(name): \(muted ? "muted" : "not muted")"
-        case .stop(_, let title, _, _): "“\(title)”: the turn is stopped (what it already did stays done)"
+        case .stop(_, let title, _, _, _, _, _): "“\(title)” (\(stopWhere)): the turn is stopped (what it already did stays done)"
         }
     }
 
     /// Why it waits, as its card says.
     var waitingReason: String {
         switch self {
-        case .stop: "The Router proposes stopping this turn; it can't be undone once you apply it"
-        default: "The Router proposes this; nothing changes until you apply it"
+        case .stop: "Stopping can't be undone"
+        default: ""
         }
     }
 }
@@ -76,6 +84,27 @@ extension Store {
         keys.formUnion(agents.mutedFolders)
         keys.remove("")
         return keys.map { (key: $0, name: routerProjectGroupName($0)) }.sorted { ($0.name.lowercased(), $0.key) < ($1.name.lowercased(), $1.key) }
+    }
+
+    /// The folders the session-side readers (the sessions list, notifications, the feed) compare `session.folderKey` with:
+    /// the muted keys, and the folder of each session whose Router project is muted by its canonical key (a guest session's
+    /// project is `guest-project:…`, not its host mirror folder). A local project's key is its folder, so those are the same.
+    func mutedSessionFolders(_ muted: [String], among sessions: [ClaudeSession]) -> Set<String> {
+        var out = Set(muted)
+        guard muted.contains(where: { $0.hasPrefix("guest-project:") }) else { return out }
+        for session in sessions where out.contains(routerProjectGroupKey(sessionID: session.id, folder: session.folderKey)) {
+            out.insert(session.folderKey)
+        }
+        return out
+    }
+
+    /// A session's project and where it runs: this Mac, or the guest computer's name.
+    func stopIdentity(session id: String) -> (project: String, place: String) {
+        if let start = router.pendingDesktopStarts.first(where: { $0.desktopSessionID == id && $0.state == .matched }) {
+            let project = router.runsOnProjects.first(where: { $0.id == start.projectID })?.name ?? folderName(start.folder)
+            return (project, start.alias)
+        }
+        return (folderName(claudeSessions[id]?.folderKey ?? ""), "this Mac")
     }
 
     // MARK: The running turn
@@ -156,13 +185,19 @@ extension Store {
     @discardableResult
     func applyStopChange(_ id: UUID) async -> FjordChange? {
         guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending,
-              case .cardAction(.stop(let session, let title, _, let nonce)) = router.changes[i].patch,
+              case .cardAction(.stop(let session, let title, _, _, _, _, let nonce)) = router.changes[i].patch,
               !stopsApplying.contains(id) else { return nil }
         stopsApplying.insert(id)
         defer { stopsApplying.remove(id) }
         func fail(_ note: String) -> FjordChange? {
             guard let i = router.changes.firstIndex(where: { $0.id == id }) else { return nil }
             router.changes[i].revertNote = note
+            // Once the abort write was committed the stop is under way whatever the acknowledgement says: it settles (nothing
+            // of it can be discarded) and says so, rather than going back to waiting.
+            if router.changes[i].applying != nil {
+                router.changes[i].applying = nil
+                router.changes[i].pending = nil
+            }
             return router.changes[i]
         }
         func check() -> (entry: RouterDecision, delivery: RouterDecision.Delivered)? {
@@ -173,14 +208,20 @@ extension Store {
         let gate: @MainActor @Sendable () -> String? = { [weak self] in
             guard let self else { return "Fjord is closing" }
             guard self.routerOn else { return "The Router is off" }
-            return self.router.changes.first(where: { $0.id == id })?.isPending == true && check() != nil
-                ? nil : "The turn isn't running any more"
+            guard let i = self.router.changes.firstIndex(where: { $0.id == id }), self.router.changes[i].isPending, check() != nil else {
+                return "The turn isn't running any more"
+            }
+            // Past this look the abort is written: Discard is no longer there, and the card says it is stopping.
+            self.router.changes[i].applying = "Stopping…"
+            return nil
         }
         let how: RouterDecision.Cancelled
         do {
             how = try await (deliveryCanceller ?? { try await self.cancelDelivery($0, gate: $1) })(found.delivery, gate)
         } catch {
-            return fail("Couldn't stop it: \(error.localizedDescription)")
+            let committed = router.changes.first(where: { $0.id == id })?.applying != nil
+            return fail(committed ? "The stop was sent, but wasn't confirmed: \(error.localizedDescription)"
+                                  : "Couldn't stop it: \(error.localizedDescription)")
         }
         updateDecision(found.entry.id) {
             guard $0.delivered?.nonce == nonce else { return }
@@ -189,6 +230,7 @@ extension Store {
         }
         guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
         router.changes[i].pending = nil
+        router.changes[i].applying = nil
         router.changes[i].revertNote = how.stopped ? nil : "Not stopped: \(how.words)"
         return router.changes[i]
     }

@@ -1305,6 +1305,13 @@ final class AppRootActions {
             case .group(let id): navigator.go(.categories); hub.openGroup(id)
             case .categories: navigator.go(.categories)
             case .router: navigator.go(.router)
+            case .session(let id):
+                navigator.go(.router)
+                if let card = store.router.cards.first(where: { $0.sessionID == id && $0.isOpen }) {
+                    routerModel.select(card.id, store: store)
+                } else {
+                    routerModel.reveal(RouterModel.workingID(id))
+                }
             case .settings(let section):
                 navigator.go(.settings)
                 hub.settingsScroll = ScrollRequest(id: section, seq: (hub.settingsScroll?.seq ?? 0) + 1)

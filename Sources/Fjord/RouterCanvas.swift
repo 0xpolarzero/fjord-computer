@@ -851,7 +851,10 @@ struct CanvasChips: View {
         let live = Set(page.needs.map(\.sessionID) + page.ready.map(\.sessionID) + page.notes.map(\.sessionID)
                        + page.waiting.map(\.sessionID) + page.working.map(\.id))
         let muted = Set(store.agents.mutedFolders)
-        let done = model.canvasDone(store).count { !live.contains($0.sessionID) && !muted.contains($0.folder ?? "") }
+        let done = model.canvasDone(store).count {
+            !live.contains($0.sessionID) && !muted.contains($0.folder ?? "")
+                && !muted.contains(store.routerProjectGroupKey(sessionID: $0.sessionID, folder: $0.folder ?? ""))
+        }
         let counts = CanvasGroup.allCases.map { ($0, $0.zone.map(page.count) ?? done) }.filter { $0.1 > 0 }
         let calm = page.count(.needs) == 0 && !model.searching
         if !counts.isEmpty || calm {

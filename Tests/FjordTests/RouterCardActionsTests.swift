@@ -239,7 +239,7 @@ struct RouterCardActionsTests {
         let r = await t.call("stop_session", ["session": "ci"])
         #expect(r?.isError == false && r?.text.contains("nothing yet") == true && cancelled.isEmpty)
         let change = try #require(waiting(store).first)
-        #expect(change.title == "Stop the turn of “Fix CI”" && change.pending?.contains("can't be undone") == true)
+        #expect(change.title.hasPrefix("Stop “Fix CI” (lookout, this Mac, since ") && change.pending?.contains("can't be undone") == true)
         #expect(store.router.decisions.first { $0.id == id }?.delivered?.cancelled == nil)
         #expect(await store.applyStopChange(change.id)?.pending == nil)
         #expect(cancelled == ["n1"])
@@ -256,7 +256,7 @@ struct RouterCardActionsTests {
         _ = delivery(store, session: "a", nonce: "running", turns: 1, busy: false)
         _ = await t.call("stop_session", ["session": "ci"])
         let change = try #require(waiting(store).first)
-        guard case .cardAction(.stop(_, _, _, let nonce)) = change.patch else { Issue.record("not a stop"); return }
+        guard case .cardAction(.stop(_, _, _, _, _, _, let nonce)) = change.patch else { Issue.record("not a stop"); return }
         #expect(nonce == "running")
         // Only a queued one: nothing is running that Fjord started.
         let (other, t2) = world("stop the CI session", sessions: [session("a", "Fix CI", running: true)])
@@ -320,4 +320,81 @@ struct RouterCardActionsTests {
             #expect(RouterRun.role(.changeFjord, triage: false).contains("`\(tool)`"))
         }
     }
+    @Test func aMutedGuestProjectIsMutedForEveryReader() async throws {
+        let projectID = UUID()
+        let location = SessionLocation.computer(deviceId: "owner", computerId: "c1")
+        let guest = session("g", "Guest work", folder: "/mirror/host/proj")
+        let local = session("l", "Local work", folder: "/code/other")
+        let (store, _) = world("mute", sessions: [guest, local])
+        store.router.runsOnProjects = [RunsOnProject(id: projectID, name: "Proj", sourceFolder: "/code/proj",
+                                                     placement: .computer(deviceId: "owner", computerId: "c1", guestPath: "/workspace/proj"))]
+        store.router.pendingDesktopStarts = [PendingDesktopStart(projectID: projectID, location: location, alias: "vm", folder: "/workspace/proj",
+                                                                  prompt: "Start", state: .matched, desktopSessionID: "g", guestSessionID: "cli-g")]
+        let key = store.routerProjectGroupKey(sessionID: "g", folder: "/mirror/host/proj")
+        store.setFolderMuted(key, true)
+        // The session-side readers (sessions list, notifications, the feed) compare the session's folder.
+        let folders = store.mutedSessionFolders(store.agents.mutedFolders, among: Array(store.claudeSessions.values))
+        #expect(folders.contains("/mirror/host/proj") && !folders.contains("/code/other"))
+        // A local project's key is its folder, so its mute reads as it always did.
+        store.setFolderMuted("/code/other", true)
+        #expect(store.mutedSessionFolders(store.agents.mutedFolders, among: Array(store.claudeSessions.values)).contains("/code/other"))
+        // The canvas and the Brief group by the Router's key: the guest frame is gone.
+        var page = RouterPage()
+        page.needs = [card("g#1", kind: .asks, title: "Guest work", folder: "/mirror/host/proj")]
+        let frames = RouterCanvasModel.make(page: page, done: [], muted: Set(store.agents.mutedFolders), name: { $0 }, color: { _ in nil },
+                                            projectKey: store.routerProjectGroupKey, projectSource: store.routerProjectGroupSource)
+        #expect(frames.isEmpty)
+    }
+
+    // MARK: stop identity and state
+
+    @Test func twoSessionsOfOneTitleGetDistinguishableStopProposals() async throws {
+        let (store, t) = world("stop run tests in lookout", sessions: [session("a", "Run tests", folder: "/code/lookout", running: true),
+                                                                        session("b", "Run tests", folder: "/code/silo", running: true)])
+        _ = delivery(store, session: "a")
+        _ = delivery(store, session: "b", nonce: "n2")
+        _ = await t.call("stop_session", ["session": "a"])
+        t.beginTurn("stop run tests in silo")
+        _ = await t.call("stop_session", ["session": "b"])
+        let titles = waiting(store).map(\.title)
+        #expect(titles.count == 2 && Set(titles).count == 2)
+        #expect(titles.contains { $0.contains("lookout, this Mac") } && titles.contains { $0.contains("silo, this Mac") })
+        // Open goes to that exact session.
+        let targets = waiting(store).map { $0.target(in: store) }
+        #expect(targets.contains(.session("a")) && targets.contains(.session("b")))
+    }
+
+    @Test func onceTheAbortIsWrittenDiscardIsGoneAndTheAcknowledgementSettlesIt() async throws {
+        let (store, t) = world("stop the CI session", sessions: [session("a", "Fix CI", running: true)])
+        let id = delivery(store, session: "a")
+        _ = await t.call("stop_session", ["session": "ci"])
+        let change = try #require(waiting(store).first)
+        var discardDuring: FjordChange?? = .none
+        store.deliveryCanceller = { _, gate in
+            #expect(gate() == nil)
+            // The abort is committed: the card says it is stopping, and Discard does nothing.
+            discardDuring = .some(store.discardFjordChange(change.id))
+            #expect(store.router.changes.first { $0.id == change.id }?.applying == "Stopping…")
+            return .aborted
+        }
+        let after = await store.applyStopChange(change.id)
+        #expect(discardDuring == .some(nil))
+        #expect(after?.pending == nil && after?.applying == nil && after?.isDiscarded == false && after?.failureNote == nil)
+        #expect(store.router.decisions.first { $0.id == id }?.delivered?.cancelled == .aborted)
+    }
+
+    @Test func aStopWhoseAcknowledgementFailsAfterTheWriteSettlesAndSaysSo() async throws {
+        let (store, t) = world("stop the CI session", sessions: [session("a", "Fix CI", running: true)])
+        _ = delivery(store, session: "a")
+        _ = await t.call("stop_session", ["session": "ci"])
+        let change = try #require(waiting(store).first)
+        store.deliveryCanceller = { _, gate in
+            #expect(gate() == nil)
+            throw RouterTools.Failure("no answer")
+        }
+        let after = await store.applyStopChange(change.id)
+        #expect(after?.isPending == false && after?.applying == nil && after?.failureNote?.contains("sent") == true)
+        #expect(store.discardFjordChange(change.id) == nil)
+    }
+
 }

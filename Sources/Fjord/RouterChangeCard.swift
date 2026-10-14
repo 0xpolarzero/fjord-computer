@@ -41,8 +41,15 @@ struct ChangeCard: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(reverted ? "\(change.title). \(change.revertNote ?? "Reverted")"
-                            : (change.pending.map { "\(change.title). Not applied yet: \($0)" } ?? change.title)
+                            : (change.pending.map { "\(change.title). \(change.applying ?? notApplied($0))" } ?? change.title)
                 + (change.failureNote.map { ". \($0)" } ?? ""))
+    }
+
+    /// The note under a waiting change. A card action has no reason beyond its own words: "Not applied yet." and, for a stop,
+    /// that it can't be undone.
+    private func notApplied(_ why: String) -> String {
+        if case .cardAction = change.patch { return why.isEmpty ? "Not applied yet." : "Not applied yet. \(why)." }
+        return "Not applied yet: \(why)."
     }
 
     // MARK: Header
@@ -61,15 +68,21 @@ struct ChangeCard: View {
             } else if change.touchesTriage, !store.triageOn {
                 // Triage is off: what was changed in it is only told, nothing of it is opened or changed back.
                 EmptyView()
+            } else if let applying = change.applying, change.isPending {
+                Text(applying).cdsText(CDS.Transcript.text, .regular, CDS.Text.secondary)
             } else if change.isPending {
                 failure
                 ClaudeButton("Discard", variant: .ghost, size: .sm) { store.discardFjordChange(change.id) }
-                ClaudeButton("Apply", variant: .primary, size: .sm) { store.applyFjordChange(change.id) }
+                if case .cardAction(.stop) = change.patch {
+                    ClaudeButton("Stop turn", variant: .danger, size: .sm) { store.applyFjordChange(change.id) }
+                } else {
+                    ClaudeButton("Apply", variant: .primary, size: .sm) { store.applyFjordChange(change.id) }
+                }
             } else {
                 failure
                 ClaudeButton("Open", variant: .ghost, size: .sm) { openChange(change) }
                 if case .cardAction(let action) = change.patch, !action.isRevertible {
-                    Text("Can't be undone").cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
+                    Text("Can't be undone").cdsText(CDS.Transcript.text, .regular, CDS.Text.secondary)
                 } else {
                     ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertFjordChange(change.id) }
                 }
@@ -94,7 +107,7 @@ struct ChangeCard: View {
         if let why = change.pending, change.isPending {
             VStack(alignment: .leading, spacing: CDS.Density.compact.gap.sm) {
                 HStack(alignment: .firstTextBaseline, spacing: CDS.Density.compact.gap.sm) {
-                    Text("Not applied yet: \(why).")
+                    Text(notApplied(why))
                         .cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.secondary)
                     Spacer(minLength: 0)
                     ClaudeButton(expanded ? "Hide details" : "Details", variant: .ghost, size: .sm) { expanded.toggle() }

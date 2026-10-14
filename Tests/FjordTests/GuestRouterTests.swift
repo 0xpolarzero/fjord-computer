@@ -1279,6 +1279,29 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(await guest.writeRecords().filter { $0.path == messagePath }.count == 1)
     }
 
+    @Test func guestRelayGateIsAskedAgainRightBeforeTheWrite() async throws {
+        final class Asks: @unchecked Sendable { var count = 0 }
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let cli = "cli-gate"
+        let nonce = UUID(uuidString: "01234567-89ab-cdef-0123-456789abcdef")!
+        let folder = GuestRouterPaths.join(paths.inbox, cli)
+        let messagePath = GuestRouterPaths.join(folder, "\(nonce.uuidString.lowercased()).msg")
+        let signed = RelaySigner.sign(body: "stop", target: cli, key: String(repeating: "34", count: 32), nonce: nonce,
+                                      now: Date(timeIntervalSince1970: 1_800_000_000))
+        let asks = Asks()
+        // Open at the first look, closed by the time the reads are done (Discard, or the Router turned off meanwhile).
+        let gate: @MainActor @Sendable () -> String? = { asks.count += 1; return asks.count >= 2 ? "Discarded" : nil }
+        do {
+            _ = try await GuestRelayInbox(client: guest, timeout: nil).deliver(signed, to: cli, computer: computer, gate: gate)
+            Issue.record("a delivery whose gate closed before the write was sent")
+        } catch {
+            #expect(error as? GuestRelayInbox.Failure == .refused("Discarded"))
+        }
+        #expect(await guest.filesSnapshot(for: computer)[messagePath] == nil)
+        #expect(await guest.writeRecords().filter { $0.path == messagePath }.isEmpty)
+    }
+
     @MainActor @Test func dispatcherGuestRetryCompletesTheOriginalDecisionWithoutASecondWrite() async throws {
         defer { GuestRouterRuntime.shared.stopAll() }
         let store = Store(engineClient: MockEngineClient())
