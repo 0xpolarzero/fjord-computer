@@ -72,6 +72,10 @@ enum DigestMarkup {
     var hovered: String?
     /// "paragraph#session" opened under its paragraph.
     var open: String?
+    /// With the margin: the session whose highlight or card is under the pointer (both light up).
+    var hoverSession: String?
+    /// Where each highlight ("paragraph#session") sits down the page, which its card in the margin lines up with.
+    var anchors: [String: CGFloat] = [:]
 }
 
 // MARK: - Page
@@ -81,19 +85,49 @@ struct DigestPage: View {
     let model: RouterModel
 
     static let column: CGFloat = 720
+    /// With the margin: the text's width, the gap, and the cards' column.
+    static let text: CGFloat = 600
+    static let gap: CGFloat = 32
+    static let marginWidth: CGFloat = 500
+    static let space = "digest"
 
     var body: some View {
         let page = model.zones(store)
         let folders = model.canvasFolders(store, page: page)
         let items = Self.items(folders)
-        Scrolling {
-            if let digest = store.routerDigest {
+        GeometryReader { geometry in
+            // The cards in a margin beside the text, as a document's comments, when there's room; else each opens under
+            // its paragraph.
+            let margin = geometry.size.width >= Self.text + Self.gap + Self.marginWidth + 64
+            Scrolling {
+                if let digest = store.routerDigest {
+                    HStack(alignment: .top, spacing: Self.gap) {
+                        text(digest, folders: folders, items: items, page: page, margin: margin)
+                            .frame(width: margin ? Self.text : nil)
+                            .frame(maxWidth: margin ? Self.text : Self.column, alignment: .leading)
+                        if margin {
+                            DigestMargin(store: store, model: model, page: page, items: items, digest: digest)
+                                .frame(width: Self.marginWidth, alignment: .topLeading)
+                        }
+                    }
+                    .coordinateSpace(.named(Self.space))
+                    .padding(.horizontal, 32)
+                    .padding(.top, 20)
+                    .padding(.bottom, LaneMetrics.bottom)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    private func text(_ digest: RouterDigest, folders: [CanvasFolder], items: [String: CanvasItem], page: RouterPage,
+                      margin: Bool) -> some View {
                 VStack(alignment: .leading, spacing: 28) {
-                    lead(digest, items: items, page: page)
+                    lead(digest, items: items, page: page, margin: margin)
                     ForEach(digest.projects) { project in
                         let folder = folders.first { $0.key == project.folder }
                         DigestParagraph(store: store, model: model, page: page, items: items, key: project.folder,
-                                        markup: project.text) {
+                                        markup: project.text, margin: margin) {
                             HStack(spacing: 7) {
                                 Circle().fill(folder?.color ?? CDS.Text.muted).frame(width: 8, height: 8)
                                 Text(folder?.name ?? (project.folder as NSString).lastPathComponent)
@@ -103,17 +137,10 @@ struct DigestPage: View {
                         .zIndex(model.digest.hovered?.hasPrefix(project.folder + "#") == true ? 1 : 0)
                     }
                 }
-                .frame(maxWidth: Self.column, alignment: .leading)
-                .padding(.horizontal, 32)
-                .padding(.top, 20)
-                .padding(.bottom, LaneMetrics.bottom)
-                .frame(maxWidth: .infinity)
-            }
-        }
     }
 
     /// The lead: what's for you, then what's worth a look, each under its name in its colour.
-    private func lead(_ digest: RouterDigest, items: [String: CanvasItem], page: RouterPage) -> some View {
+    private func lead(_ digest: RouterDigest, items: [String: CanvasItem], page: RouterPage, margin: Bool) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("Brief").font(CDS.sans(20, .semibold)).foregroundStyle(CDS.Text.primary)
@@ -121,14 +148,14 @@ struct DigestPage: View {
                 Text("updated " + agoPhrase(digest.at)).font(CDS.sans(12)).foregroundStyle(CDS.Text.muted)
             }
             DigestParagraph(store: store, model: model, page: page, items: items, key: "lead-you", markup: digest.forYou,
-                            size: 16) {
+                            size: 16, margin: margin) {
                 Label("For you", systemImage: RouterZone.needs.symbol)
                     .font(CDS.sans(12, .semibold)).foregroundStyle(RouterZone.needs.tint)
             }
             .zIndex(model.digest.hovered?.hasPrefix("lead-you#") == true ? 2 : 1)
             if !digest.worthALook.isEmpty {
                 DigestParagraph(store: store, model: model, page: page, items: items, key: "lead-look",
-                                markup: digest.worthALook, size: 16) {
+                                markup: digest.worthALook, size: 16, margin: margin) {
                     Label("Worth a look", systemImage: RouterZone.notes.symbol)
                         .font(CDS.sans(12, .semibold)).foregroundStyle(CDS.Text.accent)
                 }
@@ -168,6 +195,8 @@ private struct DigestParagraph<Title: View>: View {
     let key: String
     let markup: String
     var size: CGFloat = 15
+    /// The cards are in the margin: none opens under the paragraph.
+    var margin = false
     @ViewBuilder let title: Title
 
     var body: some View {
@@ -183,13 +212,13 @@ private struct DigestParagraph<Title: View>: View {
                             .layoutValue(key: TightKey.self, value: tight)
                     case .span(let kind, let session, let text, let tight):
                         DigestSpan(store: store, model: model, page: page, item: items[session], kind: kind,
-                                   id: key + "#" + session, text: text, size: size)
+                                   id: key + "#" + session, session: session, text: text, size: size, margin: margin)
                             .layoutValue(key: TightKey.self, value: tight)
                             .zIndex(state.hovered == key + "#" + session ? 1 : 0)
                     }
                 }
             }
-            if let opened, let item = items[opened] {
+            if !margin, let opened, let item = items[opened] {
                 HStack(alignment: .top, spacing: 8) {
                     CanvasNode(item: item, store: store, model: model, page: page)
                         .frame(maxWidth: 560, alignment: .leading)
@@ -237,8 +266,10 @@ private struct DigestParagraph<Title: View>: View {
     }
 }
 
-/// A highlight: its words in its colour on a soft ground. Hovered, its card floats under it; clicked, it opens under the
-/// paragraph and the composer answers it.
+
+/// A highlight: its words in its colour on a soft ground. With the margin, its card is beside it: hovering either lights
+/// both, clicking opens the card there. Without, its card floats under it while hovered and opens under the paragraph.
+/// Clicked, the composer answers it.
 private struct DigestSpan: View {
     let store: Store
     let model: RouterModel
@@ -246,23 +277,24 @@ private struct DigestSpan: View {
     let item: CanvasItem?
     let kind: DigestMarkup.Kind
     let id: String
+    let session: String
     let text: String
     let size: CGFloat
+    let margin: Bool
 
     var body: some View {
         let state = model.digest
-        let hovered = state.hovered == id
-        let open = state.open == id
+        let hovered = margin ? state.hoverSession == session : state.hovered == id
+        let open = margin ? item.flatMap(DigestMargin.cardID) == model.selection && model.selection != nil : state.open == id
         let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
         Button {
             withAnimation(Motion.spatial.resolved(reduce: false)) {
-                state.open = open ? nil : id
-                state.hovered = nil
-            }
-            if !open, let item {
-                switch item {
-                case .need(let c), .ready(let c), .note(let c): model.select(c.id, store: store, reveal: false)
-                default: break
+                if margin {
+                    DigestMargin.toggle(item, model: model, store: store)
+                } else {
+                    state.open = open ? nil : id
+                    state.hovered = nil
+                    if !open, let card = item.flatMap(DigestMargin.cardID) { model.select(card, store: store, reveal: false) }
                 }
             }
         } label: {
@@ -273,7 +305,7 @@ private struct DigestSpan: View {
                 .padding(.vertical, 1)
                 .background {
                     if kind != .run {
-                        shape.fill(kind.tint.opacity(hovered || open ? 0.26 : 0.13))
+                        shape.fill(kind.tint.opacity(hovered || open ? 0.28 : 0.13))
                     }
                 }
                 .overlay(alignment: .bottom) {
@@ -281,15 +313,24 @@ private struct DigestSpan: View {
                         Rectangle().fill(CDS.Text.muted.opacity(hovered ? 0.9 : 0.45)).frame(height: 1).offset(y: 1)
                     }
                 }
-                .overlay { if open { shape.strokeBorder(kind.tint.opacity(0.7), lineWidth: 1) } }
+                .overlay { if open { shape.strokeBorder(kind.tint.opacity(0.75), lineWidth: 1) } }
                 .contentShape(shape)
         }
         .buttonStyle(.plain)
         .onHover { inside in
-            if inside { state.hovered = id } else if state.hovered == id { state.hovered = nil }
+            if margin {
+                if inside { state.hoverSession = session } else if state.hoverSession == session { state.hoverSession = nil }
+            }
+            // The peek: always for a running session (it has no card in the margin), else only without the margin.
+            if !margin || kind == .run {
+                if inside { state.hovered = id } else if state.hovered == id { state.hovered = nil }
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(DigestPage.space)).minY } action: { y in
+            if state.anchors[id] != y { state.anchors[id] = y }
         }
         .overlay(alignment: .topLeading) {
-            if hovered, !open, let item {
+            if state.hovered == id, !open, let item {
                 DigestPeek(item: item, page: page)
                     .frame(width: 400, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -300,6 +341,137 @@ private struct DigestSpan: View {
         }
         .accessibilityLabel(text)
         .accessibilityHint(item == nil ? "" : "Opens its card")
+    }
+}
+
+/// The cards the text points at, beside it as a document's comments: each at the height of its highlight in its project's
+/// paragraph (the lead's only when the project's has none), pushed down so none overlaps. The one opened sits exactly at its
+/// highlight, those before it moving up to make room, as comments do.
+private struct DigestMargin: View {
+    let store: Store
+    let model: RouterModel
+    let page: RouterPage
+    let items: [String: CanvasItem]
+    let digest: RouterDigest
+
+    var body: some View {
+        let state = model.digest
+        let entries = entries(state.anchors)
+        let active = entries.firstIndex { Self.cardID($0.item) == model.selection }
+        DigestMarginLayout(active: active, gap: 10) {
+            ForEach(entries, id: \.session) { entry in
+                let lit = state.hoverSession == entry.session
+                let isActive = Self.cardID(entry.item) == model.selection
+                CanvasNode(item: entry.item, store: store, model: model, page: page)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(lit && !isActive ? CDS.Text.accent.opacity(0.8) : .clear, lineWidth: 1.5)
+                            .allowsHitTesting(false)
+                    }
+                    .opacity(active == nil || isActive || lit ? 1 : 0.72)
+                    .offset(x: isActive ? -10 : 0)
+                    .onHover { inside in
+                        if inside { state.hoverSession = entry.session } else if state.hoverSession == entry.session { state.hoverSession = nil }
+                    }
+                    .layoutValue(key: MarginAnchor.self, value: entry.y)
+            }
+        }
+        .animation(Motion.spatial.resolved(reduce: false), value: model.selection)
+        .animation(Motion.spatial.resolved(reduce: false), value: model.expandedNeed)
+    }
+
+    private struct Entry {
+        let session: String
+        let item: CanvasItem
+        let y: CGFloat
+    }
+
+    /// The sessions with a card the text points at, top to bottom, each at its highlight.
+    private func entries(_ anchors: [String: CGFloat]) -> [Entry] {
+        var best: [String: (y: CGFloat, lead: Bool)] = [:]
+        let paragraphs = [("lead-you", digest.forYou), ("lead-look", digest.worthALook)] + digest.projects.map { ($0.folder, $0.text) }
+        for (key, text) in paragraphs {
+            let lead = key.hasPrefix("lead-")
+            for case .span(let kind, let session, _) in DigestMarkup.parse(text) where kind != .run {
+                guard let y = anchors[key + "#" + session] else { continue }
+                if let had = best[session], !had.lead || lead { continue }
+                best[session] = (y, lead)
+            }
+        }
+        return best.compactMap { session, at in
+            guard let item = items[session], Self.cardID(item) != nil else { return nil }
+            return Entry(session: session, item: item, y: at.y)
+        }
+        .sorted { $0.y < $1.y }
+    }
+
+    /// The open card an item is, if it has one the margin shows.
+    static func cardID(_ item: CanvasItem) -> String? {
+        switch item {
+        case .need(let c), .ready(let c), .note(let c): c.id
+        default: nil
+        }
+    }
+
+    /// A highlight or card clicked: its card opens (and the composer answers it), or, open already, folds.
+    static func toggle(_ item: CanvasItem?, model: RouterModel, store: Store) {
+        guard let item, let id = cardID(item) else { return }
+        if model.selection == id {
+            model.expandedNeed = nil
+            model.selection = nil
+            model.replyTo = nil
+        } else {
+            model.select(id, store: store, reveal: false)
+        }
+    }
+}
+
+private struct MarginAnchor: LayoutValueKey { static let defaultValue: CGFloat = 0 }
+
+/// The margin's cards, each at its anchor or as close under it as the cards above allow; the active one exactly at its
+/// anchor, the ones above it moved up as far as needed (never above the top).
+private struct DigestMarginLayout: Layout {
+    let active: Int?
+    let gap: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? DigestPage.marginWidth
+        let frames = frames(subviews, width: width)
+        return CGSize(width: width, height: frames.map { $0.maxY }.max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (i, frame) in frames(subviews, width: bounds.width).enumerated() {
+            subviews[i].place(at: CGPoint(x: bounds.minX, y: bounds.minY + frame.minY),
+                              proposal: ProposedViewSize(width: bounds.width, height: frame.height))
+        }
+    }
+
+    private func frames(_ subviews: Subviews, width: CGFloat) -> [CGRect] {
+        let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+        let anchors = subviews.map { $0[MarginAnchor.self] }
+        var ys = anchors
+        let pivot = active ?? 0
+        guard !ys.isEmpty else { return [] }
+        // From the pivot down: each under the one above.
+        for i in pivot..<ys.count where i > pivot {
+            ys[i] = max(anchors[i], ys[i - 1] + heights[i - 1] + gap)
+        }
+        // From the pivot up: each over the one below, at its anchor if it fits.
+        if pivot > 0 {
+            for i in stride(from: pivot - 1, through: 0, by: -1) {
+                ys[i] = min(anchors[i], ys[i + 1] - heights[i] - gap)
+            }
+        }
+        // Nothing above the top: push everything down from the first, as a last resort.
+        if let first = ys.first, first < 0 {
+            ys[0] = 0
+            for i in 1..<ys.count { ys[i] = max(ys[i], ys[i - 1] + heights[i - 1] + gap) }
+        }
+        if active == nil {
+            for i in 1..<max(1, ys.count) { ys[i] = max(anchors[i], ys[i - 1] + heights[i - 1] + gap) }
+        }
+        return zip(ys, heights).map { CGRect(x: 0, y: $0, width: width, height: $1) }
     }
 }
 

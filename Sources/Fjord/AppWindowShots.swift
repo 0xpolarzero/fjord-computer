@@ -347,7 +347,7 @@ enum AppWindowShots {
         Shot(name: "router-brief-hover", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340),
              compose: { model, store in
                  Demo.routerDigest(store); model.pickBrief()
-                 model.digest.hovered = "/Users/me/code/microsandbox#local_demo-api"
+                 model.digest.hoverSession = "local_demo-api"
              }, appearance: .aqua),
         Shot(name: "router-brief-open", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1700),
              compose: { model, store in
