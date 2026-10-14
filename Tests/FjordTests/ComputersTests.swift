@@ -35,7 +35,7 @@ import Testing
     @Test func platformOnlyComputerEventsMergeWithoutReplacingOtherPlatform() throws {
         let original = MockEngineClient.demoInventory
         let linuxJSON = Data("""
-        {"linux":{"computers":[]}}
+        {"linux":{"activities":[],"computers":[],"github":null,"repositoryPushOperations":[],"secrets":[]}}
         """.utf8)
         let linuxChange = try JSONDecoder().decode(ComputersChangedPayload.self, from: linuxJSON)
         let linuxMerged = original.applying(linuxChange)

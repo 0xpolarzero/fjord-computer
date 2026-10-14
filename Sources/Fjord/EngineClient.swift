@@ -1,175 +1,5 @@
 import Foundation
 
-enum ComputerKind: String, Codable, CaseIterable {
-    case linux
-    case macos
-
-    var title: String { rawValue == "macos" ? "macOS" : "Linux" }
-}
-
-enum LinuxComputerState: String, Codable {
-    case running, starting, stopped, failed
-}
-
-enum MacosComputerState: String, Codable {
-    case preparing, copying, downloading, installing
-    case settingUp = "setting-up"
-    case stopped, starting, running, stopping, failed
-}
-
-enum CheckpointScope: String, Codable { case full, disk }
-enum CheckpointReason: String, Codable { case manual, beforeRestore = "before-restore" }
-enum CheckpointKind: String, Codable { case manual, automatic }
-enum CheckpointOperationKind: String, Codable { case capture, restore, fork, delete }
-enum CheckpointOperationStatus: String, Codable { case running, failed }
-
-struct DesktopConfiguration: Codable, Equatable {
-    var startWithComputer: Bool
-    var builtIn: Bool? = nil
-}
-
-struct ComputerConfiguration: Codable, Equatable, Identifiable {
-    var id: String
-    var name: String
-    var cpus: Int
-    var maxCPUs: Int
-    var memoryGiB: Int
-    var maxMemoryGiB: Int
-    var workspaceStorageGiB: Int
-    var runtimeStorageGiB: Int
-    var desktop: DesktopConfiguration? = nil
-}
-
-struct ComputerConfigurationRequest: Codable, Equatable {
-    var schemaVersion: Int
-    var computers: [ComputerConfiguration]
-}
-
-struct ComputerCheckpoint: Codable, Equatable, Identifiable {
-    var id: String
-    var name: String
-    var createdAt: String
-    var scope: CheckpointScope
-    var reason: CheckpointReason
-    var kind: CheckpointKind
-    var sizeBytes: Int64? = nil
-}
-
-struct ComputerCheckpointOperation: Codable, Equatable {
-    var kind: CheckpointOperationKind
-    var status: CheckpointOperationStatus
-    var stage: String
-    var error: String? = nil
-}
-
-struct PendingCheckpointRestore: Codable, Equatable {
-    var checkpointId: String
-    var sourceComputer: String? = nil
-    var state: CheckpointScope
-}
-
-struct UnfinishedRestore: Codable, Equatable {
-    var checkpointId: String
-    var checkpointName: String? = nil
-    var phase: String
-}
-
-struct ComputerAttention: Codable, Equatable {
-    var level: String
-    var message: String
-}
-
-struct ApplicationComputer: Codable, Equatable, Identifiable {
-    var kind: ComputerKind
-    var configuration: ComputerConfiguration
-    var purpose: String
-    var state: LinuxComputerState
-    var stateDetail: String
-    var canDismissError: Bool
-    var lifecycleFailure: String? = nil
-    var lifecycleFailureDiagnostic: String? = nil
-    var attention: ComputerAttention? = nil
-    var freshness: String
-    var settling: Bool? = nil
-    var checkpoints: [ComputerCheckpoint]
-    var pendingCheckpointRestore: PendingCheckpointRestore? = nil
-    var checkpointOperation: ComputerCheckpointOperation? = nil
-    var unfinishedRestore: UnfinishedRestore? = nil
-
-    var id: String { configuration.id }
-    var name: String { configuration.name }
-}
-
-struct MacosTemplateSummary: Codable, Equatable {
-    var macosVersion: String
-    var build: String
-    var current: Bool
-}
-
-struct MacosPendingRestore: Codable, Equatable {
-    var checkpointId: String
-    var memory: Bool
-}
-
-struct MacosComputer: Codable, Equatable, Identifiable {
-    var kind: ComputerKind
-    var id: String
-    var name: String
-    var cpus: Int
-    var memoryGiB: Int
-    var diskGiB: Int
-    var osVersion: String? = nil
-    var state: MacosComputerState
-    var progress: Double? = nil
-    var detail: String? = nil
-    var displayOpen: Bool
-    var installed: Bool
-    var setupComplete: Bool
-    var needsPersonalizing: Bool
-    var checkpoints: [ComputerCheckpoint]
-    var checkpointOperation: ComputerCheckpointOperation? = nil
-    var pendingRestore: MacosPendingRestore? = nil
-}
-
-struct ApplicationSource: Codable, Equatable {
-    var computers: [ApplicationComputer]
-}
-
-struct MacosComputersState: Codable, Equatable {
-    var supported: Bool
-    var unsupportedReason: String? = nil
-    var computers: [MacosComputer]
-    var template: MacosTemplateSummary? = nil
-    var minDiskGiB: Int
-}
-
-struct ComputerInventory: Codable, Equatable {
-    var linux: ApplicationSource
-    var macos: MacosComputersState
-
-    var allComputers: [ComputerRow] {
-        (macos.computers.map(ComputerRow.macos) + linux.computers.map(ComputerRow.linux))
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
-    func computer(_ id: String) -> ComputerRow? { allComputers.first { $0.id == id } }
-
-    func applying(_ change: ComputersChangedPayload) -> ComputerInventory {
-        ComputerInventory(linux: change.linux ?? linux, macos: change.macos ?? macos)
-    }
-
-    var runningComputers: [RunningComputer] {
-        allComputers.filter { $0.displayState == .running }
-            .map { RunningComputer(computerId: $0.id, name: $0.name, kind: $0.kind) }
-    }
-}
-
-/// Payload for `computers.changed` (05 §4.2 D, 10 §12.2). Only changed platforms are present.
-struct ComputersChangedPayload: Codable, Equatable {
-    var linux: ApplicationSource? = nil
-    var macos: MacosComputersState? = nil
-}
-
 enum ComputerRow: Identifiable, Equatable {
     case linux(ApplicationComputer)
     case macos(MacosComputer)
@@ -217,7 +47,7 @@ enum ComputerRow: Identifiable, Equatable {
 
     var checkpoints: [ComputerCheckpoint] {
         switch self {
-        case .linux(let computer): computer.checkpoints
+        case .linux(let computer): computer.checkpoints ?? []
         case .macos(let computer): computer.checkpoints
         }
     }
@@ -277,116 +107,8 @@ enum ComputerStateMapping {
     }
 }
 
-struct ComputerReference: Codable, Equatable {
-    var computerId: String
-    var deviceId: String? = nil
-}
-
-struct MacosComputerCreateRequest: Codable, Equatable {
-    var name: String
-    var cpus: Int
-    var memoryGiB: Int
-    var diskGiB: Int
-}
-
-struct DeviceCapacity: Codable, Equatable {
-    var logicalCpus: Int
-    var physicalMemoryBytes: UInt64
-    var maxMemoryGib: Int
-}
-
-struct MacosHostLimits: Codable, Equatable {
-    var cpus: Int
-    var memory_gib: Int
-}
-
-enum RemoteLoginStatus: String, Codable, Equatable { case enabled, disabled, unknown }
-
-struct DeviceFacts: Codable, Equatable {
-    var deviceCapacity: DeviceCapacity?
-    var macosHostLimits: MacosHostLimits?
-    var remoteLogin: RemoteLoginStatus
-
-    static let demo = DeviceFacts(
-        deviceCapacity: DeviceCapacity(logicalCpus: 16, physicalMemoryBytes: 68_719_476_736, maxMemoryGib: 64),
-        macosHostLimits: MacosHostLimits(cpus: 16, memory_gib: 64), remoteLogin: .unknown)
-}
-
-struct ComputerCreateRequest: Codable, Equatable {
-    var kind: ComputerKind
-    var configuration: ComputerConfiguration? = nil
-    var request: MacosComputerCreateRequest? = nil
-    var requestId: String? = nil
-    var deviceId: String? = nil
-
-    static func linux(_ configuration: ComputerConfiguration, requestId: String? = nil, deviceId: String? = nil) -> Self {
-        Self(kind: .linux, configuration: configuration, request: nil, requestId: requestId, deviceId: deviceId)
-    }
-
-    static func macos(_ request: MacosComputerCreateRequest, deviceId: String? = nil) -> Self {
-        Self(kind: .macos, configuration: nil, request: request, requestId: nil, deviceId: deviceId)
-    }
-}
-
-struct ComputerJob: Codable, Equatable { var jobId: String }
-
-struct ComputerCreateResult: Codable, Equatable {
-    var jobId: String
-    var computer: MacosComputer? = nil
-}
-
-struct ComputerDeleteRequest: Codable, Equatable {
-    var computerId: String
-    var deviceId: String? = nil
-    var expected: ComputerConfiguration? = nil
-    var requestId: String? = nil
-}
-
-struct CheckpointCreateRequest: Codable, Equatable {
-    var computerId: String
-    var deviceId: String? = nil
-    var name: String
-    var kind: CheckpointKind? = nil
-}
-
-struct CheckpointRestoreRequest: Codable, Equatable {
-    var computerId: String
-    var deviceId: String? = nil
-    var checkpointId: String
-}
-
-struct CheckpointForkRequest: Codable, Equatable {
-    var computerId: String
-    var deviceId: String? = nil
-    var checkpointId: String? = nil
-    var newName: String
-}
-
-struct CheckpointDeleteRequest: Codable, Equatable {
-    var computerId: String
-    var deviceId: String? = nil
-    var checkpointId: String
-}
-
-struct CheckpointUsageEntry: Codable, Equatable {
-    var id: String
-    var sizeBytes: Int64? = nil
-    var usedBy: [String]? = nil
-    var deleteBlocker: String? = nil
-}
-
-struct CheckpointUsage: Codable, Equatable {
-    var totalBytes: Int64?
-    var checkpoints: [CheckpointUsageEntry]
-}
-
-/// Full checkpoint-domain state carried by `checkpoints.changed` (05 catalogue, 20 §4.3).
-struct CheckpointsChangedPayload: Codable, Equatable {
-    var linux: ApplicationSource? = nil
-    var macos: MacosComputersState? = nil
-    var usage: [String: CheckpointUsage]? = nil
-}
-
+/// App presentation projections. The socket path decodes `SiloWireJobProgress` first,
+/// then maps it here; the tolerant Codable form also preserves the existing fixture test.
 enum JobProgressSource: String, Codable, Equatable { case setup, lifecycle, transfer, backup, push, macos, update }
 
 struct SetupJobProgressData: Codable, Equatable {
@@ -591,43 +313,12 @@ struct OperationJobProgress: Codable, Equatable {
     }
 }
 
-enum JSONValue: Codable, Equatable {
-    case string(String)
-    case number(Double)
-    case bool(Bool)
-    case object([String: JSONValue])
-    case array([JSONValue])
-    case null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() { self = .null }
-        else if let value = try? container.decode(Bool.self) { self = .bool(value) }
-        else if let value = try? container.decode(Double.self) { self = .number(value) }
-        else if let value = try? container.decode(String.self) { self = .string(value) }
-        else if let value = try? container.decode([String: JSONValue].self) { self = .object(value) }
-        else { self = .array(try container.decode([JSONValue].self)) }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .string(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
-        case .bool(let value): try container.encode(value)
-        case .object(let value): try container.encode(value)
-        case .array(let value): try container.encode(value)
-        case .null: try container.encodeNil()
-        }
-    }
-}
-
-struct OperationJobError: Codable, Equatable {
+struct OperationJobError: Codable, Equatable, Sendable {
     var code: String
     var message: String
 }
 
-struct OperationJobFinished: Codable, Equatable {
+struct OperationJobFinished: Codable, Equatable, Sendable {
     var jobId: String
     var result: JSONValue? = nil
     var error: OperationJobError? = nil
@@ -654,14 +345,12 @@ struct OperationsList: Codable, Equatable {
     static let empty = OperationsList(running: [], waiting: [], unacknowledgedJobIds: [])
 }
 
-enum OperationJobState: String, Codable { case waiting, running, finished }
-
-struct OperationJobOutcome: Codable, Equatable {
+struct OperationJobOutcome: Codable, Equatable, Sendable {
     var result: JSONValue? = nil
     var error: OperationJobError? = nil
 }
 
-struct OperationJobSnapshot: Codable, Equatable {
+struct OperationJobSnapshot: Codable, Equatable, Sendable {
     var jobId: String
     var state: OperationJobState
     var outcome: OperationJobOutcome? = nil
@@ -956,7 +645,7 @@ final class MockEngineClient: EngineClient {
             }
             let maxCpus = max(limits.cpus, 2)
             let maxMemory = max(limits.memory_gib - 4, 4)
-            let minDisk = max(32, inventory.macos.minDiskGiB)
+            let minDisk = max(32, Int(clamping: inventory.macos.minDiskGiB))
             guard (2...maxCpus).contains(values.cpus) else {
                 throw EngineClientError.invalidAction("CPUs must be between 2 and \(maxCpus) on this Mac.")
             }
@@ -969,7 +658,7 @@ final class MockEngineClient: EngineClient {
             createRequests.append(request)
             let jobId = nextJobId()
             let computer = MacosComputer(kind: .macos, id: UUID().uuidString.lowercased(), name: values.name,
-                                         cpus: values.cpus, memoryGiB: values.memoryGiB, diskGiB: values.diskGiB,
+                                         cpus: UInt64(values.cpus), memoryGiB: UInt64(values.memoryGiB), diskGiB: UInt64(values.diskGiB),
                                          osVersion: inventory.macos.template.map { "macOS \($0.macosVersion) (\($0.build))" },
                                          state: .preparing, progress: 0.05, detail: "Preparing", displayOpen: false,
                                          installed: false, setupComplete: false, needsPersonalizing: false,
@@ -1416,7 +1105,7 @@ final class MockEngineClient: EngineClient {
         guard let row = inventory.computer(computerId) else { return }
         let checkpoints = row.checkpoints
         let sizes = checkpoints.map(\.sizeBytes)
-        let total = sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(Int64(0), +) : nil
+        let total = sizes.allSatisfy { $0 != nil } ? sizes.compactMap { $0 }.reduce(UInt64(0), +) : nil
         let usage = CheckpointUsage(totalBytes: total, checkpoints: checkpoints.map {
             CheckpointUsageEntry(id: $0.id, sizeBytes: $0.sizeBytes)
         })
@@ -1466,7 +1155,11 @@ final class MockEngineClient: EngineClient {
 
     private func appendCheckpoint(_ checkpoint: ComputerCheckpoint, to id: String) {
         switch try? requireComputer(id) {
-        case .linux?: updateLinux(id) { $0.checkpoints.insert(checkpoint, at: 0) }
+        case .linux?: updateLinux(id) {
+            var checkpoints = $0.checkpoints ?? []
+            checkpoints.insert(checkpoint, at: 0)
+            $0.checkpoints = checkpoints
+        }
         case .macos?: updateMacos(id) { $0.checkpoints.insert(checkpoint, at: 0) }
         case nil: break
         }
@@ -1474,7 +1167,7 @@ final class MockEngineClient: EngineClient {
 
     private func removeCheckpoint(_ checkpointId: String, from id: String) {
         switch try? requireComputer(id) {
-        case .linux?: updateLinux(id) { $0.checkpoints.removeAll { $0.id == checkpointId } }
+        case .linux?: updateLinux(id) { $0.checkpoints?.removeAll { $0.id == checkpointId } }
         case .macos?: updateMacos(id) { $0.checkpoints.removeAll { $0.id == checkpointId } }
         case nil: break
         }

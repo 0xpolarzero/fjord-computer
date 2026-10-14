@@ -296,7 +296,7 @@ final class ComputersModel {
             let current = try await inventoryForCreation()
             let cpuLimit = max(limits.cpus, 2)
             let memoryLimit = max(limits.memory_gib - 4, 4)
-            let minimumDisk = max(32, current.macos.minDiskGiB)
+            let minimumDisk = max(32, Int(clamping: current.macos.minDiskGiB))
             guard minimumDisk <= 1024 else {
                 throw EngineClientError.invalidAction("The macOS template requires more disk space than this computer can create.")
             }
