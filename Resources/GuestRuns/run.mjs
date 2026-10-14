@@ -6,7 +6,7 @@ import path from "node:path";
 const [configPath] = process.argv.slice(2);
 if (!configPath || !path.isAbsolute(configPath)) fail("The guest run configuration path is invalid.");
 const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-if (!/^([a-f0-9]{8}-){4}[a-f0-9]{12}$/.test(config.runID)) fail("The run id is invalid.");
+if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(config.runID)) fail("The run id is invalid.");
 if (!path.isAbsolute(config.home) || !path.isAbsolute(config.cwd) || !path.isAbsolute(config.videoPath) || !path.isAbsolute(config.manifestPath)) {
   fail("The guest run paths must be absolute.");
 }
