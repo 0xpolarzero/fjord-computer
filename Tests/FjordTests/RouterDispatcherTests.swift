@@ -27,8 +27,6 @@ import Testing
         var settingsSigned = true
         var answered: [(card: String, answers: [String: String])] = []
         var planned: [(card: String, decision: PendingForm.PlanDecision)] = []
-        /// What a compound run leaves for sessions.
-        var leftover: [String] = []
         var runs: [(intent: RouterRun.Intent, input: String)] = []
         var answer = RouterRun.Answer(reply: "Done.", done: "set it")
         var whileRunning: ((RouterTools) async -> Void)?
@@ -99,8 +97,7 @@ import Testing
                 answerPlan: { [unowned self] _, card, decision in
                     planned.append((card, decision))
                     return "decided"
-                },
-                leftovers: { [unowned self] _ in leftover })
+                })
         }
 
         func release(_ session: String) {
@@ -1953,7 +1950,7 @@ import Testing
     @Test func theSessionHalfOfACompoundMessageIsRoutedAsAMessageOfItsOwn() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
-        f.leftover = ["tell CI to rerun the flaky job"]
+        f.answer.leftover = ["tell CI to rerun the flaky job"]
         let id = d.submit("update the category and tell CI to rerun the flaky job")
         await finish(d, f, id)
         await waitUntil { s.router.decisions.contains { $0.splitFrom == id } }
@@ -1963,10 +1960,33 @@ import Testing
         #expect(f.ranks == 2, "the half is classified like any message")
     }
 
+    @Test func aParsedCompoundAnswerReachesTheDispatcher() async throws {
+        let (s, d, f) = setup()
+        let out = OneShot.Output(stdout: try JSONSerialization.data(withJSONObject: ["is_error": false, "result": "{}",
+            "structured_output": ["reply": "Done.", "done": "x", "leftover": ["tell the CI session to rerun", "  "]]]), stderr: Data(), status: 0)
+        f.answer = try RouterRun.parse(out)
+        f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
+        let id = d.submit("update the category and tell CI to rerun")
+        await finish(d, f, id)
+        await waitUntil { s.router.decisions.contains { $0.splitFrom == id } }
+        #expect(s.router.decisions.filter { $0.splitFrom == id }.map(\.trigger) == [.you("tell the CI session to rerun")])
+    }
+
+    @Test func aLeftoverFromAQuestionOrChangeRunIsIgnored() async {
+        for target in ["question", "change_fjord"] {
+            let (s, d, f) = setup()
+            f.ranked = [.init(target: target, p: 0.9), .init(target: "unclear", p: 0.1)]
+            f.answer.leftover = ["tell CI to rerun"]
+            let id = d.submit("something")
+            await finish(d, f, id)
+            #expect(!s.router.decisions.contains { $0.splitFrom == id })
+        }
+    }
+
     @Test func aSplitHalfDoesNotSplitAgain() async {
         let (s, d, f) = setup()
         f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
-        f.leftover = ["and also this"]
+        f.answer.leftover = ["and also this"]
         let id = d.submit("do two things")
         await finish(d, f, id)
         await waitUntil { s.router.decisions.contains { $0.splitFrom == id } }
@@ -2089,7 +2109,7 @@ import Testing
         #expect((schema?["required"] as? [String])?.sorted() == ["done", "reply"])
         #expect(value(after: "--append-system-prompt") == RouterRun.role(.changeFjord))
         #expect(RouterRun.role(.question).contains("You change nothing"))
-        #expect(RouterRun.role(.compound).contains("which part you left"))
+        #expect(RouterRun.role(.compound).contains("return in `leftover`"))
     }
 
     @Test func theTypedResultIsReadFromStructuredOutputOrFromJsonText() throws {
@@ -2102,6 +2122,9 @@ import Testing
         #expect(text == RouterRun.Answer(reply: "ok", done: "x"))
         let plain = try RouterRun.parse(output(["is_error": false, "result": "All good"]))
         #expect(plain == RouterRun.Answer(reply: "All good", done: ""))
+        let halves = try RouterRun.parse(output(["is_error": false, "result": "{}", "structured_output": ["reply": "Done.", "done": "x", "leftover": ["tell CI to rerun"]]]))
+        #expect(halves.leftover == ["tell CI to rerun"] && typed.leftover.isEmpty && text.leftover.isEmpty)
+        #expect(RouterRun.schema.contains("\"leftover\"") && RouterRun.schema.contains("\"required\":[\"reply\",\"done\"]"))
         #expect(throws: (any Error).self) { try RouterRun.parse(output(["is_error": true, "result": "overloaded"])) }
         #expect(throws: (any Error).self) { try RouterRun.parse(OneShot.Output(stdout: Data("nope".utf8), stderr: Data("boom\n".utf8), status: 1)) }
     }

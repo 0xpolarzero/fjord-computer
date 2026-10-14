@@ -108,6 +108,8 @@ enum RouterRun {
     struct Answer: Equatable {
         var reply: String
         var done: String
+        /// The parts of a compound message meant for sessions, each as a message of its own; only a compound run returns any.
+        var leftover: [String] = []
     }
 
     static let model = "claude-haiku-5-5"
@@ -172,13 +174,12 @@ enum RouterRun {
             return common + """
 
 
-            The message asks for more than one thing. Do only what concerns Fjord itself (\(triage ? "Triage's categories, groups and inbox, the settings and marking cards seen" : "the settings and marking cards seen")), as asked, with your tools. Anything meant for a Claude Code session you can't do: say in `reply` which \
-            part you left, so the user can send it on its own.
+            The message asks for more than one thing. Do only what concerns Fjord itself (\(triage ? "Triage's categories, groups and inbox, the settings and marking cards seen" : "the settings and marking cards seen")), as asked, with your tools. Anything meant for a session, return in `leftover` as standalone messages written as the user would write them to that session (name the session); don't mention them in `reply`.
             """
         }
     }
 
-    static let schema = #"{"type":"object","properties":{"reply":{"type":"string"},"done":{"type":"string"}},"required":["reply","done"],"additionalProperties":false}"#
+    static let schema = #"{"type":"object","properties":{"reply":{"type":"string"},"done":{"type":"string"},"leftover":{"type":"array","items":{"type":"string"}}},"required":["reply","done"],"additionalProperties":false}"#
 
     /// `claude`'s arguments: Haiku, no built-in tools, only the run's own server, a typed result, nothing kept.
     @MainActor static func arguments(_ intent: Intent, config: String, triage: Bool = true) -> [String] {
@@ -199,13 +200,13 @@ enum RouterRun {
             throw RouterTools.Failure(errors ?? (obj["result"] as? String) ?? "The run failed")
         }
         if let typed = obj["structured_output"] as? [String: Any], let reply = typed["reply"] as? String {
-            return Answer(reply: reply, done: typed["done"] as? String ?? "")
+            return Answer(reply: reply, done: typed["done"] as? String ?? "", leftover: typed["leftover"] as? [String] ?? [])
         }
         if var text = (obj["result"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
             if let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end,
                let typed = (try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8))) as? [String: Any],
                let reply = typed["reply"] as? String {
-                return Answer(reply: reply, done: typed["done"] as? String ?? "")
+                return Answer(reply: reply, done: typed["done"] as? String ?? "", leftover: typed["leftover"] as? [String] ?? [])
             }
             text = String(text.prefix(2000))
             return Answer(reply: text, done: "")

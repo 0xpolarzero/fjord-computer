@@ -210,7 +210,7 @@ struct RouterAskBack: Identifiable, Equatable {
         var answerPlan: @MainActor (RouterTools, _ card: String, PendingForm.PlanDecision) async throws -> String = { _, _, _ in
             throw RouterTools.Failure("The Router isn't ready")
         }
-        /// The parts of a compound message a run left for sessions (`RouterRun.Answer.leftover`, when it has it).
+        /// The parts of a compound message a run left for sessions (`RouterRun.Answer.leftover`).
         var leftovers: (RouterRun.Answer) -> [String] = { $0.sessionHalves }
     }
 

@@ -90,9 +90,8 @@ extension RouterDispatcher {
 }
 
 extension RouterRun.Answer {
-    /// What the run left for sessions, when it says so in a `leftover` list (the compound run's typed result); none else.
-    /// Read by name so the run's result type can grow the field without this changing.
+    /// What the run left for sessions (the compound run's `leftover`), trimmed, without the empty ones.
     var sessionHalves: [String] {
-        Mirror(reflecting: self).children.first { $0.label == "leftover" }?.value as? [String] ?? []
+        leftover.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 }
