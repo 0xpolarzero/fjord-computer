@@ -269,7 +269,7 @@ extension ComputersModel {
     }
 
     func loadSetupActivity() async {
-        do { setupActivity = try await client.invoke(SiloGeneratedMethods.activitySetupRead(SiloWireEmptyParams())) }
+        do { setupActivity = try await client.invoke(SiloGeneratedMethods.activitySetupRead(SiloWireDeviceParams())) }
         catch { actionError = error.localizedDescription }
     }
 

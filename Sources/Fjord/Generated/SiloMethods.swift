@@ -24,7 +24,7 @@ struct SiloGeneratedMethodCall<Params: Encodable & Sendable, Result: Decodable &
 
 enum SiloGeneratedMethods {
     static let all: [SiloGeneratedMethodDescriptor] = [
-        SiloGeneratedMethodDescriptor(name: "activity.setup.read", kind: .query, paramsType: "common::EmptyParams", resultType: "Vec<computers::ComputerConfigurationProgress>"),
+        SiloGeneratedMethodDescriptor(name: "activity.setup.read", kind: .query, paramsType: "common::DeviceParams", resultType: "Vec<computers::ComputerConfigurationProgress>"),
         SiloGeneratedMethodDescriptor(name: "checkpoints.abandonRestore", kind: .job, paramsType: "common::ComputerTargetParams", resultType: "common::JobStartResult"),
         SiloGeneratedMethodDescriptor(name: "checkpoints.create", kind: .job, paramsType: "checkpoints::CheckpointCreateParams", resultType: "common::JobStartResult"),
         SiloGeneratedMethodDescriptor(name: "checkpoints.delete", kind: .job, paramsType: "checkpoints::CheckpointTargetParams", resultType: "common::JobStartResult"),
@@ -172,8 +172,8 @@ enum SiloGeneratedMethods {
         SiloGeneratedMethodDescriptor(name: "updates.state", kind: .query, paramsType: "common::EmptyParams", resultType: "updates::UpdateSnapshot")
     ]
 
-    static func activitySetupRead(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, [SiloWireComputerConfigurationProgress]> {
-        SiloGeneratedMethodCall<SiloWireEmptyParams, [SiloWireComputerConfigurationProgress]>(name: "activity.setup.read", kind: .query, params: params)
+    static func activitySetupRead(_ params: SiloWireDeviceParams) -> SiloGeneratedMethodCall<SiloWireDeviceParams, [SiloWireComputerConfigurationProgress]> {
+        SiloGeneratedMethodCall<SiloWireDeviceParams, [SiloWireComputerConfigurationProgress]>(name: "activity.setup.read", kind: .query, params: params)
     }
 
     static func checkpointsAbandonRestore(_ params: SiloWireComputerTargetParams) -> SiloGeneratedMethodCall<SiloWireComputerTargetParams, SiloWireJobStartResult> {
@@ -660,12 +660,12 @@ enum SiloGeneratedMethods {
         SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWireChatGptPreparationStatus>(name: "preparation.chatgpt.status", kind: .query, params: params)
     }
 
-    static func preparationRetry(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWirePreparationStatus> {
-        SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWirePreparationStatus>(name: "preparation.retry", kind: .command, params: params)
+    static func preparationRetry(_ params: SiloWireDeviceParams) -> SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWirePreparationStatus> {
+        SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWirePreparationStatus>(name: "preparation.retry", kind: .command, params: params)
     }
 
-    static func preparationStatus(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWirePreparationStatus> {
-        SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWirePreparationStatus>(name: "preparation.status", kind: .query, params: params)
+    static func preparationStatus(_ params: SiloWireDeviceParams) -> SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWirePreparationStatus> {
+        SiloGeneratedMethodCall<SiloWireDeviceParams, SiloWirePreparationStatus>(name: "preparation.status", kind: .query, params: params)
     }
 
     static func pushDismiss(_ params: SiloWirePushDismissParams) -> SiloGeneratedMethodCall<SiloWirePushDismissParams, SiloNull> {

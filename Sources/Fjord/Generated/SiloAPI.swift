@@ -1219,9 +1219,11 @@ enum SiloWireMacosComputerState: String, Codable, Equatable, Sendable {
 
 // MARK: - SiloWireComputerCreationSkipWaitParams
 struct SiloWireComputerCreationSkipWaitParams: Codable, Equatable, Sendable {
+    var deviceId: String? = nil
     var requestId: String
 
     enum CodingKeys: String, CodingKey {
+        case deviceId = "deviceId"
         case requestId = "requestId"
     }
 }
@@ -1766,9 +1768,11 @@ enum SiloWireDependencyStatus: String, Codable, Equatable, Sendable {
 
 // MARK: - SiloWireDependencyReportParams
 struct SiloWireDependencyReportParams: Codable, Equatable, Sendable {
+    var deviceId: String? = nil
     var requestId: String
 
     enum CodingKeys: String, CodingKey {
+        case deviceId = "deviceId"
         case requestId = "requestId"
     }
 }
@@ -6354,10 +6358,10 @@ enum SiloWireMethodName: String, Codable, Equatable, Sendable {
 /// to install the restricted key; local engine clients omit it.
 // MARK: - SiloWireParams
 struct SiloWireParams: Codable, Equatable, Sendable {
-    var computerId: String? = nil
     /// The device that owns the computer. Absent or this engine's own device resizes here;
     /// another device forwards the resize to its owner.
     var deviceId: String? = nil
+    var computerId: String? = nil
     var kind: SiloWireParamsKind? = nil
     var name: String? = nil
     var checkpointId: String? = nil
@@ -6454,8 +6458,8 @@ struct SiloWireParams: Codable, Equatable, Sendable {
     var keys: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case computerId = "computerId"
         case deviceId = "deviceId"
+        case computerId = "computerId"
         case kind = "kind"
         case name = "name"
         case checkpointId = "checkpointId"
