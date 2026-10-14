@@ -361,7 +361,8 @@ struct OperationJobSnapshot: Codable, Equatable, Sendable {
 }
 
 enum EngineEvent: Equatable {
-    case computersChanged(ComputersChangedPayload)
+    case computersChanged(ComputersChangedPayload, deviceId: String? = nil)
+    case connectionsDevicesChanged
     case checkpointsChanged(CheckpointsChangedPayload)
     case operationsQueueChanged(OperationsList)
     case jobProgress(OperationJobProgress)
@@ -371,6 +372,7 @@ enum EngineEvent: Equatable {
     var name: String {
         switch self {
         case .computersChanged: "computers.changed"
+        case .connectionsDevicesChanged: "connections.devices.changed"
         case .checkpointsChanged: "checkpoints.changed"
         case .operationsQueueChanged: "operations.queue.changed"
         case .jobProgress: "operations.job.progress"
@@ -461,6 +463,7 @@ enum ComputerName {
 protocol EngineClient {
     func deviceFactsRead(deviceId: String?) async throws -> DeviceFacts
     func computersList(deviceId: String?) async throws -> ComputerInventory
+    func connectionsDevicesList() async throws -> [SiloWireDevice]
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult
     func computersStart(_ reference: ComputerReference) async throws -> ComputerJob
     func computersStop(_ reference: ComputerReference) async throws -> ComputerJob
@@ -489,6 +492,7 @@ final class UnavailableEngineClient: EngineClient {
 
     func deviceFactsRead(deviceId: String?) async throws -> DeviceFacts { try unavailable() }
     func computersList(deviceId: String?) async throws -> ComputerInventory { try unavailable() }
+    func connectionsDevicesList() async throws -> [SiloWireDevice] { try unavailable() }
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult { try unavailable() }
     func computersStart(_ reference: ComputerReference) async throws -> ComputerJob { try unavailable() }
     func computersStop(_ reference: ComputerReference) async throws -> ComputerJob { try unavailable() }
@@ -563,6 +567,8 @@ final class MockEngineClient: EngineClient {
             template: MacosTemplateSummary(macosVersion: "26.6.2", build: "25G83", current: true), minDiskGiB: 64))
 
     private(set) var inventory: ComputerInventory
+    var connectedDevices: [SiloWireDevice] = []
+    var ownerInventories: [String: ComputerInventory] = [:]
     var deviceFacts: DeviceFacts
     private(set) var createRequests: [ComputerCreateRequest] = []
     private(set) var forkRequests: [CheckpointForkRequest] = []
@@ -615,6 +621,8 @@ final class MockEngineClient: EngineClient {
 
     func deviceFactsRead(deviceId: String? = nil) async throws -> DeviceFacts { deviceFacts }
 
+    func connectionsDevicesList() async throws -> [SiloWireDevice] { connectedDevices }
+
     private static var demoProgress: OperationJobProgress {
         OperationJobProgress(jobId: "job:starting-macos-demo", kind: "lifecycle", computerId: startingID,
                              source: .macos,
@@ -624,7 +632,7 @@ final class MockEngineClient: EngineClient {
 
     func computersList(deviceId: String? = nil) async throws -> ComputerInventory {
         computersListCallCount += 1
-        let snapshot = inventory
+        let snapshot = deviceId.flatMap { ownerInventories[$0] } ?? inventory
         if suspendNextComputersList {
             suspendNextComputersList = false
             await withCheckedContinuation { continuation in

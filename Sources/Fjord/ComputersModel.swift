@@ -38,6 +38,12 @@ enum ComputerQuitChoice: Equatable { case cancel, keepRunning, stopAndQuit }
 final class ComputersModel {
     private let client: any EngineClient
     private(set) var inventory: ComputerInventory?
+    private(set) var remoteOwnerInventories: [ComputerOwnerInventory] = []
+    private(set) var placementError: String?
+    var placementOwners: [ComputerOwnerInventory] {
+        (inventory.map { [ComputerOwnerInventory.local($0)] } ?? []) + remoteOwnerInventories
+    }
+    var placementOptions: [ComputerPlacementOption] { placementOwners.flatMap(\.options) }
     private(set) var checkpointUsage: [String: CheckpointUsage] = [:]
     private(set) var isLoading = false
     private(set) var error: String?
@@ -68,6 +74,7 @@ final class ComputersModel {
     @ObservationIgnored private var reservedNames: Set<String> = []
     @ObservationIgnored private var isRecovering = false
     @ObservationIgnored private var wantsConnection = false
+    @ObservationIgnored private var ownerRefreshID: UUID?
 
     init(client: any EngineClient, initialInventory: ComputerInventory? = nil) {
         self.client = client
@@ -104,7 +111,7 @@ final class ComputersModel {
             self.sequence = 0
             self.hasSequence = true
             self.eventStreamID = attemptID
-            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "checkpoints.*", "operations.*"]) { [weak self] event in
+            let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "checkpoints.*", "operations.*", "connections.devices.changed"]) { [weak self] event in
                 self?.receive(event, stream: attemptID)
             }
             guard self.wantsConnection, self.connectionAttemptID == attemptID else {
@@ -132,6 +139,7 @@ final class ComputersModel {
             } else {
                 self.beginRecovery(invalidated: true)
             }
+            await self.refreshRemoteOwnerInventories()
         }
         connectionTask = task
         try await task.value
@@ -166,6 +174,49 @@ final class ComputersModel {
             inventory = latest
             stateRevision &+= 1
             error = nil
+        }
+    }
+
+    /// Loads the local picker inventory and each currently connected remote owner's inventory. Results stay scoped by
+    /// owner because computer ids are not globally unique.
+    func refreshPlacementInventories() async {
+        let revision = stateRevision
+        do {
+            let latest = try await client.computersList(deviceId: nil)
+            if stateRevision == revision {
+                inventory = latest
+                stateRevision &+= 1
+            }
+            await refreshRemoteOwnerInventories()
+        } catch {
+            placementError = error.localizedDescription
+            remoteOwnerInventories = []
+        }
+    }
+
+    private func refreshRemoteOwnerInventories() async {
+        let attempt = UUID()
+        ownerRefreshID = attempt
+        do {
+            let devices = try await client.connectionsDevicesList()
+            var groups: [ComputerOwnerInventory] = []
+            var failedOwners: [String] = []
+            for device in devices {
+                guard ownerRefreshID == attempt else { return }
+                do {
+                    let latest = try await client.computersList(deviceId: device.id)
+                    groups.append(.remote(device, inventory: latest))
+                } catch {
+                    failedOwners.append(device.name)
+                }
+            }
+            guard ownerRefreshID == attempt else { return }
+            remoteOwnerInventories = groups.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            placementError = failedOwners.isEmpty ? nil : "Couldn't load computers from: \(failedOwners.joined(separator: ", "))."
+        } catch {
+            guard ownerRefreshID == attempt else { return }
+            remoteOwnerInventories = []
+            placementError = error.localizedDescription
         }
     }
 
@@ -434,10 +485,16 @@ final class ComputersModel {
 
     private func apply(_ event: EngineEvent) {
         switch event {
-        case .computersChanged(let change):
+        case .computersChanged(let change, let deviceId):
             stateRevision &+= 1
-            if let inventory { self.inventory = inventory.applying(change) }
+            if let deviceId, let index = remoteOwnerInventories.firstIndex(where: { $0.deviceId == deviceId }) {
+                remoteOwnerInventories[index].inventory = remoteOwnerInventories[index].inventory.applying(change)
+            } else if let inventory {
+                self.inventory = inventory.applying(change)
+            }
             error = nil
+        case .connectionsDevicesChanged:
+            Task { @MainActor [weak self] in await self?.refreshRemoteOwnerInventories() }
         case .checkpointsChanged(let change):
             stateRevision &+= 1
             if let inventory {

@@ -4,30 +4,41 @@ import SwiftUI
 struct RunsOnProjectMenu: View {
     let store: Store
     let folder: String
-    @State private var computer: ComputerRow?
+    @State private var computer: ComputerPlacementOption?
     @State private var guestPath = ""
     @State private var asksForGuestFolder = false
     @State private var pathError: String?
 
     private var project: RunsOnProject { store.runsOnProject(for: folder) }
-    private var computers: [ComputerRow] { store.computers.inventory?.allComputers ?? [] }
+    private var placementOptions: [ComputerPlacementOption] { store.computers.placementOptions }
 
     var body: some View {
         Menu {
             Button("This Mac") { store.setRunsOnPlacement(.thisMac(path: folder), for: folder) }
-            if !computers.isEmpty { Divider() }
-            ForEach(computers) { row in
-                Button {
-                    computer = row
-                    if case .computer(_, let id, let path) = project.placement, id == row.id {
-                        guestPath = path
-                    } else {
-                        guestPath = ""
+            if !placementOptions.isEmpty { Divider() }
+            ForEach(store.computers.placementOwners) { owner in
+                if !owner.options.isEmpty {
+                    Section(owner.name) {
+                        ForEach(owner.options) { option in
+                            Button {
+                                computer = option
+                                if case .computer(let deviceId, let id, let path) = project.placement,
+                                   deviceId == option.deviceId, id == option.computer.id {
+                                    guestPath = path
+                                } else {
+                                    guestPath = ""
+                                }
+                                asksForGuestFolder = true
+                            } label: {
+                                Label(computerLabel(option.computer), systemImage: option.computer.kind == .linux ? "shippingbox" : "desktopcomputer")
+                            }
+                        }
                     }
-                    asksForGuestFolder = true
-                } label: {
-                    Label(computerLabel(row), systemImage: row.kind == .linux ? "shippingbox" : "desktopcomputer")
                 }
+            }
+            if let placementError = store.computers.placementError {
+                Divider()
+                Button("Refresh computers: \(placementError)") { Task { await store.computers.refreshPlacementInventories() } }
             }
         } label: {
             Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
@@ -39,6 +50,7 @@ struct RunsOnProjectMenu: View {
         .menuStyle(.borderlessButton)
         .help("Runs on: \(placementTitle)")
         .accessibilityLabel("Runs on: \(placementTitle)")
+        .task { await store.computers.refreshPlacementInventories() }
         .popover(isPresented: $asksForGuestFolder, arrowEdge: .trailing) {
             guestFolderPrompt
         }
@@ -47,7 +59,7 @@ struct RunsOnProjectMenu: View {
     private var guestFolderPrompt: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Guest folder").font(.headline)
-            if let computer { Text("\(computer.name) · \(computer.kind.title) · \(computer.displayState.title)").font(.caption).foregroundStyle(.secondary) }
+            if let computer { Text("\(computer.computer.name) · \(computer.ownerName) · \(computer.computer.kind.title) · \(computer.computer.displayState.title)").font(.caption).foregroundStyle(.secondary) }
             TextField("/workspace/project", text: $guestPath).textFieldStyle(.roundedBorder)
                 .frame(width: 290)
                 .onSubmit { saveGuestFolder() }
@@ -65,9 +77,9 @@ struct RunsOnProjectMenu: View {
     private var placementTitle: String {
         switch project.placement {
         case .thisMac: return "This Mac"
-        case .computer(_, let id, let path):
-            let computerName = computers.first(where: { $0.id == id })?.name ?? "Computer"
-            return "\(computerName) · \(path)"
+        case .computer(let deviceId, let id, let path):
+            let option = placementOptions.first { $0.deviceId == deviceId && $0.computer.id == id }
+            return "\(option?.computer.name ?? "Computer") · \(option?.ownerName ?? (deviceId ?? "owner")) · \(path)"
         }
     }
 
@@ -85,7 +97,7 @@ struct RunsOnProjectMenu: View {
         guard let computer else { return }
         do {
             let path = try GuestFolderPath.validate(guestPath)
-            store.setRunsOnPlacement(.computer(deviceId: nil, computerId: computer.id, guestPath: path), for: folder)
+            store.setRunsOnPlacement(.computer(deviceId: computer.deviceId, computerId: computer.computer.id, guestPath: path), for: folder)
             asksForGuestFolder = false
             pathError = nil
         } catch {

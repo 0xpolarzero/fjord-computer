@@ -383,6 +383,10 @@ final class SocketEngineClient: EngineClient {
         try await invoke(SiloGeneratedMethods.computersList(SiloWireComputerListParams(deviceId: deviceId)))
     }
 
+    func connectionsDevicesList() async throws -> [SiloWireDevice] {
+        try await invoke(SiloGeneratedMethods.connectionsDevicesList([:]))
+    }
+
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult {
         let wireRequest: SiloWireMacosComputerCreateRequest?
         if let value = request.request {
@@ -798,12 +802,13 @@ final class SocketEngineClient: EngineClient {
     }
 
     private static func projectEvent(_ envelope: SiloWireEventEnvelope) -> EngineEvent? {
+        if envelope.event == .connectionsDevicesChanged { return .connectionsDevicesChanged }
         guard let payload = envelope.payload, let data = try? JSONEncoder().encode(payload) else { return nil }
         let decoder = JSONDecoder()
         switch envelope.event {
         case .computersChanged:
             guard let value = try? decoder.decode(ComputersChangedPayload.self, from: data) else { return nil }
-            return .computersChanged(value)
+            return .computersChanged(value, deviceId: envelope.deviceId)
         case .checkpointsChanged:
             guard let value = try? decoder.decode(CheckpointsChangedPayload.self, from: data) else { return nil }
             return .checkpointsChanged(value)
