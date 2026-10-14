@@ -38,13 +38,13 @@ fileprivate struct PaletteFolder {
                 let kind = Self.kind(of: s)
                 var v = s.value
                 if kind == .upper { v += 32 } else if (9...13).contains(v) { v = 32 }
-                emit(v, start: Self.starts(kind, after: prev, next: i + 1 < src.count ? src[i + 1] : nil), from: i)
+                emit(v, start: Self.starts(kind, after: prev, next: lookahead(kind, prev, src, i)), from: i)
                 prev = kind
             } else {
                 let out = folded(s)
                 if out.isEmpty { continue }
                 let kind = Self.kind(of: s)
-                var start = Self.starts(kind, after: prev, next: i + 1 < src.count ? src[i + 1] : nil)
+                var start = Self.starts(kind, after: prev, next: lookahead(kind, prev, src, i))
                 for v in out {
                     emit(v, start: start, from: i)
                     start = false
@@ -52,6 +52,18 @@ fileprivate struct PaletteFolder {
                 prev = kind
             }
         }
+    }
+
+    /// The scalar after `src[i]` that survives folding (a combining mark does not, so it never hides what follows), looked
+    /// for only where the word boundary depends on it.
+    private mutating func lookahead(_ kind: Kind, _ prev: Kind, _ src: [Unicode.Scalar], _ i: Int) -> Unicode.Scalar? {
+        guard kind == .upper, prev == .upper else { return nil }
+        var j = i + 1
+        while j < src.count {
+            if src[j].value < 128 || !folded(src[j]).isEmpty { return src[j] }
+            j += 1
+        }
+        return nil
     }
 
     private mutating func emit(_ v: UInt32, start: Bool, from i: Int) {
@@ -67,29 +79,27 @@ fileprivate struct PaletteFolder {
         return out
     }
 
-    /// What a non-ASCII scalar becomes: nothing for a combining mark, a few letters for the ligatures and the letters
-    /// Unicode does not decompose (Foundation's diacritic folding leaves œ, æ, ø and ł alone), otherwise its base letters
-    /// lowercased.
+    /// What a non-ASCII scalar becomes: its base letters lowercased with the combining marks dropped, and then the letters
+    /// Unicode does not decompose spelled out (Foundation's diacritic folding leaves œ, æ, ø and ł alone). The spelling
+    /// comes after the decomposition so "ǽ" and "æ" + accent fold alike, and nothing depends on how the text is normalised.
     private static func foldNonASCII(_ s: Unicode.Scalar) -> [UInt32] {
-        switch s.value {
-        case 0x153, 0x152: return [111, 101]
-        case 0xE6, 0xC6: return [97, 101]
-        case 0xDF, 0x1E9E: return [115, 115]
-        case 0xF8, 0xD8: return [111]
-        case 0x142, 0x141: return [108]
-        case 0x111, 0x110, 0xF0, 0xD0: return [100]
-        case 0xFE, 0xDE: return [116, 104]
-        case 0x131: return [105]
-        case 0x2018, 0x2019, 0x201A, 0x201B, 0x2032, 0x2BC: return [39]
-        case 0x201C...0x201F, 0x2033: return [34]
-        case 0x2010...0x2015, 0x2212: return [45]
-        default: break
-        }
-        if s.properties.isWhitespace { return [32] }
         var out: [UInt32] = []
         for c in String(s).decomposedStringWithCompatibilityMapping.lowercased().unicodeScalars {
             if c.properties.generalCategory == .nonspacingMark { continue }
-            out.append(c.properties.isWhitespace ? 32 : c.value)
+            switch c.value {
+            case 0x153: out += [111, 101]
+            case 0xE6: out += [97, 101]
+            case 0xDF: out += [115, 115]
+            case 0xF8: out.append(111)
+            case 0x142: out.append(108)
+            case 0x111, 0xF0: out.append(100)
+            case 0xFE: out += [116, 104]
+            case 0x131: out.append(105)
+            case 0x2018, 0x2019, 0x201A, 0x201B, 0x2032, 0x2BC: out.append(39)
+            case 0x201C...0x201F, 0x2033: out.append(34)
+            case 0x2010...0x2015, 0x2212: out.append(45)
+            default: out.append(c.properties.isWhitespace ? 32 : c.value)
+            }
         }
         return out
     }
@@ -241,6 +251,9 @@ fileprivate enum PaletteTier {
 fileprivate final class PaletteMatcher {
     private let corpus: PaletteCorpus
     private let query: UnsafeMutablePointer<UInt32>
+    /// Per query scalar, for the word or phrase it is in: the length of the longest border of its prefix (Knuth–Morris–Pratt),
+    /// so finding a word inside a text takes one pass however repetitive both are.
+    private let border: UnsafeMutablePointer<Int32>
     private var wordOffset: [Int] = []
     private var wordLength: [Int] = []
     private(set) var wordMask: [UInt64] = []
@@ -255,6 +268,8 @@ fileprivate final class PaletteMatcher {
     var collect = false
     var marks: [Int32] = []
 
+    /// Up to this many scalars a word is looked for by trying each place (at most this many steps per place).
+    private static let shortWord = 12
     private static let maxFuzzyTitle = 256
     private static let maxFuzzyWord = 32
     private static let none: Int32 = -1_000_000_000
@@ -263,6 +278,7 @@ fileprivate final class PaletteMatcher {
         self.corpus = corpus
         let letters = words.reduce(0) { $0 + $1.count }
         query = .allocate(capacity: letters * 2 + words.count + 1)
+        border = .allocate(capacity: letters * 2 + words.count + 1)
         var at = 0
         for w in words {
             wordOffset.append(at)
@@ -288,9 +304,58 @@ fileprivate final class PaletteMatcher {
             }
         }
         phraseLength = at - phraseOffset
+        for (offset, length) in zip(wordOffset, wordLength) + [(phraseOffset, phraseLength)] { fillBorders(offset, length) }
+    }
+
+    private func fillBorders(_ offset: Int, _ length: Int) {
+        let q = query + offset, b = border + offset
+        var k = 0
+        for i in 0..<length {
+            b[i] = 0
+            if i == 0 { continue }
+            while k > 0, q[k] != q[i] { k = Int(b[k - 1]) }
+            if q[k] == q[i] { k += 1 }
+            b[i] = Int32(k)
+        }
+    }
+
+    /// Where the word at `offset` first occurs in `t` (past the start, which the callers have tried) and where it first
+    /// starts a word there (`f`), -1 for neither; one linear pass, stopping at the first word start, or at the first
+    /// occurrence when `f` is nil.
+    private func occurrences(_ offset: Int, _ m: Int, _ t: UnsafePointer<UInt32>, _ n: Int, _ f: UnsafePointer<UInt8>?)
+        -> (first: Int, wordStart: Int) {
+        let q = query + offset, b = border + offset
+        var first = -1, k = 0
+        if m <= Self.shortWord {
+            // A short word cannot take long to try at each place; this is the quicker way for the usual query.
+            var at = 1
+            while at <= n - m {
+                if t[at] == q[0], same(q, m, t + at) {
+                    if first < 0 { first = at }
+                    guard let f else { return (first, -1) }
+                    if f[at] & 1 != 0 { return (first, at) }
+                }
+                at += 1
+            }
+            return (first, -1)
+        }
+        for i in 0..<n {
+            let c = t[i]
+            while k > 0, q[k] != c { k = Int(b[k - 1]) }
+            if q[k] == c { k += 1 }
+            if k == m {
+                let at = i - m + 1
+                if first < 0 { first = at }
+                guard let f else { return (first, -1) }
+                if f[at] & 1 != 0 { return (first, at) }
+                k = Int(b[m - 1])
+            }
+        }
+        return (first, -1)
     }
 
     deinit {
+        border.deallocate()
         query.deallocate()
         matrix?.deallocate()
     }
@@ -306,8 +371,8 @@ fileprivate final class PaletteMatcher {
         for w in 0..<wordLength.count {
             let q = query + wordOffset[w], m = wordLength[w]
             var found: (Int, Double)?
-            if wordMask[w] & ~corpus.titleMask[slot] == 0 { found = titleMatch(q, m, text, flags, count) }
-            if found == nil, minTier <= PaletteTier.keyword { found = keywordMatch(q, m, slot) }
+            if wordMask[w] & ~corpus.titleMask[slot] == 0 { found = titleMatch(q, wordOffset[w], m, text, flags, count) }
+            if found == nil, minTier <= PaletteTier.keyword { found = keywordMatch(q, wordOffset[w], m, slot) }
             guard let found else {
                 if collect { marks.removeSubrange(base...) }
                 return nil
@@ -351,37 +416,21 @@ fileprivate final class PaletteMatcher {
         if same(q, m, t) {
             return m == n ? (PaletteTier.exact, 100, 0) : (PaletteTier.prefix, 80 + 20 * Double(m) / Double(n), 0)
         }
-        var j = 1
-        while j <= n - m {
-            if t[j] == q[0], same(q, m, t + j) {
-                return (PaletteTier.substring, max(1, 40 + 40 * Double(m) / Double(n) - 0.5 * Double(min(j, 40))), j)
-            }
-            j += 1
-        }
-        return nil
+        let j = occurrences(phraseOffset, m, t, n, nil).first
+        if j < 0 { return nil }
+        return (PaletteTier.substring, max(1, 40 + 40 * Double(m) / Double(n) - 0.5 * Double(min(j, 40))), j)
     }
 
     /// A word against the title, in the best tier it reaches (marking what it matched), or nil.
-    private func titleMatch(_ q: UnsafePointer<UInt32>, _ m: Int, _ t: UnsafePointer<UInt32>, _ f: UnsafePointer<UInt8>,
-                            _ n: Int) -> (Int, Double)? {
+    private func titleMatch(_ q: UnsafePointer<UInt32>, _ offset: Int, _ m: Int, _ t: UnsafePointer<UInt32>,
+                            _ f: UnsafePointer<UInt8>, _ n: Int) -> (Int, Double)? {
         if m > n { return nil }
         let ratio = Double(m) / Double(n)
         if same(q, m, t) {
             mark(0, m)
             return m == n ? (PaletteTier.exact, 100) : (PaletteTier.prefix, 80 + 20 * ratio)
         }
-        var inside = -1, wordStart = -1
-        var j = 1
-        while j <= n - m {
-            if t[j] == q[0], same(q, m, t + j) {
-                if inside < 0 { inside = j }
-                if f[j] & 1 != 0 {
-                    wordStart = j
-                    break
-                }
-            }
-            j += 1
-        }
+        let (inside, wordStart) = occurrences(offset, m, t, n, f)
         if wordStart >= 0 {
             mark(wordStart, wordStart + m)
             return (PaletteTier.wordPrefix, 50 + 30 * ratio - 0.25 * Double(min(wordStart, 40)))
@@ -506,7 +555,7 @@ fileprivate final class PaletteMatcher {
 
     /// A word against the item's keywords: the best of equal, prefix, word start, inside (one letter only counts at a word
     /// start, or every keyword would hold it). Keywords are never highlighted.
-    private func keywordMatch(_ q: UnsafePointer<UInt32>, _ m: Int, _ slot: Int) -> (Int, Double)? {
+    private func keywordMatch(_ q: UnsafePointer<UInt32>, _ offset: Int, _ m: Int, _ slot: Int) -> (Int, Double)? {
         var best = 0.0
         for k in Int(corpus.kwFirst[slot])..<Int(corpus.kwFirst[slot + 1]) {
             let n = Int(corpus.kwCount[k])
@@ -518,16 +567,11 @@ fileprivate final class PaletteMatcher {
                 best = max(best, 70 + 15 * Double(m) / Double(n))
                 continue
             }
-            var j = 1
-            while j <= n - m {
-                if t[j] == q[0], same(q, m, t + j) {
-                    if f[j] & 1 != 0 {
-                        best = max(best, 55 + 15 * Double(m) / Double(n))
-                        break
-                    }
-                    if m >= 2 { best = max(best, 35 + 15 * Double(m) / Double(n)) }
-                }
-                j += 1
+            let (inside, wordStart) = occurrences(offset, m, t, n, f)
+            if wordStart >= 0 {
+                best = max(best, 55 + 15 * Double(m) / Double(n))
+            } else if inside >= 0, m >= 2 {
+                best = max(best, 35 + 15 * Double(m) / Double(n))
             }
         }
         return best > 0 ? (PaletteTier.keyword, best) : nil
@@ -611,11 +655,14 @@ enum PaletteRanker {
         }
     }
 
+    /// The longest query looked at, in scalars: what a person types is far shorter, and a pasted wall of text is cut here.
+    private static let maxQuery = 512
+
     /// The query's words, folded: split at spaces, none empty.
     private static func queryWords(_ query: String) -> [[UInt32]] {
         var folder = PaletteFolder()
         folder.append(query)
-        return folder.scalars.split(separator: 32).map(Array.init)
+        return folder.scalars.prefix(maxQuery).split(separator: 32).map(Array.init)
     }
 
     /// The ranges of `title` for the matched stretches (pairs of folded scalar offsets): back to the original scalars,
@@ -640,8 +687,20 @@ enum PaletteRanker {
             offset += title[i].unicodeScalars.count
         }
         bounds.append((offset, title.endIndex))
-        func down(_ o: Int) -> String.Index { bounds.last { $0.0 <= o }?.1 ?? title.startIndex }
-        func up(_ o: Int) -> String.Index { bounds.first { $0.0 >= o }?.1 ?? title.endIndex }
+        /// The first boundary at or after `o` (bounds are sorted by offset).
+        func firstAtOrAfter(_ o: Int) -> Int {
+            var low = 0, high = bounds.count
+            while low < high {
+                let mid = (low + high) / 2
+                if bounds[mid].0 < o { low = mid + 1 } else { high = mid }
+            }
+            return low
+        }
+        func down(_ o: Int) -> String.Index {
+            let at = firstAtOrAfter(o)
+            return at < bounds.count && bounds[at].0 == o ? bounds[at].1 : bounds[max(at - 1, 0)].1
+        }
+        func up(_ o: Int) -> String.Index { bounds[min(firstAtOrAfter(o), bounds.count - 1)].1 }
         var out: [Range<String.Index>] = []
         for s in merged {
             let range = down(s.0)..<up(s.1)
@@ -732,9 +791,12 @@ final class PaletteUsage {
             learned[itemID, default: [:]][typed] = QueryUse(count: Self.round(decayed * 0.9 + 1, 4), last: seconds)
             if before == nil { learnedCount += 1 }
         }
-        prune(keeping: itemID, now: now)
+        prune(keeping: itemID, query: typed, now: now)
         save()
     }
+
+    /// How many items and learned (item, query) pairs are kept: for tests of the caps.
+    var kept: (items: Int, queries: Int) { (items.count, learnedCount) }
 
     /// The ids picked last, newest first.
     func recent(_ count: Int) -> [String] {
@@ -813,20 +875,33 @@ final class PaletteUsage {
 
     // MARK: Keeping it small
 
-    /// Drops the weakest items and learned queries past their caps, never the one just picked.
-    private func prune(keeping itemID: String, now: Date) {
+    /// Drops the weakest items and learned queries past their caps, never the pick just recorded. Equal strengths go the
+    /// older first (last pick, then sequence, then id), so which one goes never depends on the dictionary's order.
+    private func prune(keeping itemID: String, query typed: String, now: Date) {
         if items.count > Self.maxItems {
-            let t = Self.halfLives(now)
-            let weakest = items.filter { $0.key != itemID }.sorted { $0.value.l - t < $1.value.l - t }
+            // `l` orders items by strength at any time, so no `now` is needed.
+            let weakest = items.filter { $0.key != itemID }.sorted {
+                let (x, y) = ($0.value, $1.value)
+                if x.l != y.l { return x.l < y.l }
+                if x.last != y.last { return x.last < y.last }
+                if x.seq != y.seq { return x.seq < y.seq }
+                return $0.key < $1.key
+            }
             for (id, _) in weakest.prefix(items.count - Self.maxItems) { items[id] = nil }
         }
         if learnedCount > Self.maxQueries {
-            var all: [(id: String, query: String, strength: Double)] = []
+            var all: [(id: String, query: String, strength: Double, last: Double)] = []
             for (id, byQuery) in learned {
-                for (query, use) in byQuery { all.append((id, query, Self.decayedCount(use, at: now))) }
+                for (query, use) in byQuery where !(id == itemID && query == typed) {
+                    all.append((id, query, Self.decayedCount(use, at: now), use.last))
+                }
             }
-            all.sort { $0.strength != $1.strength ? $0.strength < $1.strength : ($0.id, $0.query) < ($1.id, $1.query) }
-            for entry in all.prefix(learnedCount - Self.maxQueries) where entry.id != itemID {
+            all.sort {
+                if $0.strength != $1.strength { return $0.strength < $1.strength }
+                if $0.last != $1.last { return $0.last < $1.last }
+                return ($0.id, $0.query) < ($1.id, $1.query)
+            }
+            for entry in all.prefix(learnedCount - Self.maxQueries) {
                 learned[entry.id]?[entry.query] = nil
                 if learned[entry.id]?.isEmpty == true { learned[entry.id] = nil }
                 learnedCount -= 1

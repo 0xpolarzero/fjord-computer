@@ -102,14 +102,19 @@ import Testing
     }
 
     @Test func acronymsTakeInitialsAndCamelCase() {
-        let items = [item("camel", "getUserById"), item("words", "Router tools"), item("snake", "get_user_by_id"),
-                     item("other", "Gumball")]
-        #expect(Set(ids("gubi", items)) == ["camel", "snake"])
-        #expect(ids("rt", items).first == "words")
-        // HTTPServer starts a word at the S.
-        #expect(ids("hs", [item("a", "HTTPServer")]) == ["a"])
-        // "mp3" is one word.
-        #expect(ids("m3", [item("a", "mp3 player")]) == ["a"])
+        // Each acronym is ranked against a title that only holds the letters inside a word: the acronym must win by tier.
+        let cases: [(query: String, acronym: String, rival: String)] = [
+            ("gubi", "getUserById", "Xgubi thing"),
+            ("gubi", "get_user_by_id", "Xgubi thing"),
+            ("rt", "Router tools", "Smart tab"),
+            ("hs", "HTTPServer", "Xhsx"),
+            ("m3", "mp3 Player 3", "Xm3x"),
+        ]
+        for c in cases {
+            let items = [item("rival", c.rival), item("acronym", c.acronym)]
+            #expect(ids(c.query, items) == ["acronym", "rival"], "\(c.query) -> \(c.acronym)")
+            #expect(ids(c.query, items.reversed()) == ["acronym", "rival"], "\(c.query) -> \(c.acronym), reversed")
+        }
         #expect(hit("gubi", "getUserById") == ["g", "U", "B", "I"])
     }
 
@@ -316,6 +321,77 @@ import Testing
         #expect(usage.recent(1000).count == 500)
         #expect(usage.recent(1).first == "item599")
         #expect(usage.recent(1000).contains("item0") == false)
+    }
+
+    // MARK: Normalisation and limits
+
+    @Test func composedAndDecomposedSpellingsFoldAlike() {
+        #expect(PaletteText.fold("ǽ") == "ae")
+        #expect(PaletteText.fold("æ\u{301}") == "ae")
+        #expect(PaletteText.fold("Ǿ") == "o")
+        #expect(PaletteText.fold("Ø\u{301}") == "o")
+        #expect(PaletteText.fold("Œ\u{301}uvre") == PaletteText.fold("Ǽuvre").replacingOccurrences(of: "ae", with: "oe"))
+        #expect(PaletteText.fold("Éc") == PaletteText.fold("E\u{301}c"))
+    }
+
+    @Test func composedAndDecomposedTitlesRankAlike() {
+        // "ec" starts the word École in both spellings (an accented capital after a capital run), a word-start prefix
+        // that beats an acronym rival; if the accent hid the boundary it would only be a substring and lose to it.
+        let rival = item("rival", "Easy Cat")
+        for title in ["HÉcole Router", "HE\u{301}cole Router"] {
+            #expect(ids("ec", [rival, item("a", title)]) == ["a", "rival"], "\(title)")
+            #expect(ids("ec", [item("a", title), rival]) == ["a", "rival"], "\(title)")
+        }
+        #expect(hit("ec", "HE\u{301}cole Router") == ["E\u{301}c"])
+    }
+
+    @Test func hugeTextsAndQueriesAreScannedInLinearTime() {
+        let clock = ContinuousClock()
+        let title = String(repeating: "a", count: 64_000) + "xb"
+        let items = [item("t", title, keywords: [title]), item("k", "Other", keywords: [title])]
+        for query in [String(repeating: "a", count: 32_000) + "b", String(repeating: "a", count: 200) + "b",
+                      String(repeating: "a ", count: 100) + "b"] {
+            var hits: [PaletteHit] = []
+            let took = clock.measure { hits = ranked(query, items) }
+            #expect(took < .milliseconds(500), "\(query.count) letters took \(took)")
+            _ = hits
+        }
+        // Past the cap the query is cut, so a long paste still finds what starts like it.
+        #expect(ids(String(repeating: "a", count: 3000), items).contains("t"))
+        // Short queries on repetitive text still find the word and its place.
+        #expect(hit("axb", "a" + String(repeating: "a", count: 5000) + "xb") == ["axb"])
+    }
+
+    // MARK: Caps
+
+    @Test func oneItemWithManyQueriesStaysWithinTheCap() {
+        let usage = PaletteUsage(defaults: nil)
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        for n in 0..<2105 {
+            usage.record("router", query: String(format: "k%05d", n), now: t.addingTimeInterval(Double(n)))
+        }
+        #expect(usage.kept.queries == 2000)
+        // The oldest are gone (only the item's own frecency is left), the newest is learned.
+        let unrelated = usage.boost(for: "router", query: "zzz", now: t.addingTimeInterval(3000))
+        #expect(usage.boost(for: "router", query: "k00000", now: t.addingTimeInterval(3000)) == unrelated)
+        #expect(usage.boost(for: "router", query: "k02104", now: t.addingTimeInterval(3000)) > unrelated)
+    }
+
+    @Test func equalStrengthsAreEvictedOldestFirst() {
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        // Items: all picked at the same instant, so the first picked goes.
+        let items = PaletteUsage(defaults: nil)
+        for n in 0..<501 { items.record(String(format: "item%03d", 500 - n), query: "", now: t) }
+        #expect(items.kept.items == 500)
+        #expect(items.recent(1000).contains("item500") == false)
+        #expect(items.recent(1000).contains("item000"))
+        // Pairs: the same strength and time, so the smallest id goes (never the one just recorded).
+        let pairs = PaletteUsage(defaults: nil)
+        for n in 0..<2001 { pairs.record(String(format: "p%04d", 2000 - n), query: "k", now: t) }
+        #expect(pairs.kept.queries == 2000)
+        #expect(pairs.boost(for: "p0001", query: "k", now: t) == pairs.boost(for: "p0001", query: "zzz", now: t))
+        #expect(pairs.boost(for: "p0002", query: "k", now: t) > pairs.boost(for: "p0002", query: "zzz", now: t))
+        #expect(pairs.boost(for: "p0000", query: "k", now: t) > pairs.boost(for: "p0000", query: "zzz", now: t))
     }
 
     // MARK: Ties
