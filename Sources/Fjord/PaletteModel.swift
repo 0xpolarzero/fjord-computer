@@ -258,8 +258,8 @@ final class PaletteModel {
         page = .list
         openedByPointer = pointer
         recompute(keeping: nil)
-        if pointer && !AppTransition.reduceMotion {
-            withAnimation(.easeOut(duration: 0.2)) { isOpen = true }
+        if pointer {
+            withAnimation(Motion.fade.resolved(reduce: AppTransition.reduceMotion)) { isOpen = true }
         } else {
             isOpen = true
         }
