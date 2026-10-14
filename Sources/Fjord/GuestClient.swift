@@ -111,7 +111,7 @@ enum GuestClientFailure: LocalizedError, Equatable {
     }
 }
 
-/// P3 guest calls stay separate until the generated client owns the canonical methods. No method is added to EngineClient.
+/// Router's mockable guest boundary. `SiloGuestClient` adapts generated guest methods for production; the mock stays in-process.
 protocol GuestClient: Sendable {
     func account(for computer: GuestReference) async throws -> GuestAccount
     func filesRead(computer: GuestReference, path: String, offset: Int64?, length: Int?) async throws -> GuestFileReadResult

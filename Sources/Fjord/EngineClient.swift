@@ -366,6 +366,7 @@ enum EngineEvent: Equatable {
     case operationsQueueChanged(OperationsList)
     case jobProgress(OperationJobProgress)
     case jobFinished(OperationJobFinished)
+    case guestFilesChanged(deviceId: String, payload: SiloWireGuestFilesChangedPayload)
 
     var name: String {
         switch self {
@@ -374,6 +375,7 @@ enum EngineEvent: Equatable {
         case .operationsQueueChanged: "operations.queue.changed"
         case .jobProgress: "operations.job.progress"
         case .jobFinished: "operations.job.finished"
+        case .guestFilesChanged: "guest.files.changed"
         }
     }
 }

@@ -451,6 +451,8 @@ final class ComputersModel {
             activeJob = progress
         case .jobFinished(let result):
             recordFinished(result)
+        case .guestFilesChanged:
+            break
         }
     }
 

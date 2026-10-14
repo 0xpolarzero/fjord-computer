@@ -510,6 +510,42 @@ final class SocketEngineClient: EngineClient {
         }
     }
 
+    func guestAccount(_ params: SiloWireGuestAccountParams) async throws -> SiloWireGuestAccount {
+        try await invokeGuest(SiloGeneratedMethods.guestAccount(params))
+    }
+
+    func guestExec(_ params: SiloWireGuestExecParams) async throws -> SiloWireGuestExecResult {
+        try await invokeGuest(SiloGeneratedMethods.guestExec(params))
+    }
+
+    func guestFilesList(_ params: SiloWireGuestFilesListParams) async throws -> SiloWireGuestFilesListResult {
+        try await invokeGuest(SiloGeneratedMethods.guestFilesList(params), path: params.path)
+    }
+
+    func guestFilesRead(_ params: SiloWireGuestFilesReadParams) async throws -> SiloWireGuestFilesReadResult {
+        try await invokeGuest(SiloGeneratedMethods.guestFilesRead(params), path: params.path)
+    }
+
+    func guestFilesRemove(_ params: SiloWireGuestFilesRemoveParams) async throws -> SiloWireGuestFilesRemoveResult {
+        try await invokeGuest(SiloGeneratedMethods.guestFilesRemove(params), path: params.paths.first)
+    }
+
+    func guestFilesWatch(_ params: SiloWireGuestFilesWatchParams) async throws -> SiloWireGuestFilesWatchResult {
+        try await invokeGuest(SiloGeneratedMethods.guestFilesWatch(params), path: params.paths.first)
+    }
+
+    func guestFilesWrite(_ params: SiloWireGuestFilesWriteParams) async throws -> SiloWireGuestFilesWriteResult {
+        try await invokeGuest(SiloGeneratedMethods.guestFilesWrite(params), path: params.path)
+    }
+
+    func guestSSHAliasEnsure(_ params: SiloWireGuestSshAliasEnsureParams) async throws -> SiloWireGuestSshAliasEnsureResult {
+        try await invokeGuest(SiloGeneratedMethods.guestSshAliasEnsure(params))
+    }
+
+    func guestSSHAliasRemove(_ params: SiloWireComputerTargetParams) async throws {
+        let _: SiloNull = try await invokeGuest(SiloGeneratedMethods.guestSshAliasRemove(params))
+    }
+
     private func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
         _ call: SiloGeneratedMethodCall<Params, Result>
     ) async throws -> Result {
@@ -524,6 +560,36 @@ final class SocketEngineClient: EngineClient {
             return result
         }
         catch { throw Self.map(error) }
+    }
+
+    private func invokeGuest<Params: Encodable & Sendable, Result: Decodable & Sendable>(
+        _ call: SiloGeneratedMethodCall<Params, Result>, path: String? = nil
+    ) async throws -> Result {
+        do {
+            try Task.checkCancellation()
+            let activeTransport = try await ensureTransport()
+            guard !explicitlyDisconnected else { throw SocketClientFailure.closed }
+            try Task.checkCancellation()
+            let result = try await activeTransport.request(call)
+            guard !explicitlyDisconnected else { throw SocketClientFailure.closed }
+            try Task.checkCancellation()
+            return result
+        } catch let failure as SocketClientFailure {
+            if case .remote(let code, let message) = failure {
+                switch code {
+                case "not_found": throw GuestClientFailure.notFound(path ?? message)
+                case "not_a_file": throw GuestClientFailure.notAFile(path ?? message)
+                case "exists": throw GuestClientFailure.exists(path ?? message)
+                case "changed": throw GuestClientFailure.changed(path ?? message)
+                case "permission_denied": throw GuestClientFailure.permissionDenied(path ?? message)
+                case "not_running": throw GuestClientFailure.notRunning(message)
+                default: throw GuestClientFailure.unavailable(message)
+                }
+            }
+            throw Self.map(failure)
+        } catch {
+            throw Self.map(error)
+        }
     }
 
     private func ensureTransport() async throws -> SocketRequestTransport {
@@ -754,6 +820,9 @@ final class SocketEngineClient: EngineClient {
             guard let value = try? decoder.decode(SiloWireJobFinished.self, from: data) else { return nil }
             return .jobFinished(OperationJobFinished(jobId: value.jobId, result: value.result,
                                                       error: value.error.map(projectError)))
+        case .guestFilesChanged:
+            guard let value = try? decoder.decode(SiloWireGuestFilesChangedPayload.self, from: data) else { return nil }
+            return .guestFilesChanged(deviceId: envelope.deviceId, payload: value)
         default:
             return nil
         }

@@ -369,6 +369,34 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(elapsed < 0.3)
     }
 
+    @MainActor @Test func launchRehydratesSavedGuestTargetsAndExecutionState() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let guest = client()
+        let store = Store()
+        store.persists = false
+        store.setRouterEnabled(true)
+        store.agents.enabled = true
+        let projectID = UUID()
+        let placement = ProjectPlacement.computer(deviceId: computer.deviceId, computerId: computer.computerId,
+                                                  guestPath: "/workspace/project")
+        var state = store.router
+        state.runsOnProjects = [RunsOnProject(id: projectID, name: "Project", sourceFolder: "/local/project", placement: placement)]
+        state.pendingDesktopStarts = [PendingDesktopStart(projectID: projectID,
+            location: .computer(deviceId: computer.deviceId, computerId: computer.computerId), alias: "ssh-computer",
+            folder: "/workspace/project", prompt: "Ship", openedAt: Date(), state: .matched,
+            desktopSessionID: "desktop-1", guestSessionID: "cli-1")]
+        store.router = state
+
+        await GuestRouterRuntime.shared.rehydrate(store: store, client: guest)
+
+        let calls = await guest.callLog()
+        let guestPaths = try GuestRouterPaths(home: account.home)
+        #expect(calls.filter { $0.hasPrefix("watch:") }.count == 1)
+        #expect(calls.contains { $0.contains(guestPaths.forms) })
+        #expect(store.guestExecutionStates["desktop-1"]?.availability == .dead)
+        #expect(store.guestExecutionStates["desktop-1"]?.isRunning == false)
+    }
+
     @Test func guestClockSamplesTheGuestNodeRuntime() async throws {
         let guest = client()
         let milliseconds: Int64 = 1_800_000_000_000

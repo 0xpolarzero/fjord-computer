@@ -9,6 +9,7 @@ import Foundation
     private weak var store: Store?
     private var clients: [String: any GuestClient] = [:]
     private var computers: [String: GuestReference] = [:]
+    private var generatedClient: SiloGuestClient?
     private var watchers: [String: Task<Void, Never>] = [:]
     private var leaseChecks: [String: Task<Void, Never>] = [:]
     private var evidence: [String: [GuestSessionEvidence]] = [:]
@@ -97,6 +98,35 @@ import Foundation
         var state = store.router
         state.guestPendingForms = []
         store.router = state
+    }
+
+    /// Restores guest clients and watches from saved placements and matched starts after the local Router starts.
+    func rehydrate(store: Store, client override: (any GuestClient)? = nil) async {
+        self.store = store
+        let router = store.router
+        var locations = router.pendingGuestDisables
+        if store.routerOn {
+            locations += router.runsOnProjects.map { $0.placement.location }
+            locations += router.pendingDesktopStarts.map(\.location)
+            locations += router.guestRelayDeliveries.map(\.location)
+            locations += router.guestPendingForms.map(\.location)
+        }
+        for location in Set(locations).sorted(by: { $0.key < $1.key }) {
+            guard case .computer(let deviceId, let computerId) = location else { continue }
+            let computer = GuestReference(deviceId: deviceId, computerId: computerId)
+            guard let client = override ?? guestClient(for: location) else { continue }
+            registerInstallationTarget(store: store, client: client, computer: computer)
+            if store.routerOn {
+                do { try await startWatching(store: store, client: client, computer: computer) }
+                catch {
+                    markGuestExecutionInaccessible(computer)
+                    store.routerHookError = "Guest Router reconnect is pending for \(computer.computerId): \(error.localizedDescription)"
+                }
+            } else if store.router.pendingGuestDisables.contains(location) {
+                do { try await applyPendingDisable(computer: computer, client: client) }
+                catch { store.routerHookError = "Guest Router disable is pending for \(computer.computerId): \(error.localizedDescription)" }
+            }
+        }
     }
 
     func disableAll() {
@@ -279,7 +309,13 @@ import Foundation
 
     func guestClient(for location: SessionLocation) -> (any GuestClient)? {
         guard case .computer(let deviceId, let computerId) = location else { return nil }
-        return clients[GuestReference(deviceId: deviceId, computerId: computerId).key]
+        let computer = GuestReference(deviceId: deviceId, computerId: computerId)
+        if let client = clients[computer.key] { return client }
+        guard let store, let engine = store.engineClient as? SocketEngineClient else { return nil }
+        let client = generatedClient ?? SiloGuestClient(engine: engine)
+        generatedClient = client
+        registerInstallationTarget(store: store, client: client, computer: computer)
+        return client
     }
 
     func guestFolder(for desktopSessionID: String) -> String? {

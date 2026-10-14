@@ -1093,8 +1093,11 @@ extension Store {
 
     /// At launch: the forms folder and its watcher, and the hook again if the app moved since it was installed.
     func startRouter() {
-        guard router.enabled else { return }
-        applyRouterSwitch(install: false)
+        if router.enabled { applyRouterSwitch(install: false) }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await GuestRouterRuntime.shared.rehydrate(store: self)
+        }
     }
 
     /// Where the Router's files are, when they may be touched at all: never in a demo, and in a test only where the test said.
