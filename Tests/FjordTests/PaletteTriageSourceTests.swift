@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Fjord
@@ -109,6 +110,48 @@ import Testing
         #expect(output.needsYou.isEmpty)
     }
 
+    @Test func anArchivedItemOfAHiddenCategoryCanStillBeShown() throws {
+        let store = store([InboxFixture.pr(12, repo: hidden)])
+        store.finish(try #require(store.entries.first))
+        let visits = Visits()
+        let entry = try #require(item("entry:pr:h/hid#12", in: PaletteTriageSource.make(context(store, visits: visits))))
+        #expect(entry.actions.first?.title == "Show in Inbox")
+        entry.actions[0].run()
+        #expect(visits.calls.last?.destination == .done)
+    }
+
+    @Test func showInInboxFallsBackToGitHubWhenItIsNoLongerListed() throws {
+        let store = store([InboxFixture.pr(13)])
+        var opened: [String] = []
+        store.interceptOpen = { opened.append($0) }
+        let visits = Visits()
+        let entry = try #require(item("entry:pr:a/one#13", in: PaletteTriageSource.make(context(store, visits: visits))))
+        // Its category was hidden since the palette opened.
+        store.categories[0].hidden = true
+        try #require(entry.actions.first).run()
+        #expect(visits.calls.isEmpty)
+        #expect(opened.count == 1)
+        // Triage was switched off: the same.
+        store.categories[0].hidden = false
+        store.setTool(.triage, on: false)
+        try #require(entry.actions.first).run()
+        #expect(visits.calls.isEmpty)
+        #expect(opened.count == 2)
+    }
+
+    @Test func copyLinkReadsTheLinkWhenItRuns() throws {
+        let store = store([workflow(60, state: .failing)])
+        let entry = try #require(item("entry:workflow:c/ci:60@main", in: PaletteTriageSource.make(context(store))))
+        let url = try #require(URL(string: "https://github.com/c/ci/actions/runs/99"))
+        store.things["workflow:c/ci:60@main"]?.url = url
+        let board = NSPasteboard.general
+        let before = board.string(forType: .string)
+        try #require(entry.actions.first { $0.title == "Copy link" }).run()
+        #expect(board.string(forType: .string) == url.absoluteString)
+        board.clearContents()
+        if let before { board.setString(before, forType: .string) }
+    }
+
     @Test func showInInboxPicksTheRowBeforeGoingThereAndScrollsToIt() throws {
         let store = store([InboxFixture.pr(4)])
         let hub = HubState()
@@ -185,8 +228,12 @@ import Testing
         let visits = Visits()
         let output = PaletteTriageSource.make(context(store, visits: visits))
         let entry = try #require(item("entry:pr:a/one#9", in: output))
+        // Idle, with no card: the Router has nothing to show, so it opens in the Claude app.
+        var opened: [String] = []
+        store.interceptOpen = { opened.append($0) }
         try #require(entry.actions.first { $0.title == "Open its session" }).run()
-        #expect(visits.calls.last?.destination == .router)
+        #expect(opened == ["Open in Claude · Fix 9"])
+        #expect(visits.calls.isEmpty)
         try #require(entry.actions.first { $0.title == "Show the Triage run" }).run()
         #expect(visits.calls.last?.destination == .computerRun(record.id))
 
@@ -201,6 +248,45 @@ import Testing
         #expect(visits.calls.last?.destination == .computerRun(record.id))
     }
 
+    @Test func openingItsSessionSelectsItsCardOrRevealsItsWorkingRow() throws {
+        let store = store([InboxFixture.pr(11)])
+        Demo.populate(store, .router)
+        store.categories = self.store([]).categories
+        store.things = [:]
+        let thing = InboxFixture.pr(11)
+        store.things[thing.id] = thing
+        let working = try #require(store.routerWorkingRows.first { row in !store.router.cards.contains { $0.sessionID == row.id } })
+        store.actionLedger.runs["k"] = ActionRun(category: UUID(), thing: thing.id, action: UUID(), trigger: "enter",
+                                                 state: .done, at: Date(), sessionID: working.id)
+        let visits = Visits()
+        let model = RouterModel()
+        let ctx = PaletteContext(store: store, navigator: AppNavigator(start: .router, defaults: nil), routerModel: model,
+                                 hub: HubState(), go: { visits.calls.append(($0, nil)) })
+        var entry = try #require(item("entry:" + thing.id, in: PaletteTriageSource.make(ctx)))
+        try #require(entry.actions.first { $0.title == "Open its session" }).run()
+        #expect(visits.calls.last?.destination == .router)
+        #expect(model.revealRequest?.id == RouterModel.workingID(working.id))
+
+        // An open card that the page draws is selected instead.
+        let card = try #require(store.router.cards.first { $0.isOpen && store.routerZones.zone(of: $0.id) != nil })
+        store.actionLedger.runs["k"]?.sessionID = card.sessionID
+        entry = try #require(item("entry:" + thing.id, in: PaletteTriageSource.make(ctx)))
+        try #require(entry.actions.first { $0.title == "Open its session" }).run()
+        #expect(model.selection == card.id)
+        #expect(visits.calls.last?.destination == .router)
+    }
+
+    @Test func aWaitingCardWatchingAThingsCILinksItsSessionToIt() throws {
+        let store = store([workflow(50, state: .pending)])
+        store.setTool(.router, on: true)
+        store.claudeSessions["s2"] = ClaudeSession(id: "s2", title: "Waiter", folder: nil, lastActivity: Date())
+        var card = RouterCard(id: "s2#w1", sessionID: "s2", kind: .waiting, title: "Waiting", folder: nil, text: "", createdAt: Date())
+        card.triage = RouterTriage(watch: .init(target: .ci(thing: "workflow:c/ci:50@main"), label: "CI on c/ci"))
+        store.router.cards = [card]
+        let entry = try #require(item("entry:workflow:c/ci:50@main", in: PaletteTriageSource.make(context(store))))
+        #expect(entry.actions.contains { $0.title == "Open its session" })
+    }
+
     @Test func aSessionUnknownToClaudeIsNotOffered() throws {
         let store = store([InboxFixture.pr(10)])
         store.actionLedger.runs["k"] = ActionRun(category: UUID(), thing: "pr:a/one#10", action: UUID(), trigger: "enter",
@@ -209,26 +295,25 @@ import Testing
         #expect(!entry.actions.contains { $0.title == "Open its session" })
     }
 
-    @Test func needsYouIsAtMostFiveNewestFirstWithYourOwnAndFailingCIAhead() throws {
+    @Test func needsYouIsTheFiveNewestUnreadOpenItemsOfShownCategories() throws {
         var things = (1...7).map { InboxFixture.pr($0, by: Person(login: "other"), updated: ago(Double($0))) }
         things.append(InboxFixture.pr(20, by: InboxFixture.author, updated: ago(300)))
         things.append(InboxFixture.pr(30, repo: hidden, by: Person(login: "other"), updated: ago(0.5)))
         things.append(workflow(40, state: .failing, minutes: 200))
         things.append(workflow(41, state: .passing, minutes: 0.2))
         let store = store(things)
-        // Read, archived and hidden ones never need you.
+        // Read, archived and hidden ones never need you, nor does a CI item that doesn't fail.
         store.markSeen(try #require(store.entries.first { $0.id == "pr:a/one#1" }))
         store.finish(try #require(store.entries.first { $0.id == "pr:a/one#2" }))
 
         let output = PaletteTriageSource.make(context(store))
-        let ids = output.needsYou.map(\.id)
-        #expect(ids.count == 5)
-        // The two ahead (mine, then failing CI, in the order of their dates: the failing workflow is the newer), then the newest of the rest.
-        #expect(Set(ids.prefix(2)) == ["entry:pr:a/one#20", "entry:workflow:c/ci:40@main"])
-        #expect(ids.prefix(2).first == "entry:workflow:c/ci:40@main")
-        #expect(Array(ids.dropFirst(2)) == ["entry:pr:a/one#3", "entry:pr:a/one#4", "entry:pr:a/one#5"])
-        // They are in the items too (the palette drops the duplicates).
-        for id in ids { #expect(item(id, in: output) != nil) }
+        #expect(output.needsYou.map(\.id) == (3...7).map { "entry:pr:a/one#\($0)" })
+        for item in output.needsYou { #expect(self.item(item.id, in: output) != nil) }
+
+        // Fewer than five: the failing workflow and an older PR of yours follow, in order of date.
+        for n in 3...6 { store.markSeen(try #require(store.entries.first { $0.id == "pr:a/one#\(n)" })) }
+        #expect(PaletteTriageSource.make(context(store)).needsYou.map(\.id)
+                == ["entry:pr:a/one#7", "entry:workflow:c/ci:40@main", "entry:pr:a/one#20"])
     }
 
     @Test func eachCategoryIsAnItemThatShowsAndEdits() throws {

@@ -22,27 +22,23 @@ enum PaletteTriageSource {
         let categories = store.categories
         let byID = Dictionary(categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let sections = Dictionary(store.categorySections.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
-        let links = Links(store.actionLedger)
-        let me = (store.me?.login ?? store.login).lowercased()
+        let links = Links(store)
         let keys = Keys(store)
 
         // Inbox items, and which of them need you.
         let entries = store.entries
         output.items.reserveCapacity(entries.count + categories.count + links.runs.count)
-        var candidates: [(index: Int, priority: Bool, date: Date)] = []
+        var candidates: [(index: Int, date: Date)] = []
         for entry in entries {
             let category = byID[entry.categoryID]
             let item = entryItem(entry, category: category, links: links, keys: keys, context: context)
             if entry.isUnread, !entry.isDone, let category, !category.hidden {
-                let thing = entry.thing
-                let failing = category.isCI && thing.checks == .failing
-                let mine = !me.isEmpty && thing.kind == .pr && thing.author?.login.lowercased() == me
                 // A CI category only asks for a look when something fails (its badge counts the failing ones).
-                if !category.isCI || failing { candidates.append((output.items.count, failing || mine, thing.updatedAt)) }
+                if !category.isCI || entry.thing.checks == .failing { candidates.append((output.items.count, entry.thing.updatedAt)) }
             }
             output.items.append(item)
         }
-        candidates.sort { ($0.priority ? 1 : 0, $0.date) > ($1.priority ? 1 : 0, $1.date) }
+        candidates.sort { $0.date > $1.date }
         output.needsYou = candidates.prefix(needsYouLimit).map { output.items[$0.index] }
 
         for category in categories {
@@ -74,13 +70,14 @@ enum PaletteTriageSource {
     }
 
     /// What was started for each thing: the latest session and the latest Triage run its category actions began, and the
-    /// runs themselves. Built from the ledger once.
+    /// runs themselves. A waiting Router card that watches a thing's CI links its session to it too. Built once.
     private struct Links {
         var session: [String: String] = [:]
         var run: [String: UUID] = [:]
         let runs: [UUID: ComputerRunRecord]
 
-        @MainActor init(_ ledger: ActionLedger) {
+        @MainActor init(_ store: Store) {
+            let ledger = store.actionLedger
             runs = ledger.computerRuns
             var sessionAt: [String: Date] = [:]
             var runAt: [String: Date] = [:]
@@ -93,6 +90,9 @@ enum PaletteTriageSource {
                     runAt[action.thing] = action.at
                     run[action.thing] = id
                 }
+            }
+            for card in store.router.cards where card.kind == .waiting && card.isOpen {
+                if case .ci(let thing)? = card.triage?.watch?.target, session[thing] == nil { session[thing] = card.sessionID }
             }
         }
     }
@@ -136,24 +136,23 @@ enum PaletteTriageSource {
 
         var actions: [PaletteAction] = []
         let open = PaletteAction(id: "github", title: "Open on GitHub", symbol: "arrow.up.right.square", caps: keys.open) {
-            if let entry = fresh(id, store) { store.open(entry) }
+            openOnGitHub(id, store)
         }
-        if hidden {
-            // Its category isn't shown, so there is no place to show it in: GitHub comes first.
-            actions.append(open)
-        } else {
+        // An archived item is in the archive whatever its category; an open one in a hidden category is listed nowhere, so
+        // GitHub comes first.
+        if entry.isDone || !hidden {
             let hub = context.hub
             let go = context.go
-            let destination = entry.isDone ? AppDestination.done : .category(entry.categoryID)
             actions.append(PaletteAction(id: "show", title: "Show in Inbox", symbol: category?.symbol ?? "tray") {
+                // It may have changed since the palette opened: shown only where it is still listed, else it opens on GitHub.
+                guard let target = destination(of: id, store) else { return openOnGitHub(id, store) }
                 // The selection first: going to the page clears a pick that isn't listed there (AppRootFollow).
-                let target = fresh(id, store).map { $0.isDone ? AppDestination.done : .category($0.categoryID) } ?? destination
                 hub.selection = "i:" + id
                 go(target)
                 hub.requestScroll("i:" + id)
             })
-            actions.append(open)
         }
+        actions.append(open)
 
         if keys.offersRouter {
             let routerModel = context.routerModel
@@ -186,10 +185,11 @@ enum PaletteTriageSource {
                 if let entry = fresh(id, store) { store.restore(entry) }
             })
         }
-        let link = thing.url.absoluteString
         actions.append(PaletteAction(id: "copy", title: "Copy link", symbol: "link") {
+            // Read now: a workflow's page changes with each run.
+            guard let url = store.things[id]?.url else { return }
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(link, forType: .string)
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
         })
 
         return PaletteItem(id: "entry:" + id, kind: .entry, title: thing.title, subtitle: subtitle, keywords: words,
@@ -197,20 +197,25 @@ enum PaletteTriageSource {
                            date: thing.updatedAt, weight: entry.isDone ? 0.6 : hidden ? 0.7 : 1, actions: actions)
     }
 
-    /// "Open its session": the Router's card for it when the Router is on (its open card if it has one, else its working row),
-    /// else the session in the Claude app.
+    /// "Open its session": in the Router when the Router is on and draws it (its open card, else its working row), else the
+    /// session in the Claude app.
     private static func sessionAction(_ session: String, context: PaletteContext) -> PaletteAction {
         let store = context.store
         let routerModel = context.routerModel
         let go = context.go
         return PaletteAction(id: "session", title: "Open its session", symbol: "bubble.left.and.text.bubble.right") {
             guard store.routerOn else { return store.openAgent(session) }
-            if let card = store.router.cards.first(where: { $0.sessionID == session && $0.isOpen }) {
+            let page = store.routerZones
+            // A waiting card is drawn as its session's row.
+            if let card = store.router.cards.first(where: { $0.sessionID == session && $0.isOpen }),
+               page.zone(of: card.kind == .waiting ? RouterModel.workingID(session) : card.id) != nil {
                 routerModel.select(card.id, store: store)
                 go(.router)
-            } else {
+            } else if store.routerWorkingRows.contains(where: { $0.id == session }) {
                 go(.router)
                 routerModel.reveal(RouterModel.workingID(session))
+            } else {
+                store.openAgent(session)
             }
         }
     }
@@ -234,6 +239,21 @@ enum PaletteTriageSource {
         default: "smallcircle.filled.circle"
         }
         return .symbol(symbol, tint: category?.color.swatch)
+    }
+
+    /// Where an item can be shown now: the archive if it is archived, else its category if that is still shown; nil when Triage is
+    /// off, the item is gone, or it is listed nowhere.
+    private static func destination(of id: String, _ store: Store) -> AppDestination? {
+        guard store.triageOn, let entry = fresh(id, store) else { return nil }
+        if entry.isDone { return .done }
+        return store.categories.contains { $0.id == entry.categoryID && !$0.hidden } ? .category(entry.categoryID) : nil
+    }
+
+    /// Opens a thing on GitHub, from its entry if it has one still (that marks it seen), else from the thing.
+    private static func openOnGitHub(_ id: String, _ store: Store) {
+        if let entry = fresh(id, store) { return store.open(entry) }
+        guard let thing = store.things[id] else { return }
+        if let intercept = store.interceptOpen { intercept("Open on GitHub · \(thing.title)") } else { Link.open(thing.url) }
     }
 
     /// The entry as it is now (its action may run after it was archived or read).
