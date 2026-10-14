@@ -1,0 +1,9 @@
+Merged `main` and committed the bootstrap integration in `aec93970`; the merge is `9a956f07`. Provisioning now stages the guest CA and network bootstrap, and startup runs the sole legacy-computer migration before lifecycle recovery and start-at-launch ([provision.rs](/Users/polarzero/silo-work/p3-macos-proxy/app/SiloUI/src-tauri/engine/src/macos_computers/provision.rs:235), [macos_computers.rs](/Users/polarzero/silo-work/p3-macos-proxy/app/SiloUI/src-tauri/engine/src/macos_computers.rs:1974), [startup.rs](/Users/polarzero/silo-work/p3-macos-proxy/app/SiloUI/src-tauri/engine/src/startup.rs:243)). I also fixed the macOS bundle overlay so it includes the existing MicroSandbox and Git tools.
+
+The full workspace run passed: 2,420 passed, 0 failed, 30 ignored; formatting passed; the packaging test passed 4/4; and the Dev bundle built and opened successfully.
+
+**Live qualification is incomplete.** The single Dev macOS install reached 59 GB free, below the probe’s 60 GB floor, so I cancelled it. The incomplete computer and restore image were removed; final checks showed 90 GB free, no Dev macOS records, and no open VM files. Guest keychain trust, DNS, substitution, revocation, isolation, and launch migration were not tested. The worktree is clean.
+
+Reports: [implementation report](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/p3-macos-proxy-2.md) and [probe record](/Users/polarzero/code/projects/lookout/docs/design/silo-api/probes/p3-macos-proxy-2.md).
+
+To close the live gate, rerun on a host with enough free space to finish the restore and guest install while keeping at least 60 GB free.

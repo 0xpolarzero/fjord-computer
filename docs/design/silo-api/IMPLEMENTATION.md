@@ -44,6 +44,22 @@ Owner, 2026-10-14: push Silo `main` to GitHub only once everything is merged. Fj
 - `computers.configuration.change`: a `macosResources` variant (`computerId`, `expected {cpus, memoryGiB, diskGiB}`, `cpus`, `memoryGiB`, `requestId`). Source: reports/p4-triage-computers-fixes.md.
 - `guest.exec.get`: an optional top-level `deviceId` (jobs addressed by `(deviceId, jobId)`). Same source.
 
+## Integration backlog (after all domains merge)
+
+- The handshake capability list advertises every implemented method (d-computers).
+- silod launch-pass adapter, so `computers.launch` reports the last pass (d-computers).
+- Engine timers for revocation retries, log expiry and port repair with no clients connected (95 A-26; d-computers).
+- silod hosts the real macOS VM window (d-computers, d-display).
+- Core `operations.*` routes by `deviceId` (remote jobs), then remove `mirror_owner_connect` (d-access).
+- Persisted `RemovalIntent` for device removal, crash-safe across key revocation (d-access).
+- Relay owner events to controllers (d-access).
+- A device health timer (d-access).
+- `desktop.connect` gated to engine-to-engine callers (d-display).
+- Silo.app (Tauri) becomes a silod client (P2-tauri-client).
+- Fjord switches from the mock to SocketEngineClient, followed by end-to-end live checks.
+- Live qualifications: macOS proxy (B-27 family), archive round trip with SecureToken, independent viewers, GitHub sign-in over SSH (B-25, needs the owner).
+- Follow-up fix tasks from the non-blocking reviews: d-computers, d-access, and later ones.
+
 ## Implementer brief
 
 1. **The spec is the authority.** Read README.md, 95-decisions.md (with §3 amendments; later overrides earlier), 05-engine-architecture.md, and the sections for your domain. When the spec and the code disagree, follow the spec and note it in your report. Where the spec leaves something open, choose the simplest option and write it down.

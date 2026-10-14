@@ -1,0 +1,7 @@
+Merged `main` and completed the self-route, Apple Virtualization archive export/import, mixed archive support, and import rekey work in conventional commits. The final workspace run passed: **2,451 passed, 32 ignored, 0 failed**. Rust formatting and `git diff --check` passed; the branch is clean.
+
+The previous “no NAT lease” diagnosis was wrong. The old VM received a lease; why SSH readiness timed out is still unknown. On the rerun, one disposable VM got a lease and accepted SSH. Files listing, port publication, and the local alias passed, but the Files directory was empty. The probe used the compiled `silod` helper; no app bundle was launched or inspected.
+
+The report is at [p3-macos-parity-2b.md](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/p3-macos-parity-2b.md). Archive import still needs a post-rekey guest boot and login check; SecureToken and volume ownership remain unqualified ([Apple Secure Token guide](https://support.apple.com/guide/deployment/use-secure-and-bootstrap-tokens-in-deployments/dep24dbdcf9e/1/web/1.0)).
+
+The disposable guest `a7fee0ee-2c69-4d40-a212-58cc0da63ab8` is stopped, but its 64 GiB clone remains registered. Permanent deletion requires confirmation at the time of the UI action. Reply `delete a7fee0ee-2c69-4d40-a212-58cc0da63ab8` to authorize it.
