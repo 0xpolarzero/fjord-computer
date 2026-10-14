@@ -276,15 +276,15 @@ import Testing
     // MARK: Reading the answer
 
     @Test func theAnswerIsReadOrIgnored() throws {
-        #expect(DigestPrompt.read(#"{"changed":false,"for_you":"x"}"#) == nil)
-        #expect(DigestPrompt.read("not json") == nil)
-        #expect(DigestPrompt.read("[1]") == nil)
-        let read = try #require(DigestPrompt.read(
+        #expect(try DigestPrompt.read(#"{"changed":false,"for_you":"x"}"#) == nil)
+        #expect(throws: DigestPrompt.Unreadable.self) { try DigestPrompt.read("not json") }
+        #expect(throws: DigestPrompt.Unreadable.self) { try DigestPrompt.read("[1]") }
+        let read = try #require(try DigestPrompt.read(
             #"{"changed":true,"for_you":"Y","worth_a_look":"L","projects":[{"key":"/p","text":"T"},{"key":"/q"}],"label":" lab ","why":"why\n"}"#))
         #expect(read.forYou == "Y" && read.worthALook == "L" && read.label == "lab" && read.why == "why")
         #expect(read.projects.map(\.key) == ["/p"] && read.projects.map(\.text) == ["T"])
         // Missing "changed" reads as changed.
-        #expect(DigestPrompt.read(#"{"for_you":"Y"}"#)?.forYou == "Y")
+        #expect(try DigestPrompt.read(#"{"for_you":"Y"}"#)?.forYou == "Y")
     }
 
     // MARK: Persistence
@@ -366,6 +366,7 @@ import Testing
         store.routerDigester.suspended = true
         store.router.cards.append(card("b#1", kind: .asks))
         store.routerDigester.suspended = false
+        store.routerDigester.baseline(store: store)
         #expect(store.routerDigester.pending.isEmpty)
         await store.routerDigester.flush(store: store)
         #expect(calls == 1)
@@ -449,9 +450,10 @@ import Testing
         }
         store.router.cards[1] = card("n2#2", kind: .asks, folder: "/p/b")
         await w.flush(store: store)
-        #expect(w.pending.contains(.changed(["n1"], projects: ["/p/a"])))
+        // (Checked against what was acknowledged, the mid-write check also names n2, whose change was in flight.)
+        #expect(w.pending.contains { if case .changed(let ids, let projects) = $0 { ids.contains("n1") && projects.contains("/p/a") } else { false } })
         w.runner = { _, context, _ in
-            #expect(context.contains("these projects: /p/a"))
+            #expect(context.contains("/p/a"))
             return #"{"changed":true,"for_you":"<need s=\"n2\">B</need>","worth_a_look":"","projects":[],"label":"","why":""}"#
         }
         await w.flush(store: store)
@@ -467,7 +469,7 @@ import Testing
         put(store, session("r1"))
         store.claudeActivity = ["r1": todo(1)]
         w.baseline(store: store)
-        #expect(w.snapshot?["r1"] != nil)
+        #expect(w.acknowledged?["r1"] != nil)
         var step = todo(1)
         step.text = "Reading foo.swift"
         step.narration = "Let me look"
@@ -708,6 +710,110 @@ import Testing
         w.stop()
     }
 
+    @Test func aProgressChangeAfterAFailedRewriteDoesNotSkipTheBackoff() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        put(store, session("r1"))
+        store.claudeActivity = ["r1": todo(1)]
+        w.baseline(store: store)
+        w.setVisible(true, store: store)
+        struct Boom: Error {}
+        w.runner = { _, _, _ in throw Boom() }
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.check(store)
+        await w.flush(store: store)
+        #expect(w.failures == 1 && w.scheduledIn == .seconds(30))
+        // Progress arrives: the wait is not shortened, and the failure count is kept.
+        store.claudeActivity = ["r1": todo(2)]
+        w.check(store)
+        #expect(w.failures == 1)
+        #expect(w.scheduledIn == .seconds(30))
+        // Hidden, too.
+        w.setVisible(false, store: store)
+        store.claudeActivity = ["r1": todo(3)]
+        w.check(store)
+        #expect(w.failures == 1 && w.scheduledIn == .seconds(30))
+        w.stop()
+        #expect(w.failures == 0 && w.retryAt == nil)
+    }
+
+    @Test func aRouterTurnedOffAndOnWhileARewriteWasOutStillFindsTheUnwrittenChange() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        w.baseline(store: store)
+        w.runner = { _, _, _ in
+            await MainActor.run { store.router.enabled = false }
+            return Self.firstBrief
+        }
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.check(store)
+        let before = store.routerDigest
+        await w.flush(store: store)
+        #expect(store.routerDigest == before && w.urgentSince == nil && w.pending.isEmpty)
+        store.router.enabled = true
+        w.check(store)
+        #expect(w.urgentSince != nil && w.pending.contains(.changed(["a"], projects: ["/code/lookout"])))
+        w.stop()
+    }
+
+    @Test func anUnreadableAnswerIsAFailureButNothingChangedIsAnAcknowledgement() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        w.baseline(store: store)
+        w.runner = { _, _, _ in "not json" }
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.check(store)
+        await w.flush(store: store)
+        #expect(w.failures == 1 && w.scheduledIn == .seconds(30) && w.urgentSince != nil)
+        #expect(w.pending.contains(.changed(["a"], projects: ["/code/lookout"])))
+        w.runner = { _, _, _ in #"{"changed":false}"# }
+        await w.flush(store: store)
+        #expect(w.failures == 0 && w.retryAt == nil && w.pending.isEmpty && w.urgentSince == nil)
+        // It is acknowledged: the same state is no news.
+        w.check(store)
+        #expect(w.pending.isEmpty && w.urgentSince == nil)
+        w.stop()
+    }
+
+    @Test func nothingIsWrittenBeforeClaudesSessionsAreListedUnlessClaudeIsUnavailable() async throws {
+        let store = InboxFixture.store([])
+        let w = store.routerDigester
+        w.clock = { self.t0 }
+        w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        var calls = 0
+        w.runner = { _, _, _ in
+            calls += 1
+            return Self.firstBrief
+        }
+        store.agents.enabled = true
+        store.router.enabled = true
+        w.baseline(store: store)
+        #expect(w.urgentSince != nil && w.timer == nil)
+        await w.flush(store: store)
+        #expect(calls == 0 && store.routerDigest == nil && w.urgentSince != nil)
+        // The listing arrives: the waiting write is scheduled.
+        put(store, session("r1"))
+        w.check(store)
+        #expect(w.timer != nil)
+        await w.flush(store: store)
+        #expect(calls == 1 && store.routerDigest != nil)
+        w.stop()
+        // Claude not there: there will be no listing, so it doesn't wait for one.
+        let other = InboxFixture.store([])
+        let v = other.routerDigester
+        v.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        v.runner = { _, _, _ in Self.firstBrief }
+        other.agents.enabled = true
+        other.claudeLink = .missing
+        other.router.enabled = true
+        v.baseline(store: other)
+        #expect(v.timer != nil)
+        v.stop()
+    }
+
     @Test func aWaitingCardsBriefChangingIsUrgent() {
         let store = InboxFixture.store([])
         let w = quiet(store)
@@ -716,7 +822,7 @@ import Testing
         c.triage = RouterTriage(state: .waiting)
         store.router.cards = [c]
         w.baseline(store: store)
-        let waiting = w.snapshot?["a"]
+        let waiting = w.acknowledged?["a"]
         #expect(waiting?.urgent.card == "a#1")
         store.router.cards[0].brief = "Waiting on CI"
         w.check(store)
