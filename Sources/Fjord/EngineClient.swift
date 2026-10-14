@@ -540,6 +540,7 @@ final class MockEngineClient: EngineClient {
     private(set) var disconnectCount = 0
     private(set) var stopRequests: [String] = []
     var stopRefusalIDs: Set<String> = []
+    private(set) var deleteRequests: [ComputerDeleteRequest] = []
     private var nextJob = 1
     private var finished: [String: OperationJobFinished] = [:]
     private var subscribers: [String: Subscriber] = [:]
@@ -688,6 +689,15 @@ final class MockEngineClient: EngineClient {
 
     func computersDelete(_ request: ComputerDeleteRequest) async throws -> ComputerJob {
         let row = try requireComputer(request.computerId)
+        deleteRequests.append(request)
+        if case .linux(let computer) = row {
+            guard let expected = request.expected else {
+                throw EngineClientError.invalidAction("Linux computer deletion requires its expected configuration.")
+            }
+            guard expected == computer.configuration else {
+                throw EngineClientError.invalidAction("This computer changed while the delete was waiting.")
+            }
+        }
         guard row.canDelete else { throw EngineClientError.invalidAction("Stop the computer first.") }
         let jobId = nextJobId()
         Task { @MainActor [weak self] in

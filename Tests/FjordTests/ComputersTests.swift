@@ -50,6 +50,23 @@ import Testing
         #expect(macosMerged.linux == original.linux)
     }
 
+    @Test func linuxDeleteCarriesAndEnforcesExpectedConfiguration() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        let configuration = try #require(client.inventory.linux.computers.first { $0.id == MockEngineClient.failedID }?.configuration)
+
+        await model.delete(MockEngineClient.failedID)
+        #expect(client.deleteRequests.first?.expected == configuration)
+        #expect(model.actionError == nil)
+
+        do {
+            _ = try await client.computersDelete(ComputerDeleteRequest(computerId: MockEngineClient.failedID))
+            Issue.record("The mock must reject a Linux delete without expected configuration.")
+        } catch {
+            #expect(error.localizedDescription.contains("expected configuration"))
+        }
+    }
+
     @Test func cancelLeavesEngineConnectedAndDoesNotStopComputers() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client)

@@ -196,7 +196,12 @@ final class ComputersModel {
         catch { actionError = error.localizedDescription }
     }
     func delete(_ computerId: String) async {
-        await perform { try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId)) }
+        guard let row = inventory?.computer(computerId) else {
+            actionError = EngineClientError.notFound("This computer no longer exists.").localizedDescription
+            return
+        }
+        let expected: ComputerConfiguration? = if case .linux(let computer) = row { computer.configuration } else { nil }
+        await perform { try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId, expected: expected)) }
     }
     func showDisplay(_ computerId: String) async {
         actionError = nil
