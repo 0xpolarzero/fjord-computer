@@ -689,6 +689,10 @@ final class MockEngineClient: EngineClient {
     /// Agent tools per computer id; a computer not listed has them ready.
     var mockAgentTools: [String: SiloWireAgentToolsStatus] = [:]
     private(set) var agentToolsSetupRequests: [String] = []
+    /// `GuestReference.key` of each agent-tools status read and setup, so tests can see which owner was addressed.
+    private(set) var agentToolsStatusRequests: [String] = []
+    private(set) var agentToolsSetupKeys: [String] = []
+    private(set) var remoteStartRequests: [String] = []
     private var mockExportDestination: String?
     private var mockArchives: [SiloWireArchive] = []
     var mockExportState = SiloWireBackupState(archives: [], availability: .available, snapshotId: "mock-exports")
@@ -822,6 +826,18 @@ final class MockEngineClient: EngineClient {
     }
 
     func computersStart(_ reference: ComputerReference) async throws -> ComputerJob {
+        if let deviceId = reference.deviceId {
+            guard var owned = ownerInventories[deviceId], let index = owned.linux.computers.firstIndex(where: { $0.id == reference.computerId }) else {
+                throw EngineClientError.notFound("This computer no longer exists.")
+            }
+            remoteStartRequests.append("\(deviceId)/\(reference.computerId)")
+            let jobId = nextJobId()
+            owned.linux.computers[index].state = .running
+            owned.linux.computers[index].stateDetail = "Running"
+            ownerInventories[deviceId] = owned
+            finish(jobId)
+            return ComputerJob(jobId: jobId)
+        }
         let row = try requireComputer(reference.computerId)
         let jobId = nextJobId()
         switch row {
@@ -1240,7 +1256,9 @@ final class MockEngineClient: EngineClient {
             return try mockResult(mockSecrets, as: Result.self)
         case "desktop.status":
             let params = try mockDecode(call.params, as: SiloWireComputerTargetParams.self)
-            let agentTools = mockAgentTools[params.computerId] ?? Self.readyAgentTools
+            agentToolsStatusRequests.append(GuestReference(deviceId: params.deviceId, computerId: params.computerId).key)
+            let agentTools = mockAgentTools[GuestReference(deviceId: params.deviceId, computerId: params.computerId).key]
+                ?? mockAgentTools[params.computerId] ?? Self.readyAgentTools
             let status = SiloWireDesktopStatus(agentTools: agentTools, autoStart: false, installed: true,
                 state: "running", updateAvailable: false, updateRequired: false)
             return try mockResult(status, as: Result.self)
@@ -1248,11 +1266,16 @@ final class MockEngineClient: EngineClient {
             let params = try mockDecode(call.params, as: SiloWireDesktopActionParams.self)
             guard params.action == .setupAgentTools else { return try mockResult(mockFeatureJob(), as: Result.self) }
             agentToolsSetupRequests.append(params.computerId)
+            agentToolsSetupKeys.append(GuestReference(deviceId: params.deviceId, computerId: params.computerId).key)
             let jobId = nextJobId()
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(40))
                 guard let self else { return }
-                if self.nextJobFailure == nil { self.mockAgentTools[params.computerId] = Self.readyAgentTools }
+                if self.nextJobFailure == nil {
+                    let key = GuestReference(deviceId: params.deviceId, computerId: params.computerId).key
+                    if self.mockAgentTools[key] != nil { self.mockAgentTools[key] = Self.readyAgentTools }
+                    else { self.mockAgentTools[params.computerId] = Self.readyAgentTools }
+                }
                 self.finish(jobId)
             }
             return try mockResult(SiloWireJobStartResult(jobId: jobId), as: Result.self)

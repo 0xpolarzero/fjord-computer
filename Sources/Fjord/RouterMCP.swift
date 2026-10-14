@@ -1290,7 +1290,7 @@ final class RouterMCPServer: @unchecked Sendable {
             }
             defer { guestRuntime.releaseStart(reservation) }
             do {
-                let rowName = store.computers.inventory?.allComputers.first(where: { $0.id == computerId })?.name ?? computerId
+                let rowName = store.computers.placementRow(deviceId: deviceId, computerId: computerId)?.name ?? computerId
                 let settingsFile = guestSSHSettings ?? ClaudeSSHSettings()
                 let prepared = try await guestRuntime.prepareDesktopStart(client: guestClient,
                     placement: runsOn.placement, project: runsOn, prompt: ready.text, computerName: rowName,
@@ -1345,7 +1345,7 @@ final class RouterMCPServer: @unchecked Sendable {
     /// rather than failing when the session starts.
     private func ensureGuestAgentTools(store: Store, placement: ProjectPlacement) async throws {
         guard case .computer(let deviceId, let computerId, _) = placement else { return }
-        let row = store.computers.inventory?.computer(computerId)
+        let row = store.computers.placementRow(deviceId: deviceId, computerId: computerId)
         do {
             try await store.computers.ensureAgentTools(GuestReference(deviceId: deviceId, computerId: computerId),
                 kind: row?.kind ?? .linux, computerName: row?.name ?? computerId)
@@ -1354,9 +1354,14 @@ final class RouterMCPServer: @unchecked Sendable {
 
     private func ensureGuestComputerReady(store: Store, placement: ProjectPlacement) async throws {
         guard case .computer(let deviceId, let computerId, _) = placement else { return }
-        // The current Computers model is scoped to its local owner. Refuse a remote identity until that owner-aware
-        // lifecycle adapter arrives; dropping deviceId here could start a same-named local computer.
-        guard deviceId == nil else { throw Failure("Starting computers on a remote owner isn't supported by this Router client yet.") }
+        // A computer on another Mac is read and started on its owner by deviceId; the local inventory (which may hold a
+        // same-id computer) is never consulted for it.
+        if let deviceId {
+            do { _ = try await store.computers.ensureRemoteRunning(deviceId: deviceId, computerId: computerId) }
+            catch { throw Failure("Fjord couldn't start this computer on its owner: \(error.localizedDescription)") }
+            await store.computers.refreshPlacementInventories()
+            return
+        }
         do { try await store.computers.connect() }
         catch { throw Failure("Fjord couldn't refresh this computer's state: \(error.localizedDescription)") }
         guard let row = store.computers.inventory?.computer(computerId) else {

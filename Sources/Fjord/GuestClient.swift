@@ -298,7 +298,9 @@ actor MockGuestClient: GuestClient {
         _ = installInclude
         guard accounts[computer.key] != nil else { throw GuestClientFailure.unavailable("No mock account for \(computer.key)") }
         if let found = aliases[computer.key] { return found }
-        let result = GuestSSHAlias(alias: "ssh-\(computer.computerId)", ownerName: computer.deviceId ?? "This Mac",
+        // Local computers get Silo's own alias; another device's computer gets the remote alias that goes through its owner.
+        let name = computer.deviceId.map { "silo-remote-\($0)-\(computer.computerId)" } ?? "ssh-\(computer.computerId)"
+        let result = GuestSSHAlias(alias: name, ownerName: computer.deviceId ?? "This Mac",
                                    home: accounts[computer.key]!.home)
         aliases[computer.key] = result
         return result
