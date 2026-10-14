@@ -4,7 +4,7 @@ The window's header search fields become one palette: ⌘K (or a click on the he
 page) opens it over the window. Built on branch `palette` (worktree `.claude/worktrees/palette`); each piece below has one
 owner and its own files. Where things live in the code today: [integration-map.md](integration-map.md). The look:
 [search-tabs-avatars.md §1](../spec/search-tabs-avatars.md) (Claude desktop's palette, traced). Why it is built this way:
-`reports/How Mac command palettes are built.md` in the main checkout.
+[docs/research/command-palettes/report.md](../../research/command-palettes/report.md).
 
 ## What it is for
 
