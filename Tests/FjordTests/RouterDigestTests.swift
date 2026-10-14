@@ -447,7 +447,7 @@ import Testing
         current.projectOf["r3"] = "/p/a"
         w.look(store)
         #expect(w.pending.contains(.refresh(["n2"], projects: ["/p/a"])))
-        #expect(w.pending.contains(.running(["r3"])))
+        #expect(w.pending.contains(.running(["r3"], projects: ["/p/a"])))
         w.stop()
         // The throttle holds the next one back until `runningEvery` has passed, and it is still there then.
         current.kinds["r4"] = .run

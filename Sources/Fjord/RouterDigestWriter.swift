@@ -23,7 +23,7 @@ import os
         /// You said something to the Router or a session (the sessions it went to, once the Router has routed it).
         case you(String, sessions: [String])
         /// Which sessions run changed.
-        case running(Set<String>)
+        case running(Set<String>, projects: Set<String> = [])
         /// Sessions whose state changed without a card doing it (background tasks ended, a session matched to another
         /// project, or the board moved while a rewrite was being made), and the projects they were in and are in now (a
         /// session that stopped is on no board, so its project can't be found from it).
@@ -34,13 +34,16 @@ import os
             switch self {
             case .card(let s, _), .handled(let s, _, _): [s]
             case .you(_, let sessions): sessions
-            case .running(let ids), .refresh(let ids, _): ids.sorted()
+            case .running(let ids, _), .refresh(let ids, _): ids.sorted()
             }
         }
 
         /// The projects it names itself, besides those of its sessions.
         var projects: Set<String> {
-            if case .refresh(_, let projects) = self { projects } else { [] }
+            switch self {
+            case .refresh(_, let projects), .running(_, let projects): projects
+            default: []
+            }
         }
     }
 
@@ -189,7 +192,7 @@ import os
         if !runOnly.isEmpty, clock().timeIntervalSince(runningTold) >= Self.runningEvery {
             advance(runOnly, to: current)
             runningTold = clock()
-            note([.running(runOnly)], store: store)
+            note([.running(runOnly, projects: Self.projects(of: runOnly, was, current))], store: store)
         }
     }
 
@@ -624,7 +627,7 @@ enum DigestPrompt {
         case .you(let text, let sessions):
             let to = sessions.isEmpty ? "" : " (to " + sessions.map { "id=\($0) \(title($0))" }.joined(separator: ", ") + ")"
             return "the user said" + to + ": " + clip(text, 300)
-        case .running(let ids):
+        case .running(let ids, _):
             return "sessions started or stopped running: " + ids.sorted().map { "id=\($0) \(title($0))" }.joined(separator: ", ")
         case .refresh(let ids, _):
             return "sessions whose state changed: " + ids.sorted().map { "id=\($0) \(title($0))" }.joined(separator: ", ")

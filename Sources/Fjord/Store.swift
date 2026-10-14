@@ -574,6 +574,8 @@ final class Store {
     @ObservationIgnored let routerBriefer = RouterBriefer()
     /// Keeps the Brief up to date (RouterDigestWriter.swift).
     @ObservationIgnored let routerDigester = RouterDigestWriter()
+    /// Claude's sessions have been read once (even none): later reads are news for the Brief's watch, the first isn't.
+    @ObservationIgnored var briefSessionsBaselined = false
     /// The Brief, kept with the Router's state.
     var routerDigest: RouterDigest? {
         get { router.digest }

@@ -568,7 +568,8 @@ extension Store {
             agents = state
         }
         // Only on change: the views observing these redraw on every assignment.
-        let firstSessions = claudeSessions.isEmpty && !byID.isEmpty
+        let firstSessions = !briefSessionsBaselined
+        briefSessionsBaselined = true
         if claudeSessions != byID { claudeSessions = byID }
         // The sessions coming in the first time isn't news for the Brief's watch: it compares with them.
         if firstSessions { routerDigester.rebaseline(store: self) }
