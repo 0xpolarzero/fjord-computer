@@ -19,6 +19,8 @@ struct ClaudeSession: Identifiable, Hashable {
     var running = false
     /// Claude Code's own session id: names the transcript (`~/.claude/projects/*/<id>.jsonl`).
     var cliID: String?
+    /// Desktop's own SSH connection metadata. Local mirrors expose the configured host alias here.
+    var sshHost: String? = nil
 
     struct Summary: Hashable {
         var blocked: Bool
@@ -113,6 +115,11 @@ enum Claude {
         var postTurnSummary: Summary?
         var postTurnSummaryFor: String?
         var lastAssistantUuid: String?
+        var sshConfig: SSHConfig?
+
+        struct SSHConfig: Decodable {
+            var sshHost: String?
+        }
 
         struct Summary: Decodable {
             var status_category: String?
@@ -143,7 +150,7 @@ enum Claude {
             folder: scratch ? nil : path, isArchived: raw.isArchived ?? false,
             completedTurns: raw.completedTurns ?? 0, lastActivity: lastActivity,
             lastFocused: date(raw.lastFocusedAt), lastUserMessage: lastMessage,
-            summary: summary, running: running, cliID: raw.cliSessionId)
+            summary: summary, running: running, cliID: raw.cliSessionId, sshHost: raw.sshConfig?.sshHost)
     }
 
     enum ReadError: Error {

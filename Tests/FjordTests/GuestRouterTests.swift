@@ -291,6 +291,103 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop, evidence: [evidence]) == evidence)
         #expect(PendingDesktopStartMatcher.match(pending, desktop: [desktop[0], desktop[0]], evidence: [evidence]) == nil)
         #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop, evidence: []) == nil)
+        let sameFolderElsewhere = DesktopSSHSession(id: "local_other", alias: "ssh-other-computer", folder: pending.folder)
+        #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop + [sameFolderElsewhere], evidence: [evidence]) == evidence)
+    }
+
+    @Test func desktopSessionDecodesItsActualSSHHostAlias() throws {
+        let raw = Data(#"{"sessionId":"local_ssh","cliSessionId":"cli-ssh","cwd":"/workspace/repo","sshConfig":{"sshHost":"ssh-guest-1"}}"#.utf8)
+        let session = try #require(Claude.decodeSession(raw))
+        #expect(session.sshHost == "ssh-guest-1")
+    }
+
+    @MainActor @Test func emptyPrefillsMatchAndADesktopSessionCanOnlyBeClaimedOnce() {
+        let opened = Date(timeIntervalSince1970: 1_800_000_000)
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        let message = SessionFork.Message(uuid: "message-1", parent: nil, text: "Fix the bug", cwd: "/workspace/repo",
+                                          at: opened.addingTimeInterval(10))
+        let evidence = GuestSessionEvidence(computer: computer, cliSessionID: "cli-1", hostSessionID: "local_desktop-1",
+            pid: 42, startedAt: 123, renewedAt: 1_800_000_010_000, capabilities: [ClaudePlugin.inboxCapability],
+            transcriptMessages: [message])
+        let desktop = DesktopSSHSession(id: "local_desktop-1", alias: "ssh-computer-1", folder: "/workspace/repo")
+        let empty = PendingDesktopStart(projectID: UUID(), location: location, alias: desktop.alias,
+            folder: desktop.folder, prompt: "", openedAt: opened)
+
+        #expect(PendingDesktopStartMatcher.match(empty, desktop: [desktop], evidence: [evidence]) == evidence)
+
+        let first = PendingDesktopStart(projectID: UUID(), location: location, alias: desktop.alias,
+            folder: desktop.folder, prompt: "Fix", openedAt: opened)
+        let second = PendingDesktopStart(projectID: UUID(), location: location, alias: desktop.alias,
+            folder: desktop.folder, prompt: "Fix", openedAt: opened)
+        var state = RouterState()
+        state.pendingDesktopStarts = [first, second]
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        store.router = state
+
+        #expect(store.reconcileDesktopStart(first.id, desktop: [desktop], evidence: [evidence]))
+        #expect(!store.reconcileDesktopStart(second.id, desktop: [desktop], evidence: [evidence]))
+        #expect(store.router.pendingDesktopStarts.filter { $0.state == .matched }.count == 1)
+
+        var edited = first
+        edited.prompt = "Original prefill"
+        let editedEvidence = GuestSessionEvidence(computer: computer, cliSessionID: evidence.cliSessionID,
+            hostSessionID: evidence.hostSessionID, pid: evidence.pid, startedAt: evidence.startedAt,
+            renewedAt: evidence.renewedAt, capabilities: evidence.capabilities,
+            transcriptMessages: [SessionFork.Message(uuid: "message-edited", parent: nil,
+                text: "The person edited the prefilled task", cwd: "/workspace/repo", at: opened.addingTimeInterval(10))])
+        #expect(PendingDesktopStartMatcher.match(edited, desktop: [desktop], evidence: [editedEvidence]) == nil)
+        #expect(PendingDesktopStartMatcher.match(edited, desktop: [desktop], evidence: [editedEvidence],
+                                                 allowEditedPrompt: true) == editedEvidence)
+    }
+
+    @MainActor @Test func personCanSelectTheActualDesktopSessionAfterEditingThePrefill() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        let opened = Date(timeIntervalSince1970: 1_800_000_000)
+        let desktopID = "local_edited_guest"
+        let cliID = "guest-cli-edited"
+        store.claudeSessions[desktopID] = ClaudeSession(id: desktopID, title: "Edited task", folder: "/workspace/repo",
+            lastActivity: opened.addingTimeInterval(10), running: false, cliID: cliID, sshHost: "ssh-computer-1")
+        let pending = PendingDesktopStart(projectID: UUID(),
+            location: .computer(deviceId: computer.deviceId, computerId: computer.computerId),
+            alias: "ssh-computer-1", folder: "/workspace/repo", prompt: "Original prefill", openedAt: opened)
+        var state = store.router
+        state.pendingDesktopStarts = [pending]
+        store.router = state
+
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let key = String(repeating: "cd", count: 32)
+        let start: Int64 = 1_800_000_000_000
+        _ = try await guest.filesWrite(.init(computer: computer, path: paths.key, data: Data(key.utf8), mode: 0o600))
+        let presence = try JSONSerialization.data(withJSONObject: [
+            "state": "live", "sessionId": cliID, "pid": 42, "startedAt": 123,
+            "keyId": ClaudePlugin.keyID(of: key), "renewedAt": start, "capabilities": [ClaudePlugin.inboxCapability],
+        ])
+        _ = try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.presence, cliID), data: presence, mode: 0o600))
+        let registry = try JSONSerialization.data(withJSONObject: [
+            "hostSessionId": desktopID, "sessionId": cliID, "pid": 42, "startedAt": 123,
+        ])
+        _ = try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.registry, "42.json"), data: registry, mode: 0o600))
+        let transcript = try JSONSerialization.data(withJSONObject: [
+            "type": "user", "uuid": "message-edited", "cwd": "/workspace/repo", "timestamp": "2027-01-15T08:00:10.000Z",
+            "message": ["role": "user", "content": "The person edited the prefilled task"],
+        ], options: [.sortedKeys]) + Data("\n".utf8)
+        _ = try await guest.filesWrite(.init(computer: computer,
+            path: GuestRouterPaths.join(GuestRouterPaths.join(paths.projects, "workspace-repo"), "\(cliID).jsonl"),
+            data: transcript, mode: 0o600))
+        let clockArgv = [account.nodeExecutable, "-e", "process.stdout.write(String(Date.now()))"]
+        await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data(String(start + 1_000).utf8), stderr: Data()), argv: clockArgv)
+
+        try await GuestRouterRuntime.shared.startWatching(store: store, client: guest, computer: computer)
+
+        #expect(store.router.pendingDesktopStarts.first?.state == .readyInClaude)
+        #expect(GuestRouterRuntime.shared.selectableDesktopSessions(for: pending.id).map(\.id) == [desktopID])
+        #expect(GuestRouterRuntime.shared.selectDesktopSession(desktopID, for: pending.id))
+        #expect(store.router.pendingDesktopStarts.first?.state == .matched)
+        #expect(store.router.pendingDesktopStarts.first?.guestSessionID == cliID)
     }
 
     @MainActor @Test func matchedSessionKeepsGuestIdentityWhenMappedBackToItsRouterProject() {

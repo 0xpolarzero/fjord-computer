@@ -159,12 +159,36 @@ import Foundation
         guard let store else { return }
         for pending in store.router.pendingDesktopStarts where pending.state == .readyInClaude {
             let candidates = store.claudeSessions.values.compactMap { session -> DesktopSSHSession? in
-                guard !session.isArchived, let folder = session.folder, folder == pending.folder,
+                guard !session.isArchived, let alias = session.sshHost, let folder = session.folder, folder == pending.folder,
                       session.lastActivity >= pending.openedAt else { return nil }
-                return DesktopSSHSession(id: session.id, alias: pending.alias, folder: folder)
+                return DesktopSSHSession(id: session.id, alias: alias, folder: folder)
             }
             _ = store.reconcileDesktopStart(pending.id, desktop: candidates, evidence: evidence[pending.location.key] ?? [])
         }
+    }
+
+    func selectableDesktopSessions(for pendingID: UUID) -> [ClaudeSession] {
+        guard let store, let pending = store.router.pendingDesktopStarts.first(where: {
+            $0.id == pendingID && $0.state == .readyInClaude
+        }) else { return [] }
+        let claimed = Set(store.router.pendingDesktopStarts.compactMap { start in
+            start.state == .matched ? start.desktopSessionID : nil
+        })
+        return store.claudeSessions.values.filter { session in
+            !session.isArchived && !claimed.contains(session.id) && session.sshHost == pending.alias
+                && session.folder == pending.folder && session.lastActivity >= pending.openedAt
+        }.sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    @discardableResult
+    func selectDesktopSession(_ desktopSessionID: String, for pendingID: UUID) -> Bool {
+        guard let store, let pending = store.router.pendingDesktopStarts.first(where: {
+            $0.id == pendingID && $0.state == .readyInClaude
+        }), let session = selectableDesktopSessions(for: pendingID).first(where: { $0.id == desktopSessionID }),
+              let alias = session.sshHost, let folder = session.folder else { return false }
+        let desktop = DesktopSSHSession(id: session.id, alias: alias, folder: folder)
+        return store.reconcileDesktopStart(pending.id, desktop: [desktop],
+            evidence: evidence[pending.location.key] ?? [], allowEditedPrompt: true)
     }
 
     func answer(_ guestForm: GuestPendingForm, answers: [String: String], cardID: String) async throws {

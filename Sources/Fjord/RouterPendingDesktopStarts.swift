@@ -10,6 +10,7 @@ struct RouterPendingDesktopStarts: View {
             if !pending.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(pending) { start in
+                    let selectable = GuestRouterRuntime.shared.selectableDesktopSessions(for: start.id)
                     HStack(spacing: 10) {
                         Image(systemName: start.state == .matched ? "checkmark.circle.fill" : "arrow.up.right.square")
                             .foregroundStyle(start.state == .matched ? Theme.accent : Theme.amber)
@@ -22,6 +23,16 @@ struct RouterPendingDesktopStarts: View {
                         }
                         Spacer(minLength: 8)
                         if start.state == .readyInClaude {
+                            if !selectable.isEmpty {
+                                Menu("Match session") {
+                                    ForEach(selectable) { session in
+                                        Button(session.title) {
+                                            _ = GuestRouterRuntime.shared.selectDesktopSession(session.id, for: start.id)
+                                        }
+                                    }
+                                }
+                                .font(Theme.Typography.meta)
+                            }
                             ActionButton("Open in Claude") {
                                 if let url = GuestDesktopStart.reopen(start) { Link.open(url) }
                             }
