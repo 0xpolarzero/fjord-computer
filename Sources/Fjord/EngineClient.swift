@@ -800,7 +800,7 @@ final class UnavailableEngineClient: EngineClient {
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult { try unavailable() }
     func computersStart(_ reference: ComputerReference) async throws -> ComputerJob { try unavailable() }
     func computersStop(_ reference: ComputerReference) async throws -> ComputerJob { try unavailable() }
-    func computersForceStop(_ reference: ComputerReference) async throws { try unavailable() }
+    func computersForceStop(_ reference: ComputerReference) async throws { throw EngineClientError.unavailable }
     func computersDelete(_ request: ComputerDeleteRequest) async throws -> ComputerJob { try unavailable() }
     func computersConfigurationRead(deviceId: String?) async throws -> ComputerConfigurationRequest { try unavailable() }
     func checkpointsList(computerId: String, deviceId: String?) async throws -> [ComputerCheckpoint] { try unavailable() }
@@ -808,13 +808,13 @@ final class UnavailableEngineClient: EngineClient {
     func checkpointsRestore(_ request: CheckpointRestoreRequest) async throws -> ComputerJob { try unavailable() }
     func checkpointsFork(_ request: CheckpointForkRequest) async throws -> ComputerJob { try unavailable() }
     func checkpointsDelete(_ request: CheckpointDeleteRequest) async throws -> ComputerJob { try unavailable() }
-    func displayShow(_ reference: ComputerReference) async throws { try unavailable() }
+    func displayShow(_ reference: ComputerReference) async throws { throw EngineClientError.unavailable }
     func operationsList(deviceId: String?) async throws -> OperationsList { try unavailable() }
     func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot { try unavailable() }
-    func operationsCancel(jobId: String, deviceId: String?) async throws { try unavailable() }
+    func operationsCancel(jobId: String, deviceId: String?) async throws { throw EngineClientError.unavailable }
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String { try unavailable() }
     func eventsUnsubscribe(subscription: String) async {}
-    func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws { try unavailable() }
+    func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws { throw EngineClientError.unavailable }
     func engineDisconnect() async throws {}
 }
 
