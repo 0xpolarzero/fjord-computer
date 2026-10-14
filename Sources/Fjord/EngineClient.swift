@@ -154,10 +154,20 @@ struct ComputerInventory: Codable, Equatable {
 
     func computer(_ id: String) -> ComputerRow? { allComputers.first { $0.id == id } }
 
+    func applying(_ change: ComputersChangedPayload) -> ComputerInventory {
+        ComputerInventory(linux: change.linux ?? linux, macos: change.macos ?? macos)
+    }
+
     var runningComputers: [RunningComputer] {
         allComputers.filter { $0.displayState == .running }
             .map { RunningComputer(computerId: $0.id, name: $0.name, kind: $0.kind) }
     }
+}
+
+/// Payload for `computers.changed` (05 §4.2 D, 10 §12.2). Only changed platforms are present.
+struct ComputersChangedPayload: Codable, Equatable {
+    var linux: ApplicationSource? = nil
+    var macos: MacosComputersState? = nil
 }
 
 enum ComputerRow: Identifiable, Equatable {
@@ -399,7 +409,7 @@ struct OperationJobFinished: Codable, Equatable {
 }
 
 enum EngineEvent: Equatable {
-    case computersChanged(ComputerInventory)
+    case computersChanged(ComputersChangedPayload)
     case jobProgress(OperationJobProgress)
     case jobFinished(OperationJobFinished)
 
@@ -579,7 +589,7 @@ final class MockEngineClient: EngineClient {
                                          installed: false, setupComplete: false, needsPersonalizing: false,
                                          checkpoints: [], checkpointOperation: nil, pendingRestore: nil)
             inventory.macos.computers.append(computer)
-            publish(.computersChanged(inventory))
+            publish(.computersChanged(ComputersChangedPayload(macos: inventory.macos)))
             setProgress(jobId: jobId, computerId: computer.id, state: .preparing, progress: 0.05, detail: "Preparing")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(1))
@@ -603,7 +613,7 @@ final class MockEngineClient: EngineClient {
                                       state: .stopped, stateDetail: "Stopped", canDismissError: false,
                                       freshness: "fresh", checkpoints: [])
         inventory.linux.computers.append(row)
-        publish(.computersChanged(inventory))
+        publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
         setProgress(jobId: jobId, computerId: row.id, state: "setting-up", progress: 0.4, detail: "Preparing computer")
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -748,7 +758,7 @@ final class MockEngineClient: EngineClient {
                                      checkpoints: [], checkpointOperation: nil,
                                      pendingRestore: request.checkpointId.map { MacosPendingRestore(checkpointId: $0, memory: false) })
             inventory.macos.computers.append(fork)
-            publish(.computersChanged(inventory))
+            publish(.computersChanged(ComputersChangedPayload(macos: inventory.macos)))
             setProgress(jobId: jobId, computerId: request.computerId, state: "running", progress: 0.55,
                         detail: "Copying checkpoint")
             Task { @MainActor [weak self] in
@@ -765,7 +775,7 @@ final class MockEngineClient: EngineClient {
                                            state: .stopped, stateDetail: "Stopped", canDismissError: false,
                                            freshness: "fresh", checkpoints: [])
             inventory.linux.computers.append(fork)
-            publish(.computersChanged(inventory))
+            publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
             scheduleFinish(jobId, after: .milliseconds(400))
         }
         return ComputerJob(jobId: jobId)
@@ -884,13 +894,13 @@ final class MockEngineClient: EngineClient {
     private func updateLinux(_ id: String, _ update: (inout ApplicationComputer) -> Void) {
         guard let index = inventory.linux.computers.firstIndex(where: { $0.id == id }) else { return }
         update(&inventory.linux.computers[index])
-        publish(.computersChanged(inventory))
+        publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
     }
 
     private func updateMacos(_ id: String, _ update: (inout MacosComputer) -> Void) {
         guard let index = inventory.macos.computers.firstIndex(where: { $0.id == id }) else { return }
         update(&inventory.macos.computers[index])
-        publish(.computersChanged(inventory))
+        publish(.computersChanged(ComputersChangedPayload(macos: inventory.macos)))
     }
 
     private func appendCheckpoint(_ checkpoint: ComputerCheckpoint, to id: String) {
@@ -910,8 +920,13 @@ final class MockEngineClient: EngineClient {
     }
 
     private func removeComputer(_ id: String) {
+        let changedKind = inventory.computer(id)?.kind
         inventory.linux.computers.removeAll { $0.id == id }
         inventory.macos.computers.removeAll { $0.id == id }
-        publish(.computersChanged(inventory))
+        switch changedKind {
+        case .linux?: publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
+        case .macos?: publish(.computersChanged(ComputersChangedPayload(macos: inventory.macos)))
+        case nil: break
+        }
     }
 }

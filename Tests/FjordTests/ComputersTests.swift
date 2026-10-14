@@ -31,6 +31,25 @@ import Testing
         #expect(AppTermination.shouldInspectComputers(computersEnabled: true, engineAvailable: true))
     }
 
+    @Test func platformOnlyComputerEventsMergeWithoutReplacingOtherPlatform() throws {
+        let original = MockEngineClient.demoInventory
+        let linuxJSON = Data("""
+        {"linux":{"computers":[]}}
+        """.utf8)
+        let linuxChange = try JSONDecoder().decode(ComputersChangedPayload.self, from: linuxJSON)
+        let linuxMerged = original.applying(linuxChange)
+        #expect(linuxMerged.linux.computers.isEmpty)
+        #expect(linuxMerged.macos == original.macos)
+
+        var macosState = original.macos
+        macosState.computers = []
+        let macosJSON = try JSONEncoder().encode(ComputersChangedPayload(macos: macosState))
+        let macosChange = try JSONDecoder().decode(ComputersChangedPayload.self, from: macosJSON)
+        let macosMerged = original.applying(macosChange)
+        #expect(macosMerged.macos.computers.isEmpty)
+        #expect(macosMerged.linux == original.linux)
+    }
+
     @Test func cancelLeavesEngineConnectedAndDoesNotStopComputers() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client)

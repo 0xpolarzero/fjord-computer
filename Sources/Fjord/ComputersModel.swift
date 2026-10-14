@@ -241,8 +241,8 @@ final class ComputersModel {
 
     private func receive(_ event: EngineEvent) {
         switch event {
-        case .computersChanged(let inventory):
-            self.inventory = inventory
+        case .computersChanged(let change):
+            if let inventory { self.inventory = inventory.applying(change) }
             error = nil
         case .jobProgress(let progress):
             activeJob = progress
