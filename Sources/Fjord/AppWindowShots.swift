@@ -374,6 +374,21 @@ enum AppWindowShots {
                  model.digest.historyOpen = true
                  if let history = store.routerDigest?.history { model.digest.expanded = [history[1].id] }
              }, appearance: .darkAqua),
+        // Handled since the text was written: the release approved and the docs marked seen, checks before the rewrite.
+        Shot(name: "router-brief-handled", destination: { _ in .router }, sidebarHidden: true,
+             size: CGSize(width: 1600, height: 1420), compose: { model, store in
+                 Demo.routerDigest(store); model.pickBrief()
+                 for session in ["local_demo-release", "local_demo-docs"] {
+                     if let card = store.router.cards.last(where: { $0.sessionID == session && $0.isOpen }) {
+                         store.setCardAddressed(card.id, true)
+                     }
+                 }
+             }, appearance: .aqua),
+        // No brief yet, the Router on: it is about to be written.
+        Shot(name: "router-brief-empty", destination: { _ in .router }, sidebarHidden: true,
+             size: CGSize(width: 1400, height: 800), compose: { model, store in
+                 Demo.routerLanes(store); model.pickBrief()
+             }, appearance: .aqua),
         Shot(name: "router-canvas-lanesdata", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1000), compose: { model, store in
             Demo.routerLanes(store)
             model.pickCanvas()

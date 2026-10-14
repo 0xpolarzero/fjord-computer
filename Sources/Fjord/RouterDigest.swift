@@ -1,18 +1,20 @@
 import SwiftUI
 
-// The Brief (a prototype): Now written as prose by an agent. On top, what's for you and what's worth a look, in a few plain
-// sentences; under it a paragraph per project saying where it stands. The parts that point at a session are tags the
-// agent writes in the text, `<need s="…">`, `<look s="…">` and `<run s="…">`; the page draws them as highlights. Hovering
-// one shows its card over the text, clicking opens the card under the paragraph and points the composer at it, so you
-// answer as you do a card's. Whenever something comes in, an agent rereads the brief and rewrites what changed (not in this
-// prototype: the demo's text is written by hand).
+// The Brief: Now written as prose. On top, what's for you and what's worth a look, in a few plain sentences; under it a
+// paragraph per project saying where it stands. The parts that point at a session are tags the writer puts in the text,
+// `<need s="…">`, `<look s="…">` and `<run s="…">`; the page draws them as highlights, marked with what their session is
+// at now (read from its card, not from the words). Hovering one shows its card's gist, clicking opens the card under the
+// paragraph and points the composer at it, so you answer as you do a card's. Whenever something comes in from a session,
+// or from you, the writer (RouterDigestWriter.swift) rewrites the paragraphs it touches, and each rewrite is kept in the
+// brief's history with what set it off, why, and a diff of what changed.
 
-/// What the agent wrote: the lead's two parts and a paragraph per project, in the order it chose (which stays put).
-struct RouterDigest: Equatable {
-    struct Project: Equatable, Identifiable {
+/// The Brief: the lead's two parts and a paragraph per project, in an order the app keeps (new projects at the end), and
+/// its history.
+struct RouterDigest: Codable, Equatable {
+    struct Project: Codable, Equatable, Identifiable {
         /// The project's folder, as the canvas keys it.
         let folder: String
-        let text: String
+        var text: String
         var id: String { folder }
     }
 
@@ -21,21 +23,54 @@ struct RouterDigest: Equatable {
     /// What's worth a look, in a sentence or two (empty: none).
     var worthALook: String
     var projects: [Project]
+    /// When it was last rewritten.
     var at: Date
     /// Every rewrite, newest first: what set it off, what it changed and why.
     var history: [Revision] = []
+    /// When you last left the Brief: what changed after it is marked new.
+    var seenAt: Date?
 
-    /// A rewrite of the brief: the event that set it off (a session's or yours), a label for it, why the text changed, and
+    /// The history kept, newest first; older rewrites are dropped.
+    static let historyLimit = 200
+
+    init(forYou: String, worthALook: String, projects: [Project], at: Date, history: [Revision] = [], seenAt: Date? = nil) {
+        self.forYou = forYou
+        self.worthALook = worthALook
+        self.projects = projects
+        self.at = at
+        self.history = history
+        self.seenAt = seenAt
+    }
+
+    /// A paragraph's text by its key ("lead-you", "lead-look" or a project's folder); nil for a project not in it.
+    func text(_ key: String) -> String? {
+        switch key {
+        case Revision.forYouKey: forYou
+        case Revision.lookKey: worthALook
+        default: projects.first { $0.folder == key }?.text
+        }
+    }
+
+    /// The keys of the paragraphs a rewrite after `seenAt` changed.
+    var changedSinceSeen: Set<String> {
+        let since = seenAt ?? .distantPast
+        return Set(history.prefix { $0.at > since }.flatMap { $0.changes.map(\.key) })
+    }
+
+    /// A rewrite of the brief: the events that set it off (a session's, yours), a label for it, why the text changed, and
     /// each paragraph it changed, before and after.
-    struct Revision: Equatable, Identifiable {
-        enum Trigger: Equatable {
+    struct Revision: Codable, Equatable, Identifiable {
+        static let forYouKey = "lead-you"
+        static let lookKey = "lead-look"
+
+        enum Trigger: Codable, Equatable {
             /// Something came in from a session.
             case session(String)
             /// You said something (to the Router or a session).
             case you(String)
         }
 
-        struct Change: Equatable {
+        struct Change: Codable, Equatable {
             /// The paragraph: "lead-you", "lead-look" or a project's folder.
             let key: String
             let before: String
@@ -44,12 +79,31 @@ struct RouterDigest: Equatable {
 
         var id: String { "\(at.timeIntervalSince1970)" }
         let at: Date
-        let trigger: Trigger
+        /// What set it off, first the one that matters most; several events close together make one rewrite.
+        let triggers: [Trigger]
         /// What changed, in a few words.
         let label: String
         /// Why, in a sentence: what the event was and what it means for you.
         let why: String
         let changes: [Change]
+
+        init(at: Date, triggers: [Trigger], label: String, why: String, changes: [Change]) {
+            self.at = at
+            self.triggers = triggers
+            self.label = label
+            self.why = why
+            self.changes = changes
+        }
+
+        init(at: Date, trigger: Trigger, label: String, why: String, changes: [Change]) {
+            self.init(at: at, triggers: [trigger], label: label, why: why, changes: changes)
+        }
+    }
+
+    /// A rewrite recorded: newest first, the oldest past the limit dropped.
+    mutating func record(_ revision: Revision) {
+        history.insert(revision, at: 0)
+        if history.count > Self.historyLimit { history.removeLast(history.count - Self.historyLimit) }
     }
 }
 
@@ -265,28 +319,34 @@ struct DigestPage: View {
         let folders = model.canvasFolders(store, page: page)
         let items = Self.items(folders)
         Scrolling {
-            if let digest = store.routerDigest {
-                VStack(alignment: .leading, spacing: 28) {
-                    lead(digest, items: items, page: page)
-                    ForEach(digest.projects) { project in
-                        let folder = folders.first { $0.key == project.folder }
-                        DigestParagraph(store: store, model: model, page: page, items: items, key: project.folder,
-                                        markup: project.text) {
-                            HStack(spacing: 7) {
-                                Circle().fill(folder?.color ?? CDS.Text.muted).frame(width: 8, height: 8)
-                                Text(folder?.name ?? (project.folder as NSString).lastPathComponent)
-                                    .font(CDS.sans(13, .semibold)).foregroundStyle(CDS.Text.primary)
+            Group {
+                if let digest = store.routerDigest {
+                    let fresh = digest.changedSinceSeen
+                    VStack(alignment: .leading, spacing: 28) {
+                        lead(digest, items: items, page: page, fresh: fresh)
+                        ForEach(digest.projects) { project in
+                            let folder = folders.first { $0.key == project.folder }
+                            DigestParagraph(store: store, model: model, page: page, items: items, key: project.folder,
+                                            markup: project.text) {
+                                HStack(spacing: 7) {
+                                    Circle().fill(folder?.color ?? CDS.Text.muted).frame(width: 8, height: 8)
+                                    Text(folder?.name ?? (project.folder as NSString).lastPathComponent)
+                                        .font(CDS.sans(13, .semibold)).foregroundStyle(CDS.Text.primary)
+                                    if fresh.contains(project.folder) { NewTag() }
+                                }
                             }
+                            .zIndex(model.digest.hovered?.hasPrefix(project.folder + "#") == true ? 1 : 0)
                         }
-                        .zIndex(model.digest.hovered?.hasPrefix(project.folder + "#") == true ? 1 : 0)
                     }
+                } else {
+                    empty
                 }
-                .frame(maxWidth: Self.column, alignment: .leading)
-                .padding(.horizontal, 32)
-                .padding(.top, 20)
-                .padding(.bottom, LaneMetrics.bottom)
-                .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: Self.column, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.top, 20)
+            .padding(.bottom, LaneMetrics.bottom)
+            .frame(maxWidth: .infinity)
         }
         // The history, a column on the right, beside the text rather than over it.
         .safeAreaInset(edge: .trailing, spacing: 0) {
@@ -296,14 +356,45 @@ struct DigestPage: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        // Left: what changes from now on is new when you come back.
+        .onDisappear { Self.markSeen(store) }
+    }
+
+    /// What was new has been seen: what changes after now is marked new.
+    static func markSeen(_ store: Store, now: Date = Date()) {
+        guard var digest = store.routerDigest, !digest.changedSinceSeen.isEmpty || digest.seenAt == nil else { return }
+        digest.seenAt = now
+        store.routerDigest = digest
+    }
+
+    /// No brief yet: the Router off, the first one being written, or nothing going on.
+    @ViewBuilder private var empty: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Brief").font(CDS.sans(20, .semibold)).foregroundStyle(CDS.Text.primary)
+            Group {
+                if !store.router.enabled {
+                    Text("Turn the Router on and the Brief will tell you what your sessions need, project by project.")
+                } else if store.routerDigester.writing {
+                    Text("Writing the brief…")
+                } else if store.routerZones.needs.isEmpty && store.routerZones.notes.isEmpty && store.routerZones.working.isEmpty {
+                    Text("Nothing going on. When a session finishes, asks something or gets stuck, it will be here.")
+                } else {
+                    Text("The brief will be written in a moment.")
+                }
+            }
+            .font(CDS.sans(14)).foregroundStyle(CDS.Text.secondary)
+        }
     }
 
     /// The lead: what's for you, then what's worth a look, each under its name in its colour.
-    private func lead(_ digest: RouterDigest, items: [String: CanvasItem], page: RouterPage) -> some View {
+    private func lead(_ digest: RouterDigest, items: [String: CanvasItem], page: RouterPage, fresh: Set<String>) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
+            HStack(spacing: 10) {
                 Text("Brief").font(CDS.sans(20, .semibold)).foregroundStyle(CDS.Text.primary)
                 Spacer()
+                if store.routerDigester.writing {
+                    ProgressView().controlSize(.mini)
+                }
                 Text("updated " + agoPhrase(digest.at)).font(CDS.sans(12)).foregroundStyle(CDS.Text.muted)
                 if !digest.history.isEmpty {
                     let on = model.digest.historyOpen
@@ -320,17 +411,36 @@ struct DigestPage: View {
                     .accessibilityLabel(on ? "Hide the brief's history" : "Show the brief's history")
                 }
             }
-            DigestParagraph(store: store, model: model, page: page, items: items, key: "lead-you", markup: digest.forYou,
-                            size: 16) {
-                Label("For you", systemImage: RouterZone.needs.symbol)
-                    .font(CDS.sans(12, .semibold)).foregroundStyle(RouterZone.needs.tint)
+            DigestParagraph(store: store, model: model, page: page, items: items, key: RouterDigest.Revision.forYouKey,
+                            markup: digest.forYou, size: 16) {
+                HStack(spacing: 7) {
+                    Label("For you", systemImage: RouterZone.needs.symbol)
+                        .font(CDS.sans(12, .semibold)).foregroundStyle(RouterZone.needs.tint)
+                    if fresh.contains(RouterDigest.Revision.forYouKey) { NewTag() }
+                }
             }
             .zIndex(model.digest.hovered?.hasPrefix("lead-you#") == true ? 2 : 1)
             if !digest.worthALook.isEmpty {
-                DigestParagraph(store: store, model: model, page: page, items: items, key: "lead-look",
+                DigestParagraph(store: store, model: model, page: page, items: items, key: RouterDigest.Revision.lookKey,
                                 markup: digest.worthALook, size: 16) {
-                    Label("Worth a look", systemImage: RouterZone.notes.symbol)
-                        .font(CDS.sans(12, .semibold)).foregroundStyle(CDS.Text.accent)
+                    HStack(spacing: 7) {
+                        Label("Worth a look", systemImage: RouterZone.notes.symbol)
+                            .font(CDS.sans(12, .semibold)).foregroundStyle(CDS.Text.accent)
+                        if fresh.contains(RouterDigest.Revision.lookKey) { NewTag() }
+                        Spacer()
+                        let looks = page.notes
+                        if !looks.isEmpty {
+                            Button {
+                                for card in looks { store.setCardAddressed(card.id, true) }
+                                Announce.say("Marked seen")
+                            } label: {
+                                Label(looks.count == 1 ? "Mark seen" : "Mark all seen", systemImage: "checkmark")
+                                    .font(CDS.sans(11.5, .medium)).foregroundStyle(CDS.Text.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Mark everything worth a look as seen: it leaves the brief")
+                        }
+                    }
                 }
                 .zIndex(model.digest.hovered?.hasPrefix("lead-look#") == true ? 2 : 0)
             }
@@ -356,6 +466,19 @@ struct DigestPage: View {
             out[item.sessionID] = item
         }
         return out
+    }
+}
+
+/// "New": a paragraph a rewrite changed since you last left the Brief.
+private struct NewTag: View {
+    var body: some View {
+        Text("New")
+            .font(CDS.sans(CDS.Badge.font, .semibold))
+            .foregroundStyle(CDS.BadgeTint.accentText)
+            .padding(.horizontal, CDS.Badge.padX)
+            .frame(height: CDS.Badge.height)
+            .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(CDS.BadgeTint.accentFill))
+            .accessibilityLabel("Changed since you last looked")
     }
 }
 
@@ -393,15 +516,31 @@ private struct DigestParagraph<Title: View>: View {
                 HStack(alignment: .top, spacing: 8) {
                     CanvasNode(item: item, store: store, model: model, page: page)
                         .frame(maxWidth: 560, alignment: .leading)
-                    Button {
-                        withAnimation(Motion.spatial.resolved(reduce: false)) { state.open = nil }
-                    } label: {
-                        Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(CDS.Text.muted)
-                            .frame(width: 22, height: 22)
-                            .background(Circle().fill(CDS.alpha(0.06)))
+                    VStack(spacing: 6) {
+                        Button {
+                            withAnimation(Motion.spatial.resolved(reduce: false)) { state.open = nil }
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(CDS.Text.muted)
+                                .frame(width: 22, height: 22)
+                                .background(Circle().fill(CDS.alpha(0.06)))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close the card")
+                        // Worth a look: seen, and it leaves the brief.
+                        if case .note(let card) = item {
+                            Button {
+                                withAnimation(Motion.spatial.resolved(reduce: false)) { state.open = nil }
+                                model.address(card.id, store: store)
+                            } label: {
+                                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(CDS.Text.accent)
+                                    .frame(width: 22, height: 22)
+                                    .background(Circle().fill(CDS.Text.accent.opacity(0.14)))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Mark seen: it leaves the brief")
+                            .accessibilityLabel("Mark seen")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close the card")
                     .padding(.top, 6)
                 }
                 .padding(.top, 6)
@@ -482,7 +621,12 @@ private struct DigestHistory: View {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
                         .foregroundStyle(CDS.Text.muted).rotationEffect(.degrees(open ? 90 : 0)).frame(width: 8)
-                    trigger(revision.trigger).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                    trigger(revision.triggers.first ?? .you("")).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                    if revision.at > (digest.seenAt ?? .distantPast) {
+                        Circle().fill(CDS.Text.accent).frame(width: 6, height: 6)
+                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                            .accessibilityLabel("New")
+                    }
                     Text(revision.label).font(CDS.sans(12.5, .medium)).foregroundStyle(CDS.Text.primary)
                         .lineLimit(open ? nil : 1)
                     Spacer(minLength: 4)
@@ -495,7 +639,7 @@ private struct DigestHistory: View {
             .buttonStyle(.plain)
             if open {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(source(revision.trigger) + ". " + revision.why)
+                    Text(revision.triggers.map(source).joined(separator: "; ") + ". " + revision.why)
                         .font(CDS.sans(11.5)).foregroundStyle(CDS.Text.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(Array(revision.changes.enumerated()), id: \.offset) { _, change in
@@ -597,6 +741,13 @@ struct DigestState {
     let tint: Color
     let label: String
 
+    /// Its card handled since the text was written.
+    static let handled = DigestState(symbol: "checkmark.circle.fill", tint: CDS.Text.muted, label: "Done")
+
+    init(symbol: String, tint: Color, label: String) {
+        (self.symbol, self.tint, self.label) = (symbol, tint, label)
+    }
+
     init(_ item: CanvasItem?, kind: DigestMarkup.Kind) {
         switch item {
         case .need(let c), .done(let c):
@@ -629,11 +780,22 @@ private struct DigestSpan: View {
     let text: String
     let size: CGFloat
 
+    /// The open card an item is, if it has one.
+    static func cardID(_ item: CanvasItem) -> String? {
+        switch item {
+        case .need(let c), .ready(let c), .note(let c): c.id
+        default: nil
+        }
+    }
+
     var body: some View {
         let state = model.digest
         let hovered = state.hovered == id
         let open = state.open == id
-        let status = DigestState(item, kind: kind)
+        // Handled since the text was written (answered, archived, seen): a check at once, before the rewrite says so.
+        let finished: Bool = { if case .done = item { true } else { item == nil } }()
+        let handled = finished && store.router.cards.last(where: { $0.sessionID == session }).map { !$0.isOpen } == true
+        let status = handled ? DigestState.handled : DigestState(item, kind: kind)
         let quiet = kind == .run
         let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
         Button {
@@ -682,6 +844,19 @@ private struct DigestSpan: View {
                     .offset(y: size + 14)
                     .allowsHitTesting(false)
                     .transition(.opacity)
+            }
+        }
+        .contextMenu {
+            if let item, let card = DigestSpan.cardID(item) {
+                Button("Open card") {
+                    withAnimation(Motion.spatial.resolved(reduce: false)) { state.open = id }
+                    model.select(card, store: store, reveal: false)
+                }
+                if case .note = item {
+                    Button("Mark seen") { model.address(card, store: store) }
+                } else {
+                    Button("Archive") { model.address(card, store: store) }
+                }
             }
         }
         .accessibilityLabel(status.label.isEmpty ? text : "\(text), \(status.label)")

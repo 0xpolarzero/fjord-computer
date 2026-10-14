@@ -437,7 +437,7 @@ extension Store {
         return RouterLive.firstSentences(said, count: RouterBriefContext.sentences(subject), limit: 280) ?? subject.text
     }
 
-    private static func haiku(store: Store) -> Runner {
+    static func haiku(store: Store, model: String = model, timeout: TimeInterval = timeout) -> Runner {
         let find = store.routerClaudeBinary ?? { RouterStatus.findDefault() }
         let home = store.routerFiles?.routerHome
         return { system, context, schema in

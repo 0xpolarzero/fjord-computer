@@ -97,6 +97,8 @@ enum FjordTools {
                               "\(s.key): " + (String(data: (try? JSONSerialization.data(withJSONObject: s.schema, options: [.sortedKeys])) ?? Data(), encoding: .utf8) ?? "")
                           }.joined(separator: "; ")],
                       ]] as [String: Any]),
+        Tool(name: "mark_seen", doc: "Marks Router cards worth a look as seen, when the user says they've seen or read them: they leave Now and the Brief. Name each by its session's id or words of its title (the board tool lists them). Only cards worth a look: one that needs the user (a question, a plan, an OK) is answered, not marked seen.",
+             fields: [.init("cards", .list(.string("session id or title words")), "The cards worth a look the user has seen.")]),
         Tool(name: "list_known", doc: "The repos, people or teams Triage knows (from what it has fetched and what the user has), to fill a rule's values; also the special values and the groups of that kind.",
              fields: [.init("kind", .choice(["repos", "people", "teams"]), "What to list."),
                       .init("query", .string("text"), "Only those containing it.", fallback: .absent),
@@ -106,7 +108,7 @@ enum FjordTools {
     static let specs: [[String: Any]] = tools.map(\.spec)
     static let names: Set<String> = Set(tools.map(\.name))
     /// Triage's own (all but the settings'): offered only while it is on.
-    static let triageNames = names.subtracting(["get_settings", "set_setting"])
+    static let triageNames = names.subtracting(["get_settings", "set_setting", "mark_seen"])
 
     /// A tool's input as a shape: what the Router sends is checked against it, and its schema is made from it.
     static func shape(of name: String) -> JSONShape? { tools.first { $0.name == name }.map { .object($0.fields) } }
@@ -144,6 +146,7 @@ extension RouterTools {
             case "get_settings": text = try getSettings(store, args)
             case "set_setting": text = try setSetting(store, args)
             case "list_known": text = try listKnown(store, args)
+            case "mark_seen": text = try markSeen(store, args)
             default: return nil
             }
             return RouterRPC.ToolResult(text: text)
@@ -544,6 +547,30 @@ extension RouterTools {
         if !also.isEmpty { out["alsoMatchesButComesAfter"] = also }
         if !off.isEmpty { out["rulesOffUntilFixed"] = off }
         return Self.json(out)
+    }
+
+    /// The cards worth a look you said you've seen, marked so (addressed by you): they leave Now and the Brief.
+    func markSeen(_ store: Store, _ args: [String: Any]) throws -> String {
+        let asked = try Self.strings(checked("mark_seen", args), "cards")
+        guard !asked.isEmpty else { throw Failure("Name the cards worth a look the user has seen") }
+        let notes = store.routerZones.notes
+        var marked: [String] = [], unknown: [String] = []
+        for query in asked {
+            let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            let words = q.lowercased().split(whereSeparator: \.isWhitespace)
+            let hits = notes.filter { card in
+                card.sessionID == q || card.id == q
+                    || (!words.isEmpty && words.allSatisfy { card.title.lowercased().contains($0) })
+            }
+            guard let card = hits.first, hits.count == 1 || hits.allSatisfy({ $0.sessionID == card.sessionID }) else {
+                unknown.append(hits.isEmpty ? "“\(q)”: no card worth a look by that name" : "“\(q)”: more than one card matches")
+                continue
+            }
+            store.setCardAddressed(card.id, true)
+            marked.append("“\(card.title)”")
+        }
+        if marked.isEmpty { throw Failure("Nothing marked: " + unknown.joined(separator: "; ")) }
+        return "Marked seen: " + marked.joined(separator: ", ") + (unknown.isEmpty ? "." : ". Not found: " + unknown.joined(separator: "; "))
     }
 
     func markEntries(_ store: Store, _ args: [String: Any]) throws -> String {

@@ -15,8 +15,6 @@ final class Store {
     @ObservationIgnored let computers: ComputersModel
     @ObservationIgnored var routerPlacementShot = false
     @ObservationIgnored private var engineConnectAttempt: Task<Void, Never>?
-    /// The Brief's text (a prototype, RouterDigest.swift): only the demo writes it yet.
-    var routerDigest: RouterDigest?
 
     init(engineClient: (any EngineClient)? = nil, engineLauncher: EngineLauncher? = nil) {
         let offlineContext = Store.isDemo || UnderTest.isRunning
@@ -348,6 +346,11 @@ final class Store {
             routerRevision &+= 1
             persistedRevision &+= 1
             if oldValue.cards != router.cards { countCardChanges(from: oldValue.cards) }
+            // What it means for the Brief: a card in or handled, a message of yours (RouterDigestWriter.swift).
+            if oldValue.cards != router.cards || oldValue.decisions != router.decisions || oldValue.enabled != router.enabled
+                || (router.digest == nil && router.enabled) {
+                routerDigester.observe(from: oldValue, to: router, store: self)
+            }
             // Worked out again only if what it is made of changed: a session's stamps or an open card changing leave it (and
             // what draws it) alone.
             if oldValue.decisions != router.decisions || oldValue.summaries != router.summaries || oldValue.cards != router.cards {
@@ -569,6 +572,13 @@ final class Store {
     @ObservationIgnored let routerTriager = RouterTriager()
     /// What each card tells you, in plain words (see RouterBrief.swift).
     @ObservationIgnored let routerBriefer = RouterBriefer()
+    /// Keeps the Brief up to date (RouterDigestWriter.swift).
+    @ObservationIgnored let routerDigester = RouterDigestWriter()
+    /// The Brief, kept with the Router's state.
+    var routerDigest: RouterDigest? {
+        get { router.digest }
+        set { router.digest = newValue }
+    }
     /// What decides whether something interrupts you, and what came while you were away (see RouterAttention.swift).
     @ObservationIgnored let routerAttention = RouterAttention()
     /// Whether the Claude app is in front (tests answer for it).

@@ -506,6 +506,8 @@ enum Demo {
                   changes: [Change(key: "lead-look", before: lookA, after: lookNow),
                             Change(key: folder("fjord-site"), before: siteA, after: site)]),
         ]
+        // You last looked four minutes ago: the last two rewrites are new.
+        digest.seenAt = now.addingTimeInterval(-240)
         store.routerDigest = digest
     }
 
