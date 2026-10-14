@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { InputData, JSONSchemaInput, Ref, quicktype } from "quicktype-core";
 import { SiloSwiftTargetLanguage, siloSchemaAttributeProducer } from "./swift-renderer.mjs";
+import { normalizeGeneratedTypes } from "./generator-transforms.mjs";
 
 const [schemaPath, outputPath, methodsPath] = process.argv.slice(2);
 if (!schemaPath || !outputPath || !methodsPath) {
@@ -125,18 +126,9 @@ let swiftTypes = `${result.lines.join("\n")}\n`.replace(
   /^(\s+var [A-Za-z_]\w*: .+\?)$/gm,
   "$1 = nil",
 );
-// quicktype emits this duplicate shape name for the schema's untagged PendingRestore
-// anyOf. Route references through the actual named definition and remove the duplicate.
-swiftTypes = swiftTypes.replaceAll("SiloWireSiloAP?", "SiloWirePendingRestore?");
-const duplicatePendingRestore = swiftTypes.indexOf("// MARK: - SiloWireSiloAP\n");
-if (duplicatePendingRestore >= 0) {
-  const nextDefinition = swiftTypes.indexOf(
-    "/// Mirrors `app/SiloUI/src-tauri/src/macos_computers/store.rs::State`.",
-    duplicatePendingRestore,
-  );
-  if (nextDefinition < 0) throw new Error("quicktype's duplicate PendingRestore shape was not followed by MacosComputerState.");
-  swiftTypes = swiftTypes.slice(0, duplicatePendingRestore) + swiftTypes.slice(nextDefinition);
-}
+// Remove only quicktype's duplicate shape declaration and preserve fields that were not
+// projected as app models, including the distinction between absent and explicit null results.
+swiftTypes = normalizeGeneratedTypes(swiftTypes);
 await writeFile(outputPath, swiftTypes);
 
 const kinds = [...new Set(methods.map((method) => method.kind))].sort();

@@ -13,7 +13,8 @@ temporary_dir="$(mktemp -d /private/tmp/fjord-silo-swift.XXXXXX)"
 trap 'rm -rf "$temporary_dir"' EXIT
 tool_work_dir="$temporary_dir/tool"
 mkdir -p "$tool_work_dir"
-cp "$tool_dir/package.json" "$tool_dir/package-lock.json" "$tool_dir/generate.mjs" "$tool_dir/swift-renderer.mjs" "$tool_work_dir/"
+cp "$tool_dir/package.json" "$tool_dir/package-lock.json" "$tool_dir/generate.mjs" \
+  "$tool_dir/swift-renderer.mjs" "$tool_dir/generator-transforms.mjs" "$tool_work_dir/"
 
 (
   cd "$tool_work_dir"

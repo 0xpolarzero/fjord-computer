@@ -380,6 +380,7 @@ enum EngineEvent: Equatable {
 
 enum EngineEventDelivery: Equatable {
     case event(sequence: UInt64, event: EngineEvent)
+    case sequenceAdvanced(sequence: UInt64)
     case reconnected
     case disconnected(String)
 }
@@ -972,7 +973,12 @@ final class MockEngineClient: EngineClient {
     func deliver(_ delivery: EngineEventDelivery) {
         for id in Array(subscribers.keys) {
             guard var subscriber = subscribers[id] else { continue }
-            if case .event(let sequence, _) = delivery {
+            let sequence: UInt64?
+            switch delivery {
+            case .event(let value, _), .sequenceAdvanced(let value): sequence = value
+            case .reconnected, .disconnected: sequence = nil
+            }
+            if let sequence {
                 subscriber.sequence = max(subscriber.sequence, sequence)
                 subscribers[id] = subscriber
             }

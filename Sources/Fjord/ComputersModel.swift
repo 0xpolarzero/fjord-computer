@@ -399,6 +399,18 @@ final class ComputersModel {
         case .reconnected:
             hasSequence = false
             beginRecovery(invalidated: true)
+        case .sequenceAdvanced(let next):
+            if hasSequence {
+                guard next > sequence else { return }
+                if next != sequence &+ 1 {
+                    sequence = next
+                    beginRecovery(invalidated: true)
+                    return
+                }
+            } else {
+                hasSequence = true
+            }
+            sequence = next
         case .event(let next, let event):
             if hasSequence {
                 guard next > sequence else { return }

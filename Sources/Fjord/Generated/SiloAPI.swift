@@ -5679,6 +5679,13 @@ struct SiloWireJobFinished: Codable, Equatable, Sendable {
         case jobId = "jobId"
         case result = "result"
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        error = try container.decodeIfPresent(SiloWireErrorObject.self, forKey: .error)
+        jobId = try container.decode(String.self, forKey: .jobId)
+        result = container.contains(.result) ? try container.decode(SiloJSONValue.self, forKey: .result) : nil
+    }
 }
 
 //
@@ -5714,6 +5721,12 @@ struct SiloWireJobOutcome: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case error = "error"
         case result = "result"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        error = try container.decodeIfPresent(SiloWireErrorObject.self, forKey: .error)
+        result = container.contains(.result) ? try container.decode(SiloJSONValue.self, forKey: .result) : nil
     }
 }
 
@@ -7439,6 +7452,13 @@ struct SiloWireResponseEnvelope: Codable, Equatable, Sendable {
         case id = "id"
         case result = "result"
         case error = "error"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        result = container.contains(.result) ? try container.decode(SiloJSONValue.self, forKey: .result) : nil
+        error = try container.decodeIfPresent(SiloWireErrorObject.self, forKey: .error)
     }
 }
 

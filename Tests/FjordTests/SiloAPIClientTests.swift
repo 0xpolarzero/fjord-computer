@@ -3,7 +3,7 @@ import Testing
 @testable import Fjord
 
 @MainActor
-@Suite struct SiloAPIClientTests {
+@Suite(.serialized) struct SiloAPIClientTests {
     @Test func checkedInSchemaFixturesDecodeWithGeneratedCodableTypes() throws {
         let inventory = try JSONDecoder().decode(SiloWireComputersListResult.self, from: fixture("computers-list.json"))
         #expect(inventory.linux.computers.isEmpty)
@@ -23,10 +23,24 @@ import Testing
         #expect(event.event == .operationsJobProgress)
         #expect(event.seq == 7)
         #expect(event.subscription == "sub-1")
+        let eventPayload = try #require(event.payload)
+        let eventProgress = try JSONDecoder().decode(SiloWireJobProgress.self, from: JSONEncoder().encode(eventPayload))
 
         let finished = try JSONDecoder().decode(SiloWireJobFinished.self, from: fixture("job-finished.json"))
-        #expect(finished.jobId == "job:lifecycle-1")
+        #expect(finished.jobId == "job:123")
         #expect(finished.result != nil)
+        let schemaURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("schemas/silo-api/schema.json")
+        let schema = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: schemaURL)) as? [String: Any])
+        let definitions = try #require(schema["$defs"] as? [String: Any])
+        let jobId = try #require(definitions["JobId"] as? [String: Any])
+        let schemaJobIDPattern = try #require(jobId["pattern"] as? String)
+        #expect([progress.jobId, eventProgress.jobId, finished.jobId].allSatisfy {
+            $0.range(of: schemaJobIDPattern, options: .regularExpression) != nil
+        })
     }
 
     @Test func unixSocketHandshakesCorrelatesRequestsAndResyncsEventGaps() async throws {
@@ -52,7 +66,7 @@ import Testing
             return
         }
         #expect(finishedSequence == 2)
-        #expect(finished.jobId == "job:fake")
+        #expect(finished.jobId == "job:123")
         #expect(deliveries.values[2] == .reconnected)
 
         async let firstSnapshot = client.operationsJobGet(jobId: "job:first", deviceId: nil)
@@ -74,6 +88,423 @@ import Testing
         #expect(requests.first(where: { $0.method == "operations.job.acknowledge" })?.jobId == "job:first")
     }
 
+    @Test func failedSubscriptionRestorationDoesNotPoisonTheNextReconnect() async throws {
+        let scenario = ReconnectPoisonScenario()
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["computers.*"]]])
+            case "events.subscribe":
+                let attempt = await scenario.nextSubscriptionAttempt()
+                if attempt == 1 {
+                    try? socket.write(["id": request.id, "result": ["subscription": "sub-initial"]])
+                    socket.close()
+                } else if attempt == 2 {
+                    try? socket.write(["id": request.id, "error": ["code": "internal", "message": "restore failed"]])
+                } else {
+                    try? socket.write(["id": request.id, "result": ["subscription": "sub-restored"]])
+                }
+            case "operations.job.get":
+                try? socket.write(["id": request.id, "result": ["jobId": request.jobId ?? "job:123", "state": "running"]])
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let deliveries = SocketDeliveryRecorder()
+        _ = try await client.eventsSubscribe(events: ["computers.*"]) { deliveries.append($0) }
+
+        await server.requestLog.waitForCount(6)
+        await deliveries.waitForDelivery(.reconnected)
+        let restored = try await client.operationsJobGet(jobId: "job:123", deviceId: nil)
+
+        #expect(restored.jobId == "job:123")
+        #expect(await server.requestLog.requests.filter { $0.method == "engine.handshake" }.count >= 3)
+        try await client.engineDisconnect()
+    }
+
+    @Test func blockedSocketWriteDoesNotPreventDisconnectFromClosingTheTransport() async throws {
+        let stopReading = FakeSiloGate()
+        let server = try FakeSiloUnixServer(handler: { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+            case "engine.disconnect":
+                try? socket.write(["id": request.id, "result": NSNull()])
+            default:
+                break
+            }
+        }, readGate: { request in
+            if request.method == "engine.handshake" { await stopReading.wait() }
+        })
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let oversizedId = String(repeating: "x", count: 3_500_000)
+        let writes = (0..<4).map { _ in
+            Task { try await client.operationsCancel(jobId: oversizedId, deviceId: nil) }
+        }
+        await server.requestLog.waitForCount(1)
+        try await Task.sleep(for: .milliseconds(150))
+
+        let completion = AsyncCompletionFlag()
+        let disconnect = Task {
+            try? await client.engineDisconnect()
+            await completion.markComplete()
+        }
+        try await Task.sleep(for: .milliseconds(250))
+        let didDisconnectPromptly = await completion.isComplete
+        await stopReading.release()
+        server.stop()
+        _ = await disconnect.result
+        for write in writes { _ = await write.result }
+
+        #expect(didDisconnectPromptly)
+    }
+
+    @Test func restoredEventsWaitForTheReconnectResyncSignal() async throws {
+        let closeInitialConnection = FakeSiloGate()
+        let restoreSecondSubscription = FakeSiloGate()
+        let scenario = TwoSubscriptionRestoreScenario()
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["computers.*"]]])
+            case "events.subscribe":
+                let attempt = await scenario.nextAttempt()
+                let isOperationsSubscription = request.events?.contains("operations.*") == true
+                switch attempt {
+                case 1:
+                    try? socket.write(["id": request.id,
+                                       "result": ["subscription": isOperationsSubscription ? "sub-initial-operations" : "sub-initial-computers"]])
+                case 2:
+                    try? socket.write(["id": request.id,
+                                       "result": ["subscription": isOperationsSubscription ? "sub-initial-operations" : "sub-initial-computers"]])
+                    if !isOperationsSubscription {
+                        await closeInitialConnection.wait()
+                        socket.close()
+                    }
+                case 3:
+                    let subscription = isOperationsSubscription ? "sub-restored-operations" : "sub-restored-computers"
+                    try? socket.write(["id": request.id, "result": ["subscription": subscription]])
+                    if isOperationsSubscription {
+                        try? socket.write(["event": "operations.job.progress", "subscription": subscription,
+                                           "deviceId": "device-1", "seq": 1,
+                                           "payload": ["jobId": "job:123", "source": "lifecycle",
+                                                       "data": ["computerId": "computer-1", "action": "start", "step": "boot"]]])
+                    } else {
+                        try? socket.write(["event": "computers.changed", "subscription": subscription,
+                                           "deviceId": "device-1", "seq": 1,
+                                           "payload": ["linux": ["activities": [], "computers": [], "github": NSNull(),
+                                                                    "repositoryPushOperations": [], "secrets": []]]])
+                    }
+                case 4:
+                    await restoreSecondSubscription.wait()
+                    try? socket.write(["id": request.id,
+                                       "result": ["subscription": isOperationsSubscription ? "sub-restored-operations" : "sub-restored-computers"]])
+                default:
+                    try? socket.write(["id": request.id, "result": ["subscription": "sub-extra"]])
+                }
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let first = SocketDeliveryRecorder()
+        let second = SocketDeliveryRecorder()
+        _ = try await client.eventsSubscribe(events: ["operations.*"]) { first.append($0) }
+        _ = try await client.eventsSubscribe(events: ["computers.*"]) { second.append($0) }
+        await closeInitialConnection.release()
+
+        await server.requestLog.waitForCount(6)
+        try await Task.sleep(for: .milliseconds(100))
+        let eventWasDeliveredDuringRestore = [first.values, second.values].contains { values in
+            values.contains { if case .event = $0 { return true }; return false }
+        }
+        let resyncWasSentDuringRestore = [first.values, second.values].contains { $0.contains(.reconnected) }
+
+        await restoreSecondSubscription.release()
+        await first.waitForDelivery(.reconnected)
+        await second.waitForDelivery(.reconnected)
+        await first.waitForCount(2)
+        await second.waitForCount(2)
+
+        #expect(!eventWasDeliveredDuringRestore)
+        #expect(!resyncWasSentDuringRestore)
+        let resyncIndex = first.values.firstIndex(of: .reconnected)
+        let firstEventIndex = first.values.firstIndex { if case .event = $0 { return true }; return false }
+        let secondResyncIndex = second.values.firstIndex(of: .reconnected)
+        let secondEventIndex = second.values.firstIndex { if case .event = $0 { return true }; return false }
+        #expect((resyncIndex != nil && firstEventIndex != nil && resyncIndex! < firstEventIndex!) ||
+                (secondResyncIndex != nil && secondEventIndex != nil && secondResyncIndex! < secondEventIndex!))
+        try await client.engineDisconnect()
+    }
+
+    @Test func callerCancellationResumesPromptlyAndIgnoresTheLateReply() async throws {
+        let scenario = CancelledRequestScenario()
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+            case "operations.job.get":
+                await scenario.handle(request, socket: socket)
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let cancelledStatus = AsyncRequestStatus()
+        let cancelled = Task {
+            do {
+                _ = try await client.operationsJobGet(jobId: "job:123", deviceId: nil)
+                await cancelledStatus.finish(wasCancelled: false)
+            } catch {
+                await cancelledStatus.finish(wasCancelled: error is CancellationError)
+            }
+        }
+        await server.requestLog.waitForCount(2)
+        cancelled.cancel()
+        try await Task.sleep(for: .milliseconds(150))
+        let resumedAsCancelled = await cancelledStatus.wasCancelled
+
+        let second = try await client.operationsJobGet(jobId: "job:456", deviceId: nil)
+        _ = await cancelled.result
+
+        let beforeSendGate = FakeSiloGate()
+        let alreadyCancelledStatus = AsyncRequestStatus()
+        let alreadyCancelled = Task {
+            await beforeSendGate.wait()
+            do {
+                try await client.operationsCancel(jobId: "job:789", deviceId: nil)
+                await alreadyCancelledStatus.finish(wasCancelled: false)
+            } catch {
+                await alreadyCancelledStatus.finish(wasCancelled: error is CancellationError)
+            }
+        }
+        alreadyCancelled.cancel()
+        await beforeSendGate.release()
+        try await Task.sleep(for: .milliseconds(150))
+        let rejectedBeforeSend = await alreadyCancelledStatus.wasCancelled
+        _ = await alreadyCancelled.result
+
+        #expect(resumedAsCancelled)
+        #expect(second.jobId == "job:456")
+        #expect(rejectedBeforeSend)
+        #expect(await server.requestLog.requests.filter { $0.method == "operations.cancel" }.isEmpty)
+        try await client.engineDisconnect()
+    }
+
+    @Test func disconnectDuringHandshakeClosesTheOpeningSocketBeforeDomainCalls() async throws {
+        let finishHandshake = FakeSiloGate()
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                await finishHandshake.wait()
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+            case "operations.job.get":
+                try? socket.write(["id": request.id, "result": ["jobId": request.jobId ?? "job:123", "state": "running"]])
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let request = Task { try await client.operationsJobGet(jobId: "job:123", deviceId: nil) }
+        await server.requestLog.waitForCount(1)
+
+        let completion = AsyncCompletionFlag()
+        let disconnect = Task {
+            try? await client.engineDisconnect()
+            await completion.markComplete()
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let disconnectReturned = await completion.isComplete
+        await finishHandshake.release()
+        let domainRequestWasSent: Bool
+        do {
+            _ = try await request.value
+            domainRequestWasSent = true
+        } catch {
+            domainRequestWasSent = false
+        }
+        _ = await disconnect.result
+        let requests = await server.requestLog.requests
+
+        #expect(disconnectReturned)
+        #expect(!domainRequestWasSent)
+        #expect(requests.allSatisfy { $0.method == "engine.handshake" })
+    }
+
+    @Test func unsubscribeDuringRestorationRemovesTheNewServerSubscription() async throws {
+        let finishRestoration = FakeSiloGate()
+        let scenario = SingleSubscriptionRestoreScenario()
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["computers.*"]]])
+            case "events.subscribe":
+                if await scenario.nextAttempt() == 1 {
+                    try? socket.write(["id": request.id, "result": ["subscription": "sub-before-loss"]])
+                    socket.close()
+                } else {
+                    await finishRestoration.wait()
+                    try? socket.write(["id": request.id, "result": ["subscription": "sub-restored"]])
+                }
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let deliveries = SocketDeliveryRecorder()
+        let localId = try await client.eventsSubscribe(events: ["computers.*"]) { deliveries.append($0) }
+
+        await server.requestLog.waitForCount(4)
+        await client.eventsUnsubscribe(subscription: localId)
+        await finishRestoration.release()
+        await server.requestLog.waitForCount(5)
+        try await Task.sleep(for: .milliseconds(100))
+        let requests = await server.requestLog.requests
+
+        #expect(requests.contains { $0.method == "events.unsubscribe" && $0.subscription == "sub-restored" })
+        #expect(!deliveries.values.contains(.reconnected))
+        try await client.engineDisconnect()
+    }
+
+    @Test func ignoredEventsAdvanceSequencesWithoutHidingRealGaps() async throws {
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["computers.*", "operations.*"]]])
+            case "events.subscribe":
+                try? socket.write(["id": request.id, "result": ["subscription": "sub-sequences"]])
+                try? socket.write(Self.progressEvent(subscription: "sub-sequences", sequence: 1))
+                try? socket.write(["event": "computers.unexpectedChange", "subscription": "sub-sequences",
+                                   "deviceId": "device-1", "seq": 2, "payload": NSNull()])
+                try? socket.write(Self.finishedEvent(subscription: "sub-sequences", sequence: 3))
+                try? socket.write(["event": "computers.unexpectedChange", "subscription": "sub-sequences",
+                                   "deviceId": "device-1", "seq": 4, "payload": NSNull()])
+                try? socket.write(Self.finishedEvent(subscription: "sub-sequences", sequence: 6))
+                try? socket.write(Self.finishedEvent(subscription: "sub-sequences", sequence: 7))
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let deliveries = SocketDeliveryRecorder()
+        let localId = try await client.eventsSubscribe(events: ["computers.*", "operations.*"]) { deliveries.append($0) }
+        await deliveries.waitForCount(4)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(deliveries.values == [
+            .event(sequence: 1, event: .jobProgress(OperationJobProgress(
+                jobId: "job:123", source: .lifecycle,
+                data: .lifecycle(LifecycleJobProgressData(computerId: "computer-1", action: "start", step: "boot"))))),
+            .sequenceAdvanced(sequence: 2),
+            .event(sequence: 3, event: .jobFinished(OperationJobFinished(jobId: "job:123"))),
+            .sequenceAdvanced(sequence: 4),
+            .reconnected,
+            .event(sequence: 7, event: .jobFinished(OperationJobFinished(jobId: "job:123"))),
+        ])
+        await client.eventsUnsubscribe(subscription: localId)
+        try await client.engineDisconnect()
+    }
+
+    @Test func terminalResultsPreserveExplicitNullOverTheSocket() async throws {
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+            case "events.subscribe":
+                try? socket.write(["id": request.id, "result": ["subscription": "sub-null"]])
+                try? socket.write(["event": "operations.job.finished", "subscription": "sub-null",
+                                   "deviceId": "device-1", "seq": 1,
+                                   "payload": ["jobId": "job:123", "result": NSNull()]])
+            case "operations.job.get":
+                try? socket.write(["id": request.id,
+                                   "result": ["jobId": "job:123", "state": "finished",
+                                               "outcome": ["result": NSNull()]]])
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+        let deliveries = SocketDeliveryRecorder()
+        _ = try await client.eventsSubscribe(events: ["operations.*"]) { deliveries.append($0) }
+        await deliveries.waitForCount(1)
+        let snapshot = try await client.operationsJobGet(jobId: "job:123", deviceId: nil)
+        let eventResult: SiloJSONValue?
+        if let first = deliveries.values.first, case .event(_, .jobFinished(let finished)) = first {
+            eventResult = finished.result
+        } else {
+            eventResult = nil
+        }
+        let explicitFinished = try JSONDecoder().decode(SiloWireJobFinished.self,
+                                                        from: Data(#"{"jobId":"job:123","result":null}"#.utf8))
+        let omittedFinished = try JSONDecoder().decode(SiloWireJobFinished.self,
+                                                      from: Data(#"{"jobId":"job:123"}"#.utf8))
+        let explicitOutcome = try JSONDecoder().decode(SiloWireJobOutcome.self,
+                                                       from: Data(#"{"result":null}"#.utf8))
+        let omittedOutcome = try JSONDecoder().decode(SiloWireJobOutcome.self, from: Data("{}".utf8))
+
+        #expect(eventResult == .null)
+        #expect(snapshot.outcome?.result == .null)
+        #expect(explicitFinished.result == .null)
+        #expect(omittedFinished.result == nil)
+        #expect(explicitOutcome.result == .null)
+        #expect(omittedOutcome.result == nil)
+        try await client.engineDisconnect()
+    }
+
+    @Test func fragmentedFrameHeadersAndBodiesAreReassembled() async throws {
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.writeFragmented(["id": request.id,
+                                             "result": ["deviceId": "device-1", "name": "Fake Silo",
+                                                         "protocol": 1, "capabilities": ["operations.*"]]],
+                                            chunks: [1, 1, 1, 1, 2, 1, 3])
+            case "operations.job.get":
+                try? socket.writeFragmented(["id": request.id,
+                                             "result": ["jobId": request.jobId ?? "job:123", "state": "finished"]],
+                                            chunks: [2, 1, 1, 3, 2, 1])
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let client = SocketEngineClient(path: server.path)
+
+        let snapshot = try await client.operationsJobGet(jobId: "job:123", deviceId: nil)
+
+        #expect(snapshot.jobId == "job:123")
+        #expect(snapshot.state == .finished)
+        try await client.engineDisconnect()
+    }
+
+    nonisolated private static func progressEvent(subscription: String, sequence: Int) -> [String: Any] {
+        ["event": "operations.job.progress", "subscription": subscription, "deviceId": "device-1", "seq": sequence,
+         "payload": ["jobId": "job:123", "source": "lifecycle",
+                     "data": ["computerId": "computer-1", "action": "start", "step": "boot"]]]
+    }
+
+    nonisolated private static func finishedEvent(subscription: String, sequence: Int) -> [String: Any] {
+        ["event": "operations.job.finished", "subscription": subscription, "deviceId": "device-1", "seq": sequence,
+         "payload": ["jobId": "job:123"]]
+    }
+
     private func fixture(_ name: String) throws -> Data {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/SiloAPI/\(name)")
@@ -84,17 +515,74 @@ import Testing
 @MainActor
 private final class SocketDeliveryRecorder {
     private(set) var values: [EngineEventDelivery] = []
-    private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-    func append(_ delivery: EngineEventDelivery) {
-        values.append(delivery)
-        let ready = waiters.filter { $0.0 <= values.count }
-        waiters.removeAll { $0.0 <= values.count }
-        ready.forEach { $0.1.resume() }
+    func append(_ delivery: EngineEventDelivery) { values.append(delivery) }
+
+    func waitForCount(_ count: Int, attempts: Int = 300) async {
+        for _ in 0..<attempts {
+            if values.count >= count { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
     }
 
-    func waitForCount(_ count: Int) async {
-        if values.count >= count { return }
-        await withCheckedContinuation { continuation in waiters.append((count, continuation)) }
+    func waitForDelivery(_ expected: EngineEventDelivery) async {
+        for _ in 0..<300 {
+            if values.contains(expected) { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+}
+
+private actor ReconnectPoisonScenario {
+    private var subscriptionAttempt = 0
+    func nextSubscriptionAttempt() -> Int {
+        subscriptionAttempt += 1
+        return subscriptionAttempt
+    }
+}
+
+private actor TwoSubscriptionRestoreScenario {
+    private var count = 0
+    func nextAttempt() -> Int {
+        count += 1
+        return count
+    }
+}
+
+private actor SingleSubscriptionRestoreScenario {
+    private var count = 0
+    func nextAttempt() -> Int {
+        count += 1
+        return count
+    }
+}
+
+private actor AsyncCompletionFlag {
+    private(set) var isComplete = false
+    func markComplete() { isComplete = true }
+}
+
+private actor AsyncRequestStatus {
+    private(set) var didFinish = false
+    private(set) var wasCancelled = false
+    func finish(wasCancelled: Bool) {
+        self.wasCancelled = wasCancelled
+        didFinish = true
+    }
+}
+
+private actor CancelledRequestScenario {
+    private var delayed: (FakeSiloRequest, FakeSiloSocket)?
+
+    func handle(_ request: FakeSiloRequest, socket: FakeSiloSocket) {
+        guard let previous = delayed else {
+            delayed = (request, socket)
+            return
+        }
+        delayed = nil
+        try? previous.1.write(["id": previous.0.id,
+                               "result": ["jobId": previous.0.jobId ?? "job:123", "state": "running"]])
+        try? socket.write(["id": request.id,
+                           "result": ["jobId": request.jobId ?? "job:456", "state": "finished"]])
     }
 }

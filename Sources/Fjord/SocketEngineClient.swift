@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-private enum SocketClientFailure: LocalizedError {
+private enum SocketClientFailure: LocalizedError, Sendable {
     case socket(String)
     case frameTooLarge
     case malformed(String)
@@ -39,6 +39,7 @@ private enum SocketClientFailure: LocalizedError {
 private final class UnixDomainSocket: @unchecked Sendable {
     private static let maximumFrameBytes = 4 * 1024 * 1024
     private let descriptor: Int32
+    private let writerQueue = DispatchQueue(label: "fjord.silo.socket.writer", qos: .utility)
 
     init(path: String) throws {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
@@ -79,7 +80,20 @@ private final class UnixDomainSocket: @unchecked Sendable {
 
     func shutdown() { _ = Darwin.shutdown(descriptor, SHUT_RDWR) }
 
-    func writeFrame(_ json: Data) throws {
+    func writeFrame(_ json: Data, completion: @escaping @Sendable (Result<Void, SocketClientFailure>) -> Void) {
+        writerQueue.async { [self] in
+            do {
+                try writeFrameBlocking(json)
+                completion(.success(()))
+            } catch let error as SocketClientFailure {
+                completion(.failure(error))
+            } catch {
+                completion(.failure(.socket(error.localizedDescription)))
+            }
+        }
+    }
+
+    private func writeFrameBlocking(_ json: Data) throws {
         guard !json.isEmpty, json.count <= Self.maximumFrameBytes else { throw SocketClientFailure.frameTooLarge }
         let length = UInt32(json.count)
         var frame = Data([
@@ -162,6 +176,9 @@ private actor SocketRequestTransport {
     private let socket: UnixDomainSocket
     private var readerTask: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Data, Error>] = [:]
+    private var cancelledResponseIDs = Set<String>()
+    private var cancelledResponseOrder: [String] = []
+    private var pendingWrites = 0
     private var closed = false
     private var eventHandler: (@Sendable (SiloWireEventEnvelope) -> Void)?
     private var disconnectHandler: (@Sendable (String) -> Void)?
@@ -195,27 +212,54 @@ private actor SocketRequestTransport {
         _ call: SiloGeneratedMethodCall<Params, Result>
     ) async throws -> Result {
         guard !closed else { throw SocketClientFailure.closed }
+        try Task.checkCancellation()
         let id = UUID().uuidString.lowercased()
         let request = try JSONEncoder().encode(SocketRequestFrame(id: id, method: call.name, params: call.params))
-        let responseData = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
-            pending[id] = continuation
-            do {
-                try socket.writeFrame(request)
-            } catch {
-                pending.removeValue(forKey: id)
-                connectionFailed(error)
-                continuation.resume(throwing: error)
+        do {
+            let responseData = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                    guard !Task.isCancelled else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    pending[id] = continuation
+                    pendingWrites += 1
+                    socket.writeFrame(request) { [weak self] result in
+                        Task { await self?.writeCompleted(result: result) }
+                    }
+                }
+            } onCancel: { [weak self] in
+                Task { await self?.cancelPending(id: id) }
             }
+            try Task.checkCancellation()
+            let response = try JSONDecoder().decode(SocketResponseFrame.self, from: responseData)
+            guard response.id == id else { throw SocketClientFailure.malformed("response id did not match request") }
+            guard !(response.error != nil && response.result != nil) else {
+                throw SocketClientFailure.malformed("response included both result and error")
+            }
+            if let error = response.error { throw SocketClientFailure.remote(error.code.rawValue, error.message) }
+            guard let result = response.result else { throw SocketClientFailure.malformed("response omitted result") }
+            let resultData = try JSONEncoder().encode(result)
+            return try JSONDecoder().decode(Result.self, from: resultData)
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            throw error
         }
-        let response = try JSONDecoder().decode(SocketResponseFrame.self, from: responseData)
-        guard response.id == id else { throw SocketClientFailure.malformed("response id did not match request") }
-        guard !(response.error != nil && response.result != nil) else {
-            throw SocketClientFailure.malformed("response included both result and error")
+    }
+
+    func disconnect() async throws {
+        guard !closed else { return }
+        guard pendingWrites == 0 else {
+            close()
+            return
         }
-        if let error = response.error { throw SocketClientFailure.remote(error.code.rawValue, error.message) }
-        guard let result = response.result else { throw SocketClientFailure.malformed("response omitted result") }
-        let resultData = try JSONEncoder().encode(result)
-        return try JSONDecoder().decode(Result.self, from: resultData)
+        do {
+            let _: SiloNull = try await request(SiloGeneratedMethods.engineDisconnect([:]))
+            close()
+        } catch {
+            close()
+            throw error
+        }
     }
 
     func close() {
@@ -236,10 +280,13 @@ private actor SocketRequestTransport {
                 eventHandler?(envelope)
             } else {
                 let response = try JSONDecoder().decode(SocketResponseFrame.self, from: frame)
-                guard let continuation = pending.removeValue(forKey: response.id) else {
-                    throw SocketClientFailure.malformed("response id did not match a pending request")
+                if let continuation = pending.removeValue(forKey: response.id) {
+                    continuation.resume(returning: frame)
+                } else {
+                    if cancelledResponseIDs.remove(response.id) != nil {
+                        cancelledResponseOrder.removeAll { $0 == response.id }
+                    }
                 }
-                continuation.resume(returning: frame)
             }
         } catch {
             connectionFailed(error)
@@ -259,6 +306,22 @@ private actor SocketRequestTransport {
         pending.removeAll()
         continuations.forEach { $0.resume(throwing: error) }
     }
+
+    private func writeCompleted(result: Result<Void, SocketClientFailure>) {
+        pendingWrites = max(0, pendingWrites - 1)
+        if case .failure(let error) = result { connectionFailed(error) }
+    }
+
+    private func cancelPending(id: String) {
+        guard let continuation = pending.removeValue(forKey: id) else { return }
+        cancelledResponseIDs.insert(id)
+        cancelledResponseOrder.append(id)
+        if cancelledResponseOrder.count > 256 {
+            let expired = cancelledResponseOrder.removeFirst()
+            cancelledResponseIDs.remove(expired)
+        }
+        continuation.resume(throwing: CancellationError())
+    }
 }
 
 /// A debug-selectable Unix-socket implementation. It performs `engine.handshake` before
@@ -277,17 +340,25 @@ final class SocketEngineClient: EngineClient {
         var sequence: UInt64?
     }
 
+    private struct ConnectionAttempt {
+        let id: UUID
+        let task: Task<SocketRequestTransport, Error>
+    }
+
     private let path: String
     private let protocolRange: SiloWireProtocolRange
     private var transport: SocketRequestTransport?
-    private var connectionTask: Task<SocketRequestTransport, Error>?
+    private var openingTransport: (generation: UInt64, transport: SocketRequestTransport)?
+    private var connectionAttempt: ConnectionAttempt?
     private var reconnectTask: Task<Void, Never>?
     private var connectionGeneration: UInt64 = 0
     private var shouldResync = false
+    private var restoringGeneration: UInt64?
     private var explicitlyDisconnected = false
     private var subscriptions: [String: Subscription] = [:]
     private var subscriptionByServerId: [String: String] = [:]
     private var unmatchedEvents: [SiloWireEventEnvelope] = []
+    private var restorationEvents: [(UInt64, SiloWireEventEnvelope)] = []
     private(set) var handshakeResult: SiloWireHandshakeResult?
 
     init(path: String? = nil, protocolRange: SiloWireProtocolRange = SiloWireProtocolRange(max: 1, min: 1)) {
@@ -406,7 +477,7 @@ final class SocketEngineClient: EngineClient {
         guard let entry = subscriptions.removeValue(forKey: subscription) else { return }
         if let serverId = entry.serverId {
             subscriptionByServerId.removeValue(forKey: serverId)
-            guard let transport else { return }
+            guard let transport = transport ?? openingTransport?.transport else { return }
             let params = SiloWireEventsUnsubscribeParams(subscription: serverId)
             let call = SiloGeneratedMethods.eventsUnsubscribe(params)
             do { let _: SiloNull = try await transport.request(call) } catch { }
@@ -420,12 +491,17 @@ final class SocketEngineClient: EngineClient {
 
     func engineDisconnect() async throws {
         explicitlyDisconnected = true
+        connectionGeneration &+= 1
         reconnectTask?.cancel()
         reconnectTask = nil
+        connectionAttempt?.task.cancel()
+        connectionAttempt = nil
+        let opening = openingTransport
+        openingTransport = nil
+        if let opening { await opening.transport.close() }
         guard let transport else { return }
         do {
-            let _: SiloNull = try await transport.request(SiloGeneratedMethods.engineDisconnect([:]))
-            await transport.close()
+            try await transport.disconnect()
             self.transport = nil
         } catch {
             await transport.close()
@@ -438,8 +514,14 @@ final class SocketEngineClient: EngineClient {
         _ call: SiloGeneratedMethodCall<Params, Result>
     ) async throws -> Result {
         do {
+            try Task.checkCancellation()
             let activeTransport = try await ensureTransport()
-            return try await activeTransport.request(call)
+            guard !explicitlyDisconnected else { throw SocketClientFailure.closed }
+            try Task.checkCancellation()
+            let result = try await activeTransport.request(call)
+            guard !explicitlyDisconnected else { throw SocketClientFailure.closed }
+            try Task.checkCancellation()
+            return result
         }
         catch { throw Self.map(error) }
     }
@@ -447,18 +529,24 @@ final class SocketEngineClient: EngineClient {
     private func ensureTransport() async throws -> SocketRequestTransport {
         guard !explicitlyDisconnected else { throw SocketClientFailure.closed }
         if let transport { return transport }
-        if let connectionTask { return try await connectionTask.value }
+        if let attempt = connectionAttempt {
+            let opened = try await attempt.task.value
+            guard !explicitlyDisconnected, transport === opened else { throw SocketClientFailure.closed }
+            if connectionAttempt?.id == attempt.id { connectionAttempt = nil }
+            return opened
+        }
         guard protocolRange.min <= protocolRange.max else {
             throw EngineClientError.invalidAction("The supported Silo protocol range is invalid.")
         }
-        let task = Task { @MainActor in try await self.openTransport() }
-        connectionTask = task
+        let attempt = ConnectionAttempt(id: UUID(), task: Task { @MainActor in try await self.openTransport() })
+        connectionAttempt = attempt
         do {
-            let opened = try await task.value
-            connectionTask = nil
+            let opened = try await attempt.task.value
+            if connectionAttempt?.id == attempt.id { connectionAttempt = nil }
+            guard !explicitlyDisconnected, transport === opened else { throw SocketClientFailure.closed }
             return opened
         } catch {
-            connectionTask = nil
+            if connectionAttempt?.id == attempt.id { connectionAttempt = nil }
             throw Self.map(error)
         }
     }
@@ -467,45 +555,91 @@ final class SocketEngineClient: EngineClient {
         let candidate = try SocketRequestTransport(path: path)
         connectionGeneration &+= 1
         let generation = connectionGeneration
+        openingTransport = (generation, candidate)
         await candidate.setEventHandler { [weak self] envelope in
-            Task { @MainActor [weak self] in self?.receive(envelope) }
+            Task { @MainActor [weak self] in self?.receive(envelope, generation: generation) }
         }
+        guard connectionIsCurrent(generation) else { throw SocketClientFailure.closed }
         await candidate.setDisconnectHandler { [weak self] reason in
             Task { @MainActor [weak self] in self?.connectionLost(reason, generation: generation) }
         }
+        guard connectionIsCurrent(generation) else { throw SocketClientFailure.closed }
         await candidate.start()
+        guard connectionIsCurrent(generation) else { throw SocketClientFailure.closed }
         do {
             let params = SiloWireHandshakeParams(
                 client: SiloWireClientMetadata(name: "Fjord", version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"),
                 handshakeParamsProtocol: protocolRange)
             let result = try await candidate.request(SiloGeneratedMethods.engineHandshake(params))
+            guard connectionIsCurrent(generation) else { throw SocketClientFailure.closed }
             guard (protocolRange.min...protocolRange.max).contains(result.handshakeResultProtocol) else {
                 throw SocketClientFailure.incompatibleVersion(result.handshakeResultProtocol, protocolRange)
             }
+            if shouldResync {
+                restoringGeneration = generation
+                do {
+                    try await restoreSubscriptions(on: candidate, generation: generation)
+                } catch {
+                    if restoringGeneration == generation { restoringGeneration = nil }
+                    restorationEvents.removeAll { $0.0 == generation }
+                    throw error
+                }
+            }
+            guard connectionIsCurrent(generation) else { throw SocketClientFailure.closed }
             handshakeResult = result
             transport = candidate
-            if shouldResync { try await restoreSubscriptions(on: candidate) }
+            if openingTransport?.generation == generation { openingTransport = nil }
             return candidate
         } catch {
+            if openingTransport?.generation == generation { openingTransport = nil }
+            if transport === candidate { transport = nil }
+            if connectionGeneration == generation { connectionGeneration &+= 1 }
+            subscriptionByServerId.removeAll()
+            unmatchedEvents.removeAll()
+            restorationEvents.removeAll { $0.0 == generation }
+            if restoringGeneration == generation { restoringGeneration = nil }
+            for id in Array(subscriptions.keys) {
+                guard var subscription = subscriptions[id] else { continue }
+                subscription.serverId = nil
+                subscription.sequence = nil
+                subscriptions[id] = subscription
+            }
             await candidate.close()
             throw Self.map(error)
         }
     }
 
-    private func restoreSubscriptions(on candidate: SocketRequestTransport) async throws {
+    private func restoreSubscriptions(on candidate: SocketRequestTransport, generation: UInt64) async throws {
         subscriptionByServerId.removeAll()
         for localId in subscriptions.keys.sorted() {
-            guard var subscription = subscriptions[localId] else { continue }
+            guard generation == connectionGeneration, !explicitlyDisconnected else { throw SocketClientFailure.closed }
+            guard let subscription = subscriptions[localId] else { continue }
             let params = SiloWireEventsSubscribeParams(events: subscription.events)
             let response = try await candidate.request(SiloGeneratedMethods.eventsSubscribe(params))
-            subscription.serverId = response.subscription
-            subscription.sequence = nil
-            subscriptions[localId] = subscription
+            guard connectionIsCurrent(generation) else { throw SocketClientFailure.closed }
+            guard var current = subscriptions[localId] else {
+                await unsubscribe(response.subscription, on: candidate)
+                guard connectionIsCurrent(generation) else { throw SocketClientFailure.closed }
+                continue
+            }
+            current.serverId = response.subscription
+            current.sequence = nil
+            subscriptions[localId] = current
             subscriptionByServerId[response.subscription] = localId
         }
         if shouldResync {
             shouldResync = false
             for subscription in subscriptions.values { subscription.handler(.reconnected) }
+        }
+        let events = restorationEvents.filter { $0.0 == generation }.map(\.1)
+        restorationEvents.removeAll { $0.0 == generation }
+        if restoringGeneration == generation { restoringGeneration = nil }
+        for event in events {
+            if let localId = subscriptionByServerId[event.subscription] {
+                deliver(event, to: localId)
+            } else {
+                unmatchedEvents.append(event)
+            }
         }
         let serverIds = Set(subscriptionByServerId.keys)
         for id in serverIds { drainUnmatchedEvents(for: id) }
@@ -545,7 +679,22 @@ final class SocketEngineClient: EngineClient {
         }
     }
 
-    private func receive(_ envelope: SiloWireEventEnvelope) {
+    private func connectionIsCurrent(_ generation: UInt64) -> Bool {
+        !explicitlyDisconnected && generation == connectionGeneration
+    }
+
+    private func unsubscribe(_ serverId: String, on candidate: SocketRequestTransport) async {
+        let params = SiloWireEventsUnsubscribeParams(subscription: serverId)
+        do { let _: SiloNull = try await candidate.request(SiloGeneratedMethods.eventsUnsubscribe(params)) } catch { }
+    }
+
+    private func receive(_ envelope: SiloWireEventEnvelope, generation: UInt64) {
+        guard generation == connectionGeneration, !explicitlyDisconnected else { return }
+        if restoringGeneration == generation {
+            restorationEvents.append((generation, envelope))
+            if restorationEvents.count > 256 { restorationEvents.removeFirst(restorationEvents.count - 256) }
+            return
+        }
         guard let localId = subscriptionByServerId[envelope.subscription] else {
             unmatchedEvents.append(envelope)
             if unmatchedEvents.count > 128 { unmatchedEvents.removeFirst(unmatchedEvents.count - 128) }
@@ -575,7 +724,10 @@ final class SocketEngineClient: EngineClient {
         }
         subscription.sequence = envelope.seq
         subscriptions[localId] = subscription
-        guard let event = Self.projectEvent(envelope) else { return }
+        guard let event = Self.projectEvent(envelope) else {
+            subscription.handler(.sequenceAdvanced(sequence: envelope.seq))
+            return
+        }
         subscription.handler(.event(sequence: envelope.seq, event: event))
     }
 
