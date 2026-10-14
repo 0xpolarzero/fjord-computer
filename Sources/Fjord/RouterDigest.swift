@@ -317,7 +317,11 @@ struct DigestPage: View {
     var body: some View {
         let page = model.zones(store)
         let folders = model.canvasFolders(store, page: page)
-        let items = Self.items(folders)
+        // Every tagged session resolves, not only the notes the canvas shows (it caps a project's at three).
+        let items = Self.items(RouterCanvasModel.make(page: page, done: [], muted: Set(store.agents.mutedFolders),
+                                                      name: store.routerProjectGroupName, color: { _ in nil }, showsAll: true,
+                                                      projectKey: { store.routerProjectGroupKey(sessionID: $0, folder: $1) },
+                                                      projectSource: store.routerProjectGroupSource))
         Scrolling {
             Group {
                 if let digest = store.routerDigest {
@@ -980,7 +984,7 @@ struct DigestFlow: Layout {
         for line in lines(subviews, width: bounds.width) {
             for (index, x, size) in line.items {
                 subviews[index].place(at: CGPoint(x: bounds.minX + x, y: y + (line.height - size.height) / 2),
-                                      proposal: ProposedViewSize(size))
+                                      proposal: size.width > bounds.width ? ProposedViewSize(width: bounds.width, height: nil) : ProposedViewSize(size))
             }
             y += line.height + lineSpacing
         }
@@ -995,7 +999,9 @@ struct DigestFlow: Layout {
     private func lines(_ subviews: Subviews, width: CGFloat) -> [Line] {
         var lines: [Line] = [Line()]
         for (index, view) in subviews.enumerated() {
-            let size = view.sizeThatFits(.unspecified)
+            var size = view.sizeThatFits(.unspecified)
+            // Wider than a line: it wraps within one rather than overflowing.
+            if size.width > width, width.isFinite { size = view.sizeThatFits(ProposedViewSize(width: width, height: nil)) }
             let gap = view[TightKey.self] || lines[lines.count - 1].items.isEmpty ? 0 : spacing
             if !lines[lines.count - 1].items.isEmpty, lines[lines.count - 1].width + gap + size.width > width {
                 lines.append(Line())
