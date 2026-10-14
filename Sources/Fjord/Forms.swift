@@ -744,28 +744,15 @@ struct FormHookInstaller {
     /// what was read; otherwise starts over from what is there now, a few times. A copy of the file as it was before
     /// Fjord first changed it is kept next to it.
     private func modify(_ change: (inout [String: Any]) throws -> Bool) throws {
-        let fm = FileManager.default
-        for _ in 0..<Self.attempts {
-            let raw = try readRaw()
-            var root = try parse(raw) ?? [:]
-            guard try change(&root) else { return }
-            var data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-            data.append(contentsOf: Array("\n".utf8))
-            if let raw, !fm.fileExists(atPath: backup.path) { try PrivateFile.write(raw, to: backup) }
-            let mode = ((try? fm.attributesOfItem(atPath: target.path))?[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o644
-            let temp = try PrivateFile.prepare(data, for: target, mode: mode_t(mode))
-            beforeReplace?()
-            // Everything is written: the check and the rename follow each other at once. Claude Code offers no lock, so a
-            // write of its own landing in the microseconds between them would still be lost; that window is accepted.
-            let unchanged: Bool
-            do { unchanged = try readRaw() == raw } catch { unlink(temp.path); throw error }
-            guard unchanged else {
-                unlink(temp.path)
-                continue
+        do {
+            try ClaudeSettingsFile.modify(settings: settings, backup: backup, beforeReplace: beforeReplace, change: change)
+        } catch let error as ClaudeSettingsFile.Failure {
+            switch error {
+            case .invalidJSON(let path): throw Failure.invalidSettings(path)
+            case .notAnObject(let path): throw Failure.notAnObject(path)
+            case .unreadable(let path, let reason): throw Failure.unreadable(path, reason)
+            case .keptChanging(let path): throw Failure.keptChanging(path)
             }
-            try PrivateFile.commit(temp, to: target)
-            return
         }
-        throw Failure.keptChanging(settings.path)
     }
 }
