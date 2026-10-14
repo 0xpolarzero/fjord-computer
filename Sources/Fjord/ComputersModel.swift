@@ -65,6 +65,34 @@ struct ComputerJobReceipt: Equatable, Identifiable {
     var id: String { jobId }
 }
 
+struct ComputerViewerScriptCommand: Equatable, Identifiable {
+    var connectionId: String
+    var id: UUID
+    var script: String
+}
+
+@MainActor
+final class ComputerViewerOperationGate {
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        guard isHeld else {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isHeld = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class ComputersModel {
@@ -110,7 +138,9 @@ final class ComputersModel {
     var connectionHealth: [String: SiloWireDeviceHealth] = [:]
     var connectionDevices: [SiloWireDevice] = []
     var pendingViewer: SiloWireViewerOpenResult?
-    var viewerScripts: [String: String] = [:]
+    var viewerScripts: [String: [ComputerViewerScriptCommand]] = [:]
+    @ObservationIgnored var viewerOperationGate = ComputerViewerOperationGate()
+    @ObservationIgnored var viewerRequestID: UUID?
 
     @ObservationIgnored private var subscription: String?
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
@@ -212,6 +242,7 @@ final class ComputersModel {
     }
 
     func deactivate() async {
+        await closeScreen()
         wantsConnection = false
         connectionAttemptID = nil
         eventStreamID = nil
@@ -582,12 +613,19 @@ final class ComputersModel {
         case .guestFilesChanged:
             break
         case .viewerPage(let page):
-            viewerScripts[page.connectionId] = page.script
+            viewerScripts[page.connectionId, default: []].append(
+                ComputerViewerScriptCommand(connectionId: page.connectionId, id: UUID(), script: page.script))
         case .settingsChanged(let snapshot):
             engineSettings = snapshot
         case .exportsChanged(let snapshot):
             exportState = snapshot
         }
+    }
+
+    func acknowledgeViewerScriptCommand(connectionId: String, commandId: UUID) {
+        guard var commands = viewerScripts[connectionId] else { return }
+        commands.removeAll { $0.id == commandId }
+        viewerScripts[connectionId] = commands.isEmpty ? nil : commands
     }
 
     private func recordFinished(_ result: OperationJobFinished) {

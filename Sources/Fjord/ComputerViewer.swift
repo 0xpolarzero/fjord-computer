@@ -4,8 +4,9 @@ import WebKit
 
 struct ComputerViewerSheet: View {
     let viewer: SiloWireViewerOpenResult
-    let script: String?
+    let scripts: [ComputerViewerScriptCommand]
     let mockPreview: Bool
+    let onScriptExecuted: (ComputerViewerScriptCommand) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -24,7 +25,7 @@ struct ComputerViewerSheet: View {
                 MockLinuxDesktop(name: viewer.name)
                     .frame(minWidth: 760, minHeight: 500)
             } else {
-                LinuxComputerWebView(viewer: viewer, script: script)
+                LinuxComputerWebView(viewer: viewer, scripts: scripts, onScriptExecuted: onScriptExecuted)
                     .frame(minWidth: 760, minHeight: 500)
             }
         }
@@ -86,11 +87,12 @@ private struct MockLinuxDesktop: View {
     }
 }
 
-private struct LinuxComputerWebView: NSViewRepresentable {
+struct LinuxComputerWebView: NSViewRepresentable {
     let viewer: SiloWireViewerOpenResult
-    let script: String?
+    let scripts: [ComputerViewerScriptCommand]
+    let onScriptExecuted: (ComputerViewerScriptCommand) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(onScriptExecuted: onScriptExecuted) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -103,17 +105,18 @@ private struct LinuxComputerWebView: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
+        context.coordinator.attach(webView)
         context.coordinator.load(viewer, in: webView)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard let script, !script.isEmpty, script != context.coordinator.lastScript else { return }
-        context.coordinator.lastScript = script
-        webView.evaluateJavaScript(script) { _, _ in }
+        context.coordinator.accept(scripts)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        typealias ScriptEvaluator = (String, @escaping () -> Void) -> Void
+
         private struct Origin: Equatable {
             let scheme: String
             let host: String
@@ -128,8 +131,67 @@ private struct LinuxComputerWebView: NSViewRepresentable {
             }
         }
 
+        private weak var webView: WKWebView?
+        private let injectedEvaluator: ScriptEvaluator?
+        private var onScriptExecuted: (ComputerViewerScriptCommand) -> Void
         private var origin: Origin?
-        fileprivate var lastScript: String?
+        private var receivedScriptIDs: Set<UUID> = []
+        private var pendingScripts: [ComputerViewerScriptCommand] = []
+        private var isEvaluatingScript = false
+        private(set) var pageReady = false
+
+        init(evaluateScript: ScriptEvaluator? = nil,
+             onScriptExecuted: @escaping (ComputerViewerScriptCommand) -> Void = { _ in }) {
+            injectedEvaluator = evaluateScript
+            self.onScriptExecuted = onScriptExecuted
+            super.init()
+        }
+
+        func attach(_ webView: WKWebView) { self.webView = webView }
+
+        func accept(_ script: String?) {
+            guard let script, !script.isEmpty else { return }
+            accept([ComputerViewerScriptCommand(connectionId: "", id: UUID(), script: script)])
+        }
+
+        func accept(_ commands: [ComputerViewerScriptCommand]) {
+            for command in commands where receivedScriptIDs.insert(command.id).inserted {
+                pendingScripts.append(command)
+            }
+            drainScripts()
+        }
+
+        func pageDidFinishLoading() {
+            pageReady = true
+            drainScripts()
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
+            pageDidFinishLoading()
+        }
+
+        private func drainScripts() {
+            guard pageReady, !isEvaluatingScript, !pendingScripts.isEmpty else { return }
+            let command = pendingScripts.removeFirst()
+            isEvaluatingScript = true
+            let completion: () -> Void = { [weak self] in
+                guard let self else { return }
+                self.scriptEvaluationFinished(command)
+            }
+            if let injectedEvaluator {
+                injectedEvaluator(command.script, completion)
+            } else if let webView {
+                webView.evaluateJavaScript(command.script) { _, _ in completion() }
+            } else {
+                completion()
+            }
+        }
+
+        private func scriptEvaluationFinished(_ command: ComputerViewerScriptCommand) {
+            isEvaluatingScript = false
+            onScriptExecuted(command)
+            drainScripts()
+        }
 
         func load(_ viewer: SiloWireViewerOpenResult, in webView: WKWebView) {
             guard let url = URL(string: viewer.url), let origin = Origin(url),

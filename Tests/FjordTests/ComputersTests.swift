@@ -125,6 +125,52 @@ import Testing
         #expect(model.actionError?.localizedCaseInsensitiveContains("changed") == true)
     }
 
+    @Test func overlappingViewerOpensCloseTheSupersededConnection() async throws {
+        let client = MockEngineClient()
+        client.nextViewerOpenResults = [viewerResult("viewer-first"), viewerResult("viewer-second")]
+        client.suspendNextViewerOpen = true
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        let firstOpen = Task { await model.openScreen(for: MockEngineClient.linuxID) }
+        await client.waitForSuspendedViewerOpen()
+        let secondOpen = Task { await model.openScreen(for: MockEngineClient.linuxID) }
+        client.resumeSuspendedViewerOpen()
+        await firstOpen.value
+        await secondOpen.value
+
+        #expect(client.viewerOpenRequests == [MockEngineClient.linuxID, MockEngineClient.linuxID])
+        #expect(model.pendingViewer?.connectionId == "viewer-second")
+        #expect(client.viewerCloseRequests == ["viewer-first"])
+
+        await model.closeScreen()
+
+        #expect(client.viewerCloseRequests == ["viewer-first", "viewer-second"])
+        #expect(model.pendingViewer == nil)
+    }
+
+    @Test func closingWhileViewerOpenIsPendingClosesTheLateConnection() async {
+        let client = MockEngineClient()
+        client.nextViewerOpenResults = [viewerResult("viewer-late")]
+        client.suspendNextViewerOpen = true
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        let opening = Task { await model.openScreen(for: MockEngineClient.linuxID) }
+        await client.waitForSuspendedViewerOpen()
+        await model.closeScreen()
+        client.resumeSuspendedViewerOpen()
+        await opening.value
+
+        #expect(model.pendingViewer == nil)
+        #expect(client.viewerCloseRequests == ["viewer-late"])
+    }
+
+    private func viewerResult(_ connectionId: String) -> SiloWireViewerOpenResult {
+        SiloWireViewerOpenResult(connectionId: connectionId,
+            cookie: SiloWireViewerCookie(domain: "127.0.0.1", httpOnly: true,
+                                         name: "silo-viewer", path: "/", value: "demo"),
+            initScript: "", name: connectionId, url: "http://127.0.0.1:5099/")
+    }
+
     @Test func macosResourceEditStaysDisabledUntilTheWireContractExists() async {
         var inventory = MockEngineClient.demoInventory
         inventory.macos.computers = inventory.macos.computers.map { computer in

@@ -810,12 +810,22 @@ extension ComputersModel {
     }
 
     func openScreen(for computerId: String) async {
+        let requestID = UUID()
+        viewerRequestID = requestID
         guard let computer = inventory?.computer(computerId) else { return }
         if computer.kind == .macos {
             await showDisplay(computerId)
             return
         }
+
+        await viewerOperationGate.acquire()
+        defer { viewerOperationGate.release() }
+        guard viewerRequestID == requestID else { return }
         do {
+            if let existingViewer = pendingViewer {
+                try await closeViewerConnection(existingViewer)
+                guard viewerRequestID == requestID else { return }
+            }
             let viewer = try await client.invoke(SiloGeneratedMethods.displayViewerOpen(
                 SiloWireComputerTargetParams(computerId: computerId)))
             guard let url = URL(string: viewer.url), url.scheme == "http", url.host == "127.0.0.1",
@@ -823,18 +833,35 @@ extension ComputersModel {
                   viewer.cookie.httpOnly else {
                 throw EngineClientError.invalidAction("The engine returned an unsafe Linux viewer connection.")
             }
+            guard viewerRequestID == requestID else {
+                try await closeViewerConnection(viewer)
+                return
+            }
             pendingViewer = viewer
-        } catch { actionError = error.localizedDescription }
+        } catch {
+            if viewerRequestID == requestID { actionError = error.localizedDescription }
+        }
     }
 
     func closeScreen() async {
-        guard let viewer = pendingViewer else { return }
+        let requestID = UUID()
+        viewerRequestID = requestID
+        guard pendingViewer != nil else { return }
+        await viewerOperationGate.acquire()
+        defer { viewerOperationGate.release() }
+        guard viewerRequestID == requestID, let viewer = pendingViewer else { return }
         do {
-            try await client.invoke(SiloGeneratedMethods.displayViewerClose(
-                SiloWireViewerConnectionParams(connectionId: viewer.connectionId)))
-            viewerScripts[viewer.connectionId] = nil
-            pendingViewer = nil
-        } catch { actionError = error.localizedDescription }
+            try await closeViewerConnection(viewer)
+        } catch {
+            if viewerRequestID == requestID { actionError = error.localizedDescription }
+        }
+    }
+
+    private func closeViewerConnection(_ viewer: SiloWireViewerOpenResult) async throws {
+        try await client.invoke(SiloGeneratedMethods.displayViewerClose(
+            SiloWireViewerConnectionParams(connectionId: viewer.connectionId)))
+        viewerScripts[viewer.connectionId] = nil
+        if pendingViewer?.connectionId == viewer.connectionId { pendingViewer = nil }
     }
 
     private func waitForFeatureJob(_ jobId: String, label: String) async {

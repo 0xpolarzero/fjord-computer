@@ -166,15 +166,21 @@ struct ComputerDetailView: View {
             }
         }
         .sheet(isPresented: Binding(get: { model.pendingViewer != nil }, set: { presented in
-            if !presented, model.pendingViewer != nil { Task { await model.closeScreen() } }
+            if !presented { Task { await model.closeScreen() } }
         })) {
             if let viewer = model.pendingViewer {
-                ComputerViewerSheet(viewer: viewer, script: model.viewerScripts[viewer.connectionId],
-                                    mockPreview: model.client is MockEngineClient) {
+                ComputerViewerSheet(viewer: viewer,
+                                    scripts: model.viewerScripts[viewer.connectionId] ?? [],
+                                    mockPreview: model.client is MockEngineClient,
+                                    onScriptExecuted: { command in
+                                        model.acknowledgeViewerScriptCommand(connectionId: command.connectionId,
+                                                                            commandId: command.id)
+                                    }) {
                     Task { await model.closeScreen() }
                 }
             }
         }
+        .onDisappear { Task { await model.closeScreen() } }
     }
 
     private func back() {

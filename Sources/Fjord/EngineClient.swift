@@ -620,6 +620,12 @@ final class MockEngineClient: EngineClient {
     var suspendNextSubscription = false
     private var subscriptionContinuation: CheckedContinuation<Void, Never>?
     private var subscriptionWaiters: [CheckedContinuation<Void, Never>] = []
+    var suspendNextViewerOpen = false
+    private var viewerOpenContinuation: CheckedContinuation<Void, Never>?
+    private var viewerOpenWaiters: [CheckedContinuation<Void, Never>] = []
+    var nextViewerOpenResults: [SiloWireViewerOpenResult] = []
+    private(set) var viewerOpenRequests: [String] = []
+    private(set) var viewerCloseRequests: [String] = []
     private(set) var subscribeCallCount = 0
     private(set) var unsubscribeCallCount = 0
     private(set) var acknowledgedJobs: [String] = []
@@ -1387,12 +1393,26 @@ final class MockEngineClient: EngineClient {
                                   as: Result.self)
         case "display.viewer.open":
             let params = try mockDecode(call.params, as: SiloWireComputerTargetParams.self)
+            viewerOpenRequests.append(params.computerId)
+            if suspendNextViewerOpen {
+                suspendNextViewerOpen = false
+                await withCheckedContinuation { continuation in
+                    viewerOpenContinuation = continuation
+                    viewerOpenWaiters.forEach { $0.resume() }
+                    viewerOpenWaiters.removeAll()
+                }
+            }
+            if !nextViewerOpenResults.isEmpty {
+                return try mockResult(nextViewerOpenResults.removeFirst(), as: Result.self)
+            }
             let row = inventory.computer(params.computerId)
             return try mockResult(SiloWireViewerOpenResult(connectionId: "viewer-\(params.computerId)",
                 cookie: SiloWireViewerCookie(domain: "127.0.0.1", httpOnly: true, name: "silo-viewer",
                                              path: "/", value: "demo"), initScript: "", name: row?.name ?? "Linux computer",
                 url: "http://127.0.0.1:5099/"), as: Result.self)
         case "display.viewer.close":
+            let params = try mockDecode(call.params, as: SiloWireViewerConnectionParams.self)
+            viewerCloseRequests.append(params.connectionId)
             return try mockResult(SiloNull(), as: Result.self)
         default:
             throw EngineClientError.unsupported("The mock doesn't implement \(call.name).")
@@ -1524,6 +1544,17 @@ final class MockEngineClient: EngineClient {
     func waitForSuspendedSubscription() async {
         if subscriptionContinuation != nil { return }
         await withCheckedContinuation { subscriptionWaiters.append($0) }
+    }
+
+    func waitForSuspendedViewerOpen() async {
+        if viewerOpenContinuation != nil { return }
+        await withCheckedContinuation { viewerOpenWaiters.append($0) }
+    }
+
+    func resumeSuspendedViewerOpen() {
+        let continuation = viewerOpenContinuation
+        viewerOpenContinuation = nil
+        continuation?.resume()
     }
 
     func resumeSuspendedSubscription() {
