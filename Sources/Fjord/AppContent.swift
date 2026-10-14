@@ -308,6 +308,10 @@ struct AppContent: View {
             }
         }
         .onDisappear { Task { await store.computers.deactivate() } }
+        .onChange(of: store.computers.jobAwaitingAcknowledgement) { _, jobId in
+            guard let jobId else { return }
+            Task { await store.computers.acknowledgePresentedJob(jobId) }
+        }
     }
 
     /// Where the page's own ground starts: under the top bar before macOS 26, at the top on 26, where the page runs under

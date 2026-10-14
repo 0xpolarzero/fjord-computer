@@ -43,6 +43,7 @@ final class ComputersModel {
     private(set) var actionError: String?
     private(set) var activeJob: OperationJobProgress?
     private(set) var finishedJobs: [String: OperationJobFinished] = [:]
+    private(set) var jobAwaitingAcknowledgement: String?
     private(set) var quitPrompt: ComputerQuitPrompt?
     private(set) var quitError: String?
     private(set) var isQuitWorking = false
@@ -50,6 +51,8 @@ final class ComputersModel {
     @ObservationIgnored private var subscription: String?
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
     @ObservationIgnored private var finishWaiters: [String: [CheckedContinuation<OperationJobFinished, Never>]] = [:]
+    @ObservationIgnored private var jobActions: [String: String] = [:]
+    @ObservationIgnored private var presentedJobOutcomes: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Error>?
     @ObservationIgnored private var connectionAttemptID: UUID?
     @ObservationIgnored private var wantsConnection = false
@@ -188,8 +191,8 @@ final class ComputersModel {
         }
     }
 
-    func start(_ computerId: String) async { await perform { try await self.client.computersStart(ComputerReference(computerId: computerId)) } }
-    func stop(_ computerId: String) async { await perform { try await self.client.computersStop(ComputerReference(computerId: computerId)) } }
+    func start(_ computerId: String) async { await perform("Start") { try await self.client.computersStart(ComputerReference(computerId: computerId)) } }
+    func stop(_ computerId: String) async { await perform("Stop") { try await self.client.computersStop(ComputerReference(computerId: computerId)) } }
     func forceStop(_ computerId: String) async {
         actionError = nil
         do { try await client.computersForceStop(ComputerReference(computerId: computerId)) }
@@ -201,7 +204,7 @@ final class ComputersModel {
             return
         }
         let expected: ComputerConfiguration? = if case .linux(let computer) = row { computer.configuration } else { nil }
-        await perform { try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId, expected: expected)) }
+        await perform("Delete") { try await self.client.computersDelete(ComputerDeleteRequest(computerId: computerId, expected: expected)) }
     }
     func showDisplay(_ computerId: String) async {
         actionError = nil
@@ -210,7 +213,7 @@ final class ComputersModel {
     }
     func createCheckpoint(for computerId: String) async {
         let name = "Manual checkpoint · \(Date.now.formatted(.dateTime.month(.abbreviated).day()))"
-        await perform { try await self.client.checkpointsCreate(CheckpointCreateRequest(computerId: computerId, name: name, kind: .manual)) }
+        await perform("Create checkpoint") { try await self.client.checkpointsCreate(CheckpointCreateRequest(computerId: computerId, name: name, kind: .manual)) }
         await loadCheckpoints(for: computerId)
     }
     func createLinuxComputer() async {
@@ -218,30 +221,50 @@ final class ComputersModel {
         let configuration = ComputerConfiguration(id: id, name: "linux-new", cpus: 4, maxCPUs: 12,
                                                   memoryGiB: 8, maxMemoryGiB: 32, workspaceStorageGiB: 64,
                                                   runtimeStorageGiB: 32)
-        await perform { try await self.client.computersCreate(.linux(configuration, requestId: id)) }
+        await perform("Create Linux computer") { try await self.client.computersCreate(.linux(configuration, requestId: id)) }
     }
     func createMacosComputer() async {
         let request = MacosComputerCreateRequest(name: "macos-new", cpus: 4, memoryGiB: 8, diskGiB: 64)
-        await perform { try await self.client.computersCreate(.macos(request)) }
+        await perform("Create macOS computer") { try await self.client.computersCreate(.macos(request)) }
     }
     func restoreCheckpoint(_ checkpointId: String, computerId: String) async {
-        await perform { try await self.client.checkpointsRestore(CheckpointRestoreRequest(computerId: computerId, checkpointId: checkpointId)) }
+        await perform("Restore checkpoint") { try await self.client.checkpointsRestore(CheckpointRestoreRequest(computerId: computerId, checkpointId: checkpointId)) }
     }
     func forkCheckpoint(_ checkpointId: String, computerId: String, computerName: String) async {
-        await perform {
+        await perform("Fork checkpoint") {
             try await self.client.checkpointsFork(CheckpointForkRequest(computerId: computerId, checkpointId: checkpointId,
                                                                         newName: "\(computerName)-fork"))
         }
     }
     func deleteCheckpoint(_ checkpointId: String, computerId: String) async {
-        await perform { try await self.client.checkpointsDelete(CheckpointDeleteRequest(computerId: computerId, checkpointId: checkpointId)) }
+        await perform("Delete checkpoint") { try await self.client.checkpointsDelete(CheckpointDeleteRequest(computerId: computerId, checkpointId: checkpointId)) }
         await loadCheckpoints(for: computerId)
     }
 
-    private func perform<T>(_ action: () async throws -> T) async {
+    private func perform<T>(_ label: String, _ action: () async throws -> T) async {
         actionError = nil
-        do { _ = try await action() }
+        do {
+            let accepted = try await action()
+            let jobId: String? = if let job = accepted as? ComputerJob { job.jobId }
+                else if let job = accepted as? ComputerCreateResult { job.jobId }
+                else { nil }
+            guard let jobId else { return }
+            jobActions[jobId] = label
+            presentJobOutcome(await waitForFinish(jobId), action: label)
+        }
         catch { actionError = error.localizedDescription }
+    }
+
+    func acknowledgePresentedJob(_ jobId: String) async {
+        guard jobAwaitingAcknowledgement == jobId else { return }
+        do {
+            try await client.operationsJobAcknowledge(jobId: jobId)
+            finishedJobs[jobId] = nil
+            jobActions[jobId] = nil
+            jobAwaitingAcknowledgement = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
     }
 
     private func receive(_ event: EngineEvent) {
@@ -254,9 +277,17 @@ final class ComputersModel {
         case .jobFinished(let result):
             finishedJobs[result.jobId] = result
             if activeJob?.jobId == result.jobId { activeJob = nil }
+            if let action = jobActions[result.jobId] { presentJobOutcome(result, action: action) }
             let waiters = finishWaiters.removeValue(forKey: result.jobId) ?? []
             waiters.forEach { $0.resume(returning: result) }
         }
+    }
+
+    private func presentJobOutcome(_ result: OperationJobFinished, action: String) {
+        guard presentedJobOutcomes.insert(result.jobId).inserted else { return }
+        guard let failure = result.error else { return }
+        actionError = "\(action) failed: \(failure.message)"
+        jobAwaitingAcknowledgement = result.jobId
     }
 
     private func waitForFinish(_ jobId: String) async -> OperationJobFinished {

@@ -67,6 +67,22 @@ import Testing
         }
     }
 
+    @Test func acceptedJobFailureIsShownBeforeItIsAcknowledged() async throws {
+        let client = MockEngineClient()
+        client.nextJobFailure = OperationJobError(code: "internal", message: "disk image could not be opened")
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        await model.start(MockEngineClient.failedID)
+
+        #expect(model.actionError == "Start failed: disk image could not be opened")
+        let jobId = try #require(model.jobAwaitingAcknowledgement)
+        #expect(client.acknowledgedJobs.isEmpty)
+        await model.acknowledgePresentedJob(jobId)
+        #expect(client.acknowledgedJobs == [jobId])
+        #expect(model.jobAwaitingAcknowledgement == nil)
+    }
+
     @Test func cancelLeavesEngineConnectedAndDoesNotStopComputers() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client)

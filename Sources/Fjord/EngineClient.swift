@@ -456,6 +456,7 @@ protocol EngineClient {
     func displayShow(_ reference: ComputerReference) async throws
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String
     func eventsUnsubscribe(subscription: String) async
+    func operationsJobAcknowledge(jobId: String) async throws
     func engineDisconnect() async throws
 }
 
@@ -479,6 +480,7 @@ final class UnavailableEngineClient: EngineClient {
     func displayShow(_ reference: ComputerReference) async throws { try unavailable() }
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String { try unavailable() }
     func eventsUnsubscribe(subscription: String) async {}
+    func operationsJobAcknowledge(jobId: String) async throws { try unavailable() }
     func engineDisconnect() async throws {}
 }
 
@@ -549,6 +551,8 @@ final class MockEngineClient: EngineClient {
     private var subscriptionWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var subscribeCallCount = 0
     private(set) var unsubscribeCallCount = 0
+    private(set) var acknowledgedJobs: [String] = []
+    var nextJobFailure: OperationJobError?
 
     var activeSubscriptionCount: Int { subscribers.count }
 
@@ -835,6 +839,11 @@ final class MockEngineClient: EngineClient {
         subscribers[subscription] = nil
     }
 
+    func operationsJobAcknowledge(jobId: String) async throws {
+        acknowledgedJobs.append(jobId)
+        finished[jobId] = nil
+    }
+
     func waitForSuspendedSubscription() async {
         if subscriptionContinuation != nil { return }
         await withCheckedContinuation { subscriptionWaiters.append($0) }
@@ -876,7 +885,8 @@ final class MockEngineClient: EngineClient {
     }
 
     private func finish(_ jobId: String) {
-        let event = OperationJobFinished(jobId: jobId, result: nil, error: nil)
+        let event = OperationJobFinished(jobId: jobId, result: nil, error: nextJobFailure)
+        nextJobFailure = nil
         finished[jobId] = event
         if currentProgress?.jobId == jobId { currentProgress = nil }
         publish(.jobFinished(event))
