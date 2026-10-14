@@ -52,6 +52,7 @@ final class ComputersModel {
 
     @ObservationIgnored private var subscription: String?
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
+    @ObservationIgnored private var quitResolutionTask: Task<Void, Never>?
     @ObservationIgnored private var jobActions: [String: String] = [:]
     @ObservationIgnored private var presentedJobOutcomes: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Error>?
@@ -199,7 +200,7 @@ final class ComputersModel {
         }
         isQuitWorking = true
         quitError = nil
-        Task { [weak self] in
+        quitResolutionTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await self.resolveQuit(choice, prompt: prompt)
@@ -213,6 +214,10 @@ final class ComputersModel {
                 self.quitError = error.localizedDescription
             }
         }
+    }
+
+    func waitForQuitResolution() async {
+        await quitResolutionTask?.value
     }
 
     func resolveQuit(_ choice: ComputerQuitChoice, prompt: ComputerQuitPrompt) async throws {

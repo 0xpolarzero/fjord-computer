@@ -56,16 +56,16 @@ import Testing
         let model = ComputersModel(client: client, initialInventory: client.inventory)
         let configuration = try #require(client.inventory.linux.computers.first { $0.id == MockEngineClient.failedID }?.configuration)
 
-        await model.delete(MockEngineClient.failedID)
-        #expect(client.deleteRequests.first?.expected == configuration)
-        #expect(model.actionError == nil)
-
         do {
             _ = try await client.computersDelete(ComputerDeleteRequest(computerId: MockEngineClient.failedID))
             Issue.record("The mock must reject a Linux delete without expected configuration.")
         } catch {
             #expect(error.localizedDescription.contains("expected configuration"))
         }
+
+        await model.delete(MockEngineClient.failedID)
+        #expect(client.deleteRequests.last?.expected == configuration)
+        #expect(model.actionError == nil)
     }
 
     @Test func acceptedJobFailureIsShownBeforeItIsAcknowledged() async throws {
@@ -383,7 +383,7 @@ import Testing
         try await model.connect()
         model.presentQuitPrompt(prompt)
         model.chooseQuit(.stopAndQuit)
-        try await Task.sleep(for: .milliseconds(1_200))
+        await model.waitForQuitResolution()
         #expect(model.quitError?.contains("refused") == true)
         #expect(!model.isQuitWorking)
         #expect(model.quitPrompt != nil)
