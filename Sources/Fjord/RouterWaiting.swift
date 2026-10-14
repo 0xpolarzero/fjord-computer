@@ -464,13 +464,23 @@ extension Store {
             let answer = try await tools.prepare(store, session: session, ticket: tools.ticket())
             guard let to = (try? JSONSerialization.jsonObject(with: Data(answer.utf8)) as? [String: Any])?["to"] as? String,
                   let ready = tools.prepared[to] else { throw RouterTools.Failure("Not prepared") }
-            guard let binary = store.routerStatus.claudeCode?.path, let home = store.routerFiles?.routerHome else {
-                throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
+            let guest = ready.guestLocation != nil
+            let binary: String?
+            let home: URL?
+            if guest {
+                binary = nil
+                home = nil
+            } else {
+                guard let localBinary = store.routerStatus.claudeCode?.path, let localHome = store.routerFiles?.routerHome else {
+                    throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
+                }
+                binary = localBinary
+                home = localHome
             }
-            await PrivateFile.makeFolder(home)
+            if let home { await PrivateFile.makeFolder(home) }
             try await check()
             try await RouterSender.send(binary: binary, cwd: home, to: to, text: ready.text, tools: tools,
-                                        inbox: await store.relayInbox(forSigned: ready.text))
+                                        inbox: guest ? nil : await store.relayInbox(forSigned: ready.text))
         }
     }
 }

@@ -266,7 +266,7 @@ enum RouterSender {
     /// message to the process below, the gate's approval given back first.
     /// Returns the plugin's ack when it went through the inbox (what it applied of the message's settings), else nil.
     @MainActor @discardableResult
-    static func send(binary: String, cwd: URL, to: String, text: String, tools: RouterTools, timeout: TimeInterval = 45,
+    static func send(binary: String?, cwd: URL?, to: String, text: String, tools: RouterTools, timeout: TimeInterval = 45,
                      inbox: RelayInbox? = nil, decisionID: UUID? = nil, hostSessionID: String? = nil,
                      body: String? = nil) async throws -> String? {
         if let ready = tools.prepared[to], let location = ready.guestLocation {
@@ -318,6 +318,7 @@ enum RouterSender {
                 throw RouterTools.Failure(failure.localizedDescription)
             }
         }
+        guard let binary, let cwd else { throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent") }
         signal(SIGPIPE, SIG_IGN)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)

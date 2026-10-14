@@ -390,6 +390,69 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(store.router.pendingDesktopStarts.first?.guestSessionID == cliID)
     }
 
+    @MainActor @Test func dispatcherSendsAndChecksAbortForGuestWithoutLocalClaude() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        store.router.enabled = true
+        store.agents.enabled = true
+        let desktopID = "local_guest_dispatch"
+        let cliID = "guest-cli-dispatch"
+        let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
+        let start: Int64 = 1_800_000_000_000
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let key = String(repeating: "ef", count: 32)
+        _ = try await guest.filesWrite(.init(computer: computer, path: paths.key, data: Data(key.utf8), mode: 0o600))
+        let presence = try JSONSerialization.data(withJSONObject: [
+            "state": "live", "sessionId": cliID, "pid": 42, "startedAt": 123,
+            "keyId": ClaudePlugin.keyID(of: key), "renewedAt": start,
+            "capabilities": [ClaudePlugin.inboxCapability, ClaudePlugin.abortCapability],
+        ])
+        _ = try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.presence, cliID), data: presence, mode: 0o600))
+        let registry = try JSONSerialization.data(withJSONObject: [
+            "hostSessionId": desktopID, "sessionId": cliID, "pid": 42, "startedAt": 123,
+        ])
+        _ = try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.registry, "42.json"), data: registry, mode: 0o600))
+        let transcript = try JSONSerialization.data(withJSONObject: [
+            "type": "user", "uuid": "dispatch-user", "cwd": "/workspace/repo", "timestamp": "2027-01-15T08:00:10.000Z",
+            "message": ["role": "user", "content": "Run the checks"],
+        ], options: [.sortedKeys]) + Data("\n".utf8)
+        _ = try await guest.filesWrite(.init(computer: computer,
+            path: GuestRouterPaths.join(GuestRouterPaths.join(paths.projects, "workspace-repo"), "\(cliID).jsonl"),
+            data: transcript, mode: 0o600))
+        let clockArgv = [account.nodeExecutable, "-e", "process.stdout.write(String(Date.now()))"]
+        await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data(String(start + 1_000).utf8), stderr: Data()), argv: clockArgv)
+        let nonce = "0123456789abcdef0123456789abcdef"
+        let signed = "⟦fjord v1 \(cliID) \(nonce) \(start + 60_000) \(String(repeating: "a", count: 64))⟧\nRun the checks"
+        let ackPath = GuestRouterPaths.join(GuestRouterPaths.join(paths.inbox, cliID), "\(nonce).ack")
+        let messagePath = GuestRouterPaths.join(GuestRouterPaths.join(paths.inbox, cliID), "\(nonce).msg")
+        await guest.acknowledgeWhenMessageIsAdmitted(computer: computer, messagePath: messagePath,
+                                                      ackPath: ackPath, data: Data("ok".utf8))
+        store.claudeSessions[desktopID] = ClaudeSession(id: desktopID, title: "Guest task", folder: "/workspace/repo",
+            lastActivity: Date(timeIntervalSince1970: Double(start) / 1000), running: true, cliID: cliID, sshHost: "ssh-computer-1")
+        store.router.pendingDesktopStarts = [PendingDesktopStart(projectID: UUID(), location: location,
+            alias: "ssh-computer-1", folder: "/workspace/repo", prompt: "Run the checks", openedAt: Date(timeIntervalSince1970: Double(start) / 1000),
+            state: .matched, desktopSessionID: desktopID, guestSessionID: cliID)]
+        try await GuestRouterRuntime.shared.startWatching(store: store, client: guest, computer: computer)
+
+        let tools = RouterTools(store: store)
+        tools.beginTurn("Run the checks")
+        tools.prepared["peer-guest"] = Prepared(text: signed, original: "Run the checks", rephrased: false,
+            body: "Run the checks", guestLocation: location)
+        store.routerDispatcher.claudePath = { nil }
+        let effects = RouterDispatcher.Effects.live(store.routerDispatcher)
+        #expect(await effects.abortable(cliID))
+        do {
+            let ack = try await effects.send(tools, .init(to: "peer-guest", text: signed, body: "Run the checks",
+                original: "Run the checks", rephrased: false, session: desktopID, newSessionIn: nil))
+            #expect(ack == "ok")
+        } catch {
+            Issue.record("guest delivery required local Claude Code: \(error.localizedDescription)")
+        }
+        #expect(await guest.writeRecords().contains { $0.path == messagePath && $0.data == Data(signed.utf8) })
+    }
+
     @MainActor @Test func matchedSessionKeepsGuestIdentityWhenMappedBackToItsRouterProject() {
         let store = Store(engineClient: MockEngineClient())
         store.persists = false

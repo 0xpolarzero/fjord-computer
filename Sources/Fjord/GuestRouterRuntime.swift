@@ -253,6 +253,20 @@ import Foundation
         store?.router.pendingDesktopStarts.first { $0.desktopSessionID == desktopSessionID && $0.state == .matched }?.guestSessionID
     }
 
+    func location(forGuestSessionID cliSessionID: String) -> SessionLocation? {
+        store?.router.pendingDesktopStarts.first { $0.guestSessionID == cliSessionID && $0.state == .matched }?.location
+    }
+
+    func supportsAbort(forGuestSessionID cliSessionID: String) -> Bool {
+        guard let pending = store?.router.pendingDesktopStarts.first(where: {
+            $0.guestSessionID == cliSessionID && $0.state == .matched
+        }), let desktopID = pending.desktopSessionID else { return false }
+        return evidence[pending.location.key]?.contains {
+            $0.hostSessionID == desktopID && $0.cliSessionID == cliSessionID
+                && $0.capabilities.contains(ClaudePlugin.abortCapability)
+        } == true
+    }
+
     func guestReference(for desktopSessionID: String) -> GuestReference? {
         guard case .computer(let deviceId, let computerId)? = location(for: desktopSessionID) else { return nil }
         return GuestReference(deviceId: deviceId, computerId: computerId)

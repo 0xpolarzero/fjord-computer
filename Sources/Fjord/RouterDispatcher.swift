@@ -1479,12 +1479,22 @@ extension RouterDispatcher.Effects {
             send: { [weak dispatcher] tools, delivery in
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
-                guard let binary = dispatcher.claudePath(), let home = store.routerFiles?.routerHome else {
-                    throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
+                let guest = tools.prepared[delivery.to]?.guestLocation != nil
+                let binary: String?
+                let home: URL?
+                if guest {
+                    binary = nil
+                    home = nil
+                } else {
+                    guard let localBinary = dispatcher.claudePath(), let localHome = store.routerFiles?.routerHome else {
+                        throw RouterTools.Failure("Claude Code wasn't found, so nothing can be sent")
+                    }
+                    binary = localBinary
+                    home = localHome
                 }
-                await PrivateFile.makeFolder(home)
+                if let home { await PrivateFile.makeFolder(home) }
                 return try await RouterSender.send(binary: binary, cwd: home, to: delivery.to, text: delivery.text, tools: tools,
-                    inbox: await store.relayInbox(forSigned: delivery.text), decisionID: tools.decision,
+                    inbox: guest ? nil : await store.relayInbox(forSigned: delivery.text), decisionID: tools.decision,
                     hostSessionID: delivery.session, body: delivery.body)
             },
             answer: { [weak dispatcher] tools, card, answers in
@@ -1499,6 +1509,9 @@ extension RouterDispatcher.Effects {
             },
             abortable: { [weak dispatcher] cli in
                 guard let store = dispatcher?.storeForEffects else { return false }
+                if GuestRouterRuntime.shared.location(forGuestSessionID: cli) != nil {
+                    return GuestRouterRuntime.shared.supportsAbort(forGuestSessionID: cli)
+                }
                 return await store.supportsAbort(cli)
             },
             cancel: { [weak dispatcher] sent in
