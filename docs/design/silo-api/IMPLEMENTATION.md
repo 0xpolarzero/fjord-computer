@@ -10,8 +10,8 @@ Silo repo: `/Users/polarzero/code/projects/microsandbox-workspaces`, crate `app/
 
 | Track | What | Depends on | Status |
 | --- | --- | --- | --- |
-| P1-engine | Pull the backend logic into a Tauri-free engine library crate (`silo-engine`) behind an `EngineContext` (paths, events, main thread, process), per 05 §2. `silo-ui` becomes a thin adapter; all existing tests pass. | — | running |
-| P1-api | A `silo-api` crate holding the canonical wire types: request/response envelope, handshake, `JobId` and job progress/finished, the event envelope and catalogue, error codes. JSON Schema generation (schemars), per 05 §4.2 and #job-contract. Types and schema only, no dispatch. | — | running |
+| P1-engine | (split into E1–E5, see design/extraction-conventions.md) Pull the backend logic into a Tauri-free engine library crate (`silo-engine`) behind an `EngineContext` (paths, events, main thread, process), per 05 §2. `silo-ui` becomes a thin adapter; all existing tests pass. | — | running |
+| P1-api | A `silo-api` crate holding the canonical wire types: request/response envelope, handshake, `JobId` and job progress/finished, the event envelope and catalogue, error codes. JSON Schema generation (schemars), per 05 §4.2 and #job-contract. Types and schema only, no dispatch. | — | **merged** to Silo main (7a0591f9), reviewed |
 | P1-fjord-ui | Fjord: an `EngineClient` protocol plus a mock, a Computers tool skeleton (list, detail, actions) on demo data, and window shots. | — | running |
 
 ### Phase 2: the engine process
