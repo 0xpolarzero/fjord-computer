@@ -503,35 +503,37 @@ enum OperationJobProgressData: Equatable {
 
     var presentationProgress: Double? {
         switch self {
-        case .setup(let value): value.fraction
-        case .lifecycle: nil
-        case .transfer(let value): value.bytesTotal == 0 ? nil : Double(value.bytesDone) / Double(value.bytesTotal)
-        case .backup(let value): Double(value.progress) / 100
-        case .push: nil
-        case .macos(let value): value.progress
+        case .setup(let value): return value.fraction
+        case .lifecycle: return nil
+        case .transfer(let value):
+            guard value.bytesTotal > 0 else { return nil }
+            return Double(value.bytesDone) / Double(value.bytesTotal)
+        case .backup(let value): return Double(value.progress) / 100
+        case .push: return nil
+        case .macos(let value): return value.progress
         case .update(let value):
             guard let total = value.totalBytes, total > 0, let done = value.downloadedBytes else { return nil }
-            Double(done) / Double(total)
+            return Double(done) / Double(total)
         }
     }
 
     var presentationTitle: String? {
         switch self {
-        case .setup(let value): value.message
-        case .lifecycle(let value): "\(value.action.capitalized) · \(value.step)"
-        case .transfer(let value): value.name
-        case .backup(let value): value.phases.last?.detail ?? "Backup"
-        case .push(let value): value.message ?? "Pushing changes"
-        case .macos(let value): value.detail ?? value.state.capitalized
-        case .update(let value): value.error ?? value.phase.capitalized
+        case .setup(let value): return value.message
+        case .lifecycle(let value): return "\(value.action.capitalized) · \(value.step)"
+        case .transfer(let value): return value.name
+        case .backup(let value): return value.phases.last?.detail ?? "Backup"
+        case .push(let value): return value.message ?? "Pushing changes"
+        case .macos(let value): return value.detail ?? value.state.capitalized
+        case .update(let value): return value.error ?? value.phase.capitalized
         }
     }
 
     var presentationComputerId: String? {
         switch self {
-        case .lifecycle(let value): value.computerId
-        case .macos(let value): value.computerId
-        case .setup, .transfer, .backup, .push, .update: nil
+        case .lifecycle(let value): return value.computerId
+        case .macos(let value): return value.computerId
+        case .setup, .transfer, .backup, .push, .update: return nil
         }
     }
 }
