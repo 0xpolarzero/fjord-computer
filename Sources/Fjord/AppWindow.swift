@@ -1304,6 +1304,7 @@ final class AppRootActions {
             case .category(let id): navigator.go(.categories); hub.openCategory(id)
             case .group(let id): navigator.go(.categories); hub.openGroup(id)
             case .categories: navigator.go(.categories)
+            case .router: navigator.go(.router)
             case .settings(let section):
                 navigator.go(.settings)
                 hub.settingsScroll = ScrollRequest(id: section, seq: (hub.settingsScroll?.seq ?? 0) + 1)

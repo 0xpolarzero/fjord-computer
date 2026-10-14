@@ -99,14 +99,14 @@ enum FjordTools {
                       ]] as [String: Any]),
         Tool(name: "mark_seen", doc: "Router cards (Claude Code sessions') worth a look, marked as seen when the user says they've seen or read them: they leave Now and the Brief. Not for GitHub things: use mark_entries for those. Name each by the `card` or `session` id the board tool gives, or words of its title; only cards the board says `canMarkSeen`: one that needs the user (a question, a plan, an OK) is answered, not marked seen.",
              fields: [.init("cards", .list(.string("session id or title words")), "The cards worth a look the user has seen.")]),
-        Tool(name: "archive_cards", doc: "Archives Router cards (Claude Code sessions'), any open one, even one that needs the user: for when the user says they will handle it themselves or don't need it. It is the Archive button: the card goes to the history, where Reopen brings it back. Name each by the `card` or `session` id the board tool gives, or words of its title; only cards the user's message names (else it is refused). Not for GitHub things: use mark_entries. The change is recorded in the history: don't repeat it back.",
+        Tool(name: "archive_cards", doc: "Archives Router cards (Claude Code sessions'), any open one, even one that needs the user: for when the user says they will handle it themselves or don't need it. It is the Archive button: the card goes to the history, where Reopen brings it back. Name each by the `card` or `session` id the board tool gives, or words of its title; It only proposes: the change waits for the user's Apply on a card in the history (Revert brings the card back), and nothing is archived until they click it, so say in your reply that it waits for them. Not for GitHub things: use mark_entries.",
              fields: [.init("cards", .list(.string("session id or title words")), "The open cards the user named.")]),
-        Tool(name: "reopen_card", doc: "Reopens a Router card the user archived lately (the board tool lists the latest archived ones, with `card`, title and when): it is back in Needs you or Worth a look. Name it by its `card` id or words of its title; only a card the user's message names.",
+        Tool(name: "reopen_card", doc: "Reopens a Router card the user archived lately (the board tool lists the latest archived ones, with `card`, title and when): it is back in Needs you or Worth a look. Name it by its `card` id or words of its title. It only proposes: the change waits for the user's Apply (Revert archives it again). Refused when its session has another open card, which reopening would replace. Say in your reply that it waits for them.",
              fields: [.init("card", .string("card id or title words"), "The archived card.")]),
-        Tool(name: "mute_project", doc: "Mutes or unmutes a project's sessions in the Router, so their cards, notifications and the Brief leave it or come back. Name the project as the board tool shows it; only a project the user's message names, and only when it asks to mute or unmute. If the name fits more than one project, nothing is changed and the choices are listed.",
+        Tool(name: "mute_project", doc: "Mutes or unmutes a project's sessions in the Router, so their cards, notifications and the Brief leave it or come back. Name the project as the board tool shows it, with its path above it when two share a name (`customer-a/app`). It only proposes: the change waits for the user's Apply (Revert undoes it), so say in your reply that it waits for them. If the name fits more than one project, nothing is proposed and the choices are listed.",
              fields: [.init("project", .string("project name"), "The project, as the board's `projects` shows it."),
                       .init("muted", .bool, "true to mute it, false to unmute it.")]),
-        Tool(name: "stop_session", doc: "Stops what a running session is working on now. Only when the user's message names the session and asks to stop or interrupt it. It works only for a turn that a message sent through Fjord started, in a session whose Fjord plugin supports it (the answer says why when it can't); what the turn already did stays done.",
+        Tool(name: "stop_session", doc: "Proposes stopping what a running session is working on now: the change waits for the user's Apply, and a stop can't be undone, so say in your reply that it waits for them. It works only for the running turn when a message sent through Fjord started it (not one queued behind it), in a session whose Fjord plugin supports it (the answer says why when it can't); what the turn already did stays done.",
              fields: [.init("session", .string("session id or title words"), "The running session, by the `session` id the board tool gives or words of its title.")]),
         Tool(name: "list_known", doc: "The repos, people or teams Triage knows (from what it has fetched and what the user has), to fill a rule's values; also the special values and the groups of that kind.",
              fields: [.init("kind", .choice(["repos", "people", "teams"]), "What to list."),
@@ -159,7 +159,7 @@ extension RouterTools {
             case "archive_cards": text = try archiveCards(store, args)
             case "reopen_card": text = try reopenCard(store, args)
             case "mute_project": text = try muteProject(store, args)
-            case "stop_session": text = try await stopSession(store, args)
+            case "stop_session": text = try stopSession(store, args)
             default: return nil
             }
             return RouterRPC.ToolResult(text: text)
@@ -255,7 +255,7 @@ extension RouterTools {
     /// The record of a change, for the card. A change to what an earlier change of this turn touched joins that one's
     /// record (one card, one `changed` in the decision); nil when the two together change nothing, and none is kept.
     @discardableResult
-    private func record(_ store: Store, _ change: FjordChange) -> FjordChange? {
+    func record(_ store: Store, _ change: FjordChange) -> FjordChange? {
         var state = store.router
         // A change that waits for the user stands alone: nothing joins it, and it joins nothing.
         for id in turnChanges.reversed() where change.pending == nil {
@@ -286,7 +286,7 @@ extension RouterTools {
         return change
     }
 
-    private func done(_ store: Store, _ change: FjordChange?, _ extra: [String: Any] = [:]) -> String {
+    func done(_ store: Store, _ change: FjordChange?, _ extra: [String: Any] = [:]) -> String {
         var out = extra
         guard let change else {
             out["changed"] = "nothing"

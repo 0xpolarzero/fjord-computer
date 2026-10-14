@@ -19,8 +19,9 @@ extension Store {
         return nil
     }
 
-    /// Takes a delivery back through its session's inbox, and reads how far it had gone from the plugin's answer.
-    func cancelDelivery(_ sent: RouterDecision.Delivered) async throws -> RouterDecision.Cancelled {
+    /// Takes a delivery back through its session's inbox, and reads how far it had gone from the plugin's answer. `gate` is
+    /// asked on the main actor right before the abort is written (local and guest alike): a reason refuses it, unwritten.
+    func cancelDelivery(_ sent: RouterDecision.Delivered, gate: (@MainActor @Sendable () -> String?)? = nil) async throws -> RouterDecision.Cancelled {
         guard let paths = routerFiles else { throw RouterTools.Failure("The Router is off") }
         if let computer = GuestRouterRuntime.shared.guestReference(for: sent.session) {
             let connected: (any GuestClient)? = if let location = GuestRouterRuntime.shared.location(for: sent.session) {
@@ -45,7 +46,7 @@ extension Store {
             }
             let text = RelaySigner.signAbort(target: sent.cli, cancels: sent.nonce, key: key,
                                              now: GuestClock.date(milliseconds: guestNowMs))
-            let ack = try await GuestRouterRuntime.shared.deliver(text, to: sent.cli, computer: computer)
+            let ack = try await GuestRouterRuntime.shared.deliver(text, to: sent.cli, computer: computer, gate: gate)
             guard let how = RouterDecision.Cancelled(ack: ack) else {
                 throw RouterTools.Failure("The guest session's plugin answered “\(RouterDecision.clip(ack, 60))”")
             }
@@ -57,7 +58,7 @@ extension Store {
         var text = signAbort(target: sent.cli, cancels: sent.nonce)
         if text == nil, await reloadRelayKey() { text = signAbort(target: sent.cli, cancels: sent.nonce) }
         guard let text else { throw RouterTools.Failure("The Router is off") }
-        let ack = try await RelayInbox(root: paths.relay).deliver(text, to: sent.cli)
+        let ack = try await RelayInbox(root: paths.relay).deliver(text, to: sent.cli, gate: gate)
         guard let how = RouterDecision.Cancelled(ack: ack) else { throw RouterTools.Failure("The session's plugin answered “\(RouterDecision.clip(ack, 60))”") }
         return how
     }

@@ -56,13 +56,14 @@ extension RouterCapability {
         .init(id: "archive-cards", intent: .changeFjord,
               outcome: "archive a Router card the user will handle themselves or doesn't need (\"I'll do the theme one myself\", \"archive the login card\")",
               tools: ["archive_cards", "board"],
-              roleSentence: "You archive any open Router card, one that needs the user too, with `archive_cards`, when the user says they will "
-                  + "handle it themselves or don't need it: only cards their message names.",
+              roleSentence: "You propose archiving any open Router card, one that needs the user too, with `archive_cards`, when the user says "
+                  + "they will handle it themselves or don't need it: the user applies it from a card in the history.",
               scope: "which Router cards are archived"),
         .init(id: "reopen-card", intent: .changeFjord,
               outcome: "reopen a Router card the user archived (\"reopen the docs card\")",
               tools: ["reopen_card", "board"],
-              roleSentence: "You bring a recently archived card back with `reopen_card`; the `board` tool lists the latest archived cards.",
+              roleSentence: "You propose bringing a recently archived card back with `reopen_card`, which the user applies; the `board` tool lists "
+                  + "the latest archived cards.",
               scope: "which archived Router cards are reopened"),
         .init(id: "mute-project", intent: .changeFjord,
               outcome: "mute or unmute a project's sessions in the Router (\"mute microsandbox\")",
@@ -70,8 +71,8 @@ extension RouterCapability {
               // one added nothing (docs/design/router-research.md, "Router actions from words").
               routed: false,
               tools: ["mute_project", "board"],
-              roleSentence: "You mute or unmute a whole project's sessions in the Router with `mute_project`, by the project name the `board` "
-                  + "tool shows: only a project the user's message names.",
+              roleSentence: "You propose muting or unmuting a whole project's sessions in the Router with `mute_project`, by the project name "
+                  + "the `board` tool shows; the user applies it.",
               scope: "which projects are muted in the Router"),
         .init(id: "stop-session", intent: .changeFjord,
               outcome: "stop a running session's current turn (\"stop the CI session\")",
@@ -79,12 +80,12 @@ extension RouterCapability {
               // Router, as without it). The tool stays in a run that reaches the Router another way.
               routed: false,
               tools: ["stop_session", "board"],
-              roleSentence: "You stop what a running session is working on now with `stop_session`, only when the user asks to stop or "
-                  + "interrupt it by name; it works only for a turn that a message sent through Fjord started, in a session whose plugin "
-                  + "supports it, and says why when it can't.",
+              roleSentence: "You propose stopping what a running session is working on now with `stop_session`, which the user applies and "
+                  + "can't undo; it works only for the running turn when a message sent through Fjord started it, in a session whose "
+                  + "plugin supports it, and says why when it can't.",
               scope: "which running sessions are stopped",
-              guidance: "Archiving, reopening, muting and stopping take effect at once and are recorded in the history: don't repeat them "
-                  + "back, and never act on a card, project or session the user's message doesn't name; if a tool refuses, say why in a line."),
+              guidance: "Archiving, reopening, muting and stopping are only proposed: nothing changes until the user clicks Apply on the card "
+                  + "in the history, so say in a line that it waits for them; if a tool refuses, say why in a line."),
         .init(id: "question-board", intent: .question, outcome: nil, tools: ["board", "get_settings"], roleSentence: nil,
               reads: "cards, working sessions, the Brief, settings"),
         .init(id: "question-triage", intent: .question, outcome: nil,

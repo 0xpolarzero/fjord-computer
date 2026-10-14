@@ -626,6 +626,10 @@ final class Store {
     /// Who may make the relay key (see `RelayKeyFence`), and the key as last read (see `signRelay`).
     @ObservationIgnored let relayKeyFence = RelayKeyFence()
     @ObservationIgnored var relayKeyCache: RelayKeyCache?
+    /// The proposed stops being applied now (a second click on Apply does nothing).
+    @ObservationIgnored var stopsApplying: Set<UUID> = []
+    /// Takes back a delivery through its session's plugin (a proposed stop, once applied); tests answer for it. Nil: `cancelDelivery`.
+    @ObservationIgnored var deliveryCanceller: ((RouterDecision.Delivered, @escaping @MainActor @Sendable () -> String?) async throws -> RouterDecision.Cancelled)?
     @ObservationIgnored var pluginQuitObserver: NSObjectProtocol?
     /// Where Claude Code's binary is; the newest copy the Claude app bundles unless a test says otherwise.
     @ObservationIgnored var routerClaudeBinary: (@Sendable () -> String?)?

@@ -68,7 +68,11 @@ struct ChangeCard: View {
             } else {
                 failure
                 ClaudeButton("Open", variant: .ghost, size: .sm) { openChange(change) }
-                ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertFjordChange(change.id) }
+                if case .cardAction(let action) = change.patch, !action.isRevertible {
+                    Text("Can't be undone").cdsText(CDS.Density.compact.footnote, .regular, CDS.Text.muted)
+                } else {
+                    ClaudeButton("Revert", variant: .secondary, size: .sm) { store.revertFjordChange(change.id) }
+                }
             }
         }
         .padding(.horizontal, CDS.Density.compact.pad.xs)
@@ -136,6 +140,13 @@ struct ChangeCard: View {
             }
         case .marks(_, let changes):
             MarksPreview(changes: changes, store: store)
+        case .cardAction(let action):
+            VStack(alignment: .leading, spacing: 2) {
+                Text(action.before).cdsText(CDS.Transcript.text, .regular, CDS.Text.muted)
+                Text(action.after).cdsText(CDS.Transcript.text)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
         }
     }
 }

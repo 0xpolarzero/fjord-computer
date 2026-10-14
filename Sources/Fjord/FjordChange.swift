@@ -43,6 +43,8 @@ struct FjordChange: Codable, Hashable, Identifiable {
         case order(before: [UUID], after: [UUID])
         case setting(key: String, before: SettingValue, after: SettingValue)
         case marks(state: String, [EntryChange])
+        /// An action on the Router page the Router proposed (archive, reopen, mute, stop): it waits for your Apply.
+        case cardAction(CardAction)
     }
 
     var isReverted: Bool { revertedAt != nil }
@@ -64,6 +66,7 @@ struct FjordChange: Codable, Hashable, Identifiable {
         case .order: "arrow.up.arrow.down"
         case .setting: "gearshape"
         case .marks: "checkmark.circle"
+        case .cardAction(let action): action.symbol
         }
     }
 
@@ -212,6 +215,8 @@ extension FjordChange {
             }
             return ChangePayload(before: changes.map { "\(name($0.thing)): \(Self.describe($0.before))" },
                                  after: changes.map { "\(name($0.thing)): \(Self.describe($0.after))" })
+        case .cardAction(let action):
+            return ChangePayload(before: [action.before], after: [action.after])
         }
     }
 
@@ -417,6 +422,13 @@ extension Store {
                 if marks[item.thing] != item.after { edited = true }
                 marks[item.thing] = item.before
             }
+        case .cardAction(let action):
+            guard action.isRevertible else { return nil }
+            do { try revertCardAction(action) } catch {
+                change.revertNote = "Couldn't put it back: \(error.localizedDescription)"
+                router.changes[message] = change
+                return change
+            }
         }
         change.revertedAt = now
         change.revertNote = edited ? "Reverted (later edits to it were undone too)" : "Reverted"
@@ -445,13 +457,20 @@ enum FjordTarget: Equatable {
     case categories
     /// Settings, scrolled to a section.
     case settings(section: String)
+    /// The Router page.
+    case router
     /// A thing in its list (its category, or the archive), picked and scrolled to.
     case entry(thing: String, category: UUID?, done: Bool)
 }
 
 extension FjordChange {
     /// It changed Triage (its categories, groups or inbox), not the app's settings.
-    var touchesTriage: Bool { if case .setting = patch { false } else { true } }
+    var touchesTriage: Bool {
+        switch patch {
+        case .setting, .cardAction: false
+        default: true
+        }
+    }
 
     /// Where Open goes now: a category or group that is gone opens the page that listed it.
     @MainActor func target(in store: Store) -> FjordTarget {
@@ -470,6 +489,8 @@ extension FjordChange {
         case .marks(_, let changes):
             guard let first = changes.first?.thing, let entry = store.entries.first(where: { $0.id == first }) else { return .categories }
             return .entry(thing: first, category: entry.categoryID, done: entry.isDone)
+        case .cardAction(let action):
+            return action.isMute ? .settings(section: SettingsView.routerID) : .router
         }
     }
 }

@@ -67,6 +67,8 @@ enum FjordGate {
         case .marks(_, let changes):
             if changes.count > manyMarks { return "It marks \(changes.count) things at once" }
             return said.contains(where: { word in markWords.contains { word.hasPrefix($0) } }) ? nil : "Your message didn't ask to mark anything"
+        case .cardAction(let action):
+            return action.waitingReason
         }
     }
 
@@ -120,37 +122,6 @@ enum FjordGate {
             return (0...(said.count - name.count)).contains { Array(said[$0..<($0 + name.count)]) == name }
         }
     }
-
-    /// The words that name a card, session or project by its title: those of the title that are neither a command's words nor
-    /// little ones ("fix", "the", "session").
-    static func nameWords(_ title: String) -> [String] {
-        words(title).filter { $0.count >= 2 && !commandWords.contains($0) && !littleWords.contains($0) }
-    }
-
-    /// Whether your message names a card or session by its title: it says a word of it (or its plural, or the singular of
-    /// one), as "the login card" names “Fix login redirect”. A title with no such word can't be named this way.
-    static func namesTitle(_ request: String, title: String) -> Bool {
-        func stem(_ w: String) -> String { w.count > 3 && w.hasSuffix("s") ? String(w.dropLast()) : w }
-        let said = words(request).map(stem)
-        return nameWords(title).map(stem).contains { word in
-            said.contains { $0 == word || (min($0.count, word.count) >= 4 && ($0.hasPrefix(word) || word.hasPrefix($0))) }
-        }
-    }
-
-    /// Whether your message asks to stop or interrupt something.
-    static func asksToStop(_ request: String) -> Bool {
-        words(request).contains { word in ["stop", "interrupt", "abort", "cancel", "halt", "kill"].contains { word.hasPrefix($0) } }
-    }
-
-    /// Whether your message asks to mute or unmute.
-    static func asksToMute(_ request: String) -> Bool {
-        words(request).contains { word in ["mute", "unmute", "silen", "quiet", "hush"].contains { word.hasPrefix($0) } }
-    }
-
-    private static let littleWords: Set<String> = [
-        "fix", "add", "update", "new", "session", "card", "project", "is", "on", "for", "with", "by", "at", "my", "me", "we", "i",
-        "up", "do", "be", "no", "not", "from", "into", "one", "its", "are", "was",
-    ]
 
     /// The words of a marking command, which name no thing or category however they are titled.
     private static let commandWords: Set<String> = [
@@ -241,6 +212,11 @@ extension Store {
     func applyFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
         guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
         var change = router.changes[i]
+        // A stop tells the session's plugin, which takes a moment: it is applied on its own, and the card follows.
+        if case .cardAction(.stop) = change.patch {
+            Task { @MainActor [weak self] in await self?.applyStopChange(id) }
+            return change
+        }
         // What its Details showed of the groups it uses is what it applies with: changed since, it waits again, saying how,
         // and its Details show them as they are now.
         if case .category(_, _, let after?) = change.patch {
@@ -306,6 +282,8 @@ extension Store {
             try FjordSetting.named(key)?.apply(self, after)
         case .marks(_, let changes):
             for item in changes { marks[item.thing] = item.after }
+        case .cardAction(let action):
+            try applyCardAction(action)
         }
     }
 }
