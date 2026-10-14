@@ -451,7 +451,11 @@ import Testing
         model.open()
         let opened = made
         model.reloadSoon(); model.reloadSoon(); model.reloadSoon()
-        try? await Task.sleep(for: .milliseconds(600))
+        // Waits for the reload rather than a fixed time (a busy test run can hold the main actor), then a while longer to
+        // see that no second one follows.
+        let deadline = Date().addingTimeInterval(10)
+        while made == opened && Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+        try? await Task.sleep(for: .milliseconds(400))
         #expect(made == opened + 1)
     }
 
