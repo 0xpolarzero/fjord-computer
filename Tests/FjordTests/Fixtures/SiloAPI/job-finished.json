@@ -1,0 +1,7 @@
+{
+  "jobId": "job:lifecycle-1",
+  "result": {
+    "computerId": "computer-1",
+    "state": "running"
+  }
+}

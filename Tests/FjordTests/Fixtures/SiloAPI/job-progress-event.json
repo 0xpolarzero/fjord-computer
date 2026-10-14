@@ -1,0 +1,15 @@
+{
+  "deviceId": "device-1",
+  "event": "operations.job.progress",
+  "payload": {
+    "jobId": "job:lifecycle-1",
+    "source": "lifecycle",
+    "data": {
+      "computerId": "computer-1",
+      "action": "start",
+      "step": "network"
+    }
+  },
+  "seq": 7,
+  "subscription": "sub-1"
+}

@@ -127,6 +127,8 @@ scripts/generate-engine-client.sh --write
 
 The first command checks the checked-in output. The second regenerates `Sources/Fjord/Generated/SiloAPI.swift` and `SiloMethods.swift`. `npm ci` uses the committed lockfile; Node and npm are generation-time tooling only.
 
+Until `silod` is available, Fjord uses `MockEngineClient` by default. For socket-client development, launch Fjord with `--socket-client`. The client connects to `$HOME/.silo/engine.sock`; use `$HOME/.silo-dev/engine.sock` for the development channel or set `FJORD_SILO_SOCKET_PATH` to another Unix socket path. Demo and test launches always use the mock.
+
 ## Releasing
 
 Push a version tag:

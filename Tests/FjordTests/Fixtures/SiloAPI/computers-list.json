@@ -1,0 +1,14 @@
+{
+  "linux": {
+    "activities": [],
+    "computers": [],
+    "github": null,
+    "repositoryPushOperations": [],
+    "secrets": []
+  },
+  "macos": {
+    "computers": [],
+    "minDiskGiB": 64,
+    "supported": true
+  }
+}

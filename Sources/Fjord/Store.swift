@@ -14,7 +14,14 @@ final class Store {
     @ObservationIgnored let computers: ComputersModel
 
     init(engineClient: (any EngineClient)? = nil) {
-        let client = engineClient ?? ((Store.isDemo || UnderTest.isRunning) ? MockEngineClient() : nil)
+        let socketRequested = CommandLine.arguments.contains("--socket-client")
+        let socketPath = ProcessInfo.processInfo.environment["FJORD_SILO_SOCKET_PATH"] ?? SocketEngineClient.defaultSocketPath
+        let defaultClient: (any EngineClient)? = if socketRequested && !Store.isDemo && !UnderTest.isRunning {
+            SocketEngineClient(path: socketPath)
+        } else {
+            MockEngineClient()
+        }
+        let client = engineClient ?? defaultClient
         let selectedClient = client ?? UnavailableEngineClient()
         self.engineClient = selectedClient
         self.hasEngineConnection = client != nil
