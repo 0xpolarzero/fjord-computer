@@ -356,6 +356,58 @@ enum Demo {
         }
     }
 
+    /// A day with more projects on top of the triage's: seven projects, some asking, some only running, one quiet. What
+    /// the lanes prototype is judged on (`router-lanes` shots).
+    static func routerLanes(_ store: Store, now: Date = Date()) {
+        routerTriage(store, now: now)
+        let added = [
+            (session("local_demo-silo-ckpt", "Checkpoint restore over vsock", "silo", minutes: 1, running: true), "externaldrive"),
+            (session("local_demo-silo-guest", "Rebase the guest agent branch", "silo", minutes: 5,
+                     detail: "Rebased on main; 3 conflicts resolved."), "arrow.triangle.branch"),
+            (session("local_demo-silo-rel", "Release v0.9", "silo", minutes: 16,
+                     detail: "Tagged; waiting for the release workflow."), "shippingbox"),
+            (session("local_demo-site-copy", "Landing page copy", "fjord-site", minutes: 22,
+                     detail: "Three headline options drafted."), "text.quote"),
+            (session("local_demo-site-og", "Social preview images", "fjord-site", minutes: 1, running: true), "photo"),
+            (session("local_demo-zig", "std.fs: walk symlinks", "zig", minutes: 41,
+                     detail: "Upstream asks for a test before merging."), "z.circle"),
+            (session("local_demo-dots", "Ghostty config cleanup", "dotfiles", minutes: 1, running: true), "terminal"),
+        ]
+        for (session, icon) in added {
+            store.claudeSessions[session.id] = session
+            store.agents.entries.append(AgentEntry(id: session.id, seen: session.activity, focusedAt: session.lastFocused, icon: icon))
+            if let folder = session.folder { store.agents.assignColor(folder) }
+        }
+        store.claudeActivity["local_demo-silo-ckpt"] = ClaudeActivity(text: "Running cargo test -p silo-checkpoint",
+            since: now.addingTimeInterval(-40), todo: .init(done: 2, total: 5, active: "Restoring a snapshot over vsock"))
+        store.claudeActivity["local_demo-site-og"] = ClaudeActivity(text: "Rendering og-image.png", since: now.addingTimeInterval(-15))
+        store.claudeActivity["local_demo-dots"] = ClaudeActivity(text: "Editing ghostty/config", since: now.addingTimeInterval(-8))
+        let s = { (id: String) in store.claudeSessions[id]! }
+        func card(_ session: ClaudeSession, _ triage: RouterTriage, asks: [RouterAsk]? = nil, minutes: Double) -> RouterCard {
+            var c = RouterCard(id: "\(session.id)#t\(session.completedTurns)", sessionID: session.id,
+                               kind: RouterTriage.kind(blocked: false, triage: triage), title: session.title, folder: session.folder,
+                               text: session.summary?.detail ?? "", createdAt: now.addingTimeInterval(-minutes * 60))
+            c.triage = triage
+            c.asks = asks
+            return c
+        }
+        var copy = card(s("local_demo-site-copy"), RouterTriage(state: .done, urgency: 1, work: .uncommitted), minutes: 22)
+        copy.brief = "Three headline options for the landing page; pick one and it ships the page."
+        store.router.cards += [
+            card(s("local_demo-silo-guest"), RouterTriage(state: .approval, urgency: 4, work: .committed),
+                 asks: [RouterAsk(question: "OK to **force-push** the rebased `guest-agent` branch?")], minutes: 5),
+            card(s("local_demo-silo-rel"), RouterTriage(state: .waiting, urgency: 1, work: .pushed, waitingOn: .ci), minutes: 16),
+            copy,
+            card(s("local_demo-zig"), RouterTriage(state: .asks, urgency: 2, work: .pr),
+                 asks: [RouterAsk(question: "Add the test to `std/fs/test.zig` or a new file?", options: ["fs/test.zig", "New file"])],
+                 minutes: 41),
+        ]
+        store.router.summaries += [
+            RouterSummary(at: now.addingTimeInterval(-60), text: "Restore works for small guests; the 2 GB case is still slow.",
+                          sessionID: "local_demo-silo-ckpt", title: "Checkpoint restore over vsock"),
+        ]
+    }
+
     /// The Router changing Fjord itself: a record for each change (one taken back).
     private static func fjordChanges(_ store: Store, _ now: Date) -> [FjordChange] {
         let look = InboxCategory(

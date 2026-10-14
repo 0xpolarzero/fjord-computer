@@ -9,6 +9,11 @@ extension RouterModel {
     func pickCanvas() {
         layout = .canvas
     }
+
+    /// Lanes picked (shots).
+    func pickLanes() {
+        layout = .lanes
+    }
 }
 
 /// The Router's page as a canvas: the canvas over all of it under the top bar, its chips (and what Now's list says over
@@ -80,6 +85,8 @@ struct RouterLayoutSwitch: View {
                 segment(.list, "List", icon: "list.bullet", help: "Now as sections, one under the other")
                 segment(.canvas, "Canvas", icon: "square.on.square.dashed",
                         help: "Beta: each project a frame on an infinite canvas; pan, pinch, drag a frame to move it, double-click to fit")
+                segment(.lanes, "Lanes", icon: "rectangle.split.3x1",
+                        help: "Prototype: a project to a row, a state to a column; what needs you numbered in visit order")
             }
             .padding(1)
             .frame(height: ZoneChip.height)

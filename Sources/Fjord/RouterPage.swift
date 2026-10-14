@@ -265,6 +265,8 @@ struct RouterPageView: View {
         // The canvas (a beta, RouterCanvas.swift) takes the whole page when it is picked, the history a panel over it.
         if model.layout == .canvas {
             CanvasPage(store: store, model: model)
+        } else if model.layout == .lanes {
+            LanesPage(store: store, model: model)
         } else {
             columns
         }

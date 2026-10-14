@@ -34,7 +34,11 @@ final class ShotWindow: NSWindow {
 @MainActor
 enum ShotRun {
     /// Before any shot window is made: an accessory app (no Dock icon, no menu bar) that nothing activates.
+    /// Shots are being taken: views whose scroll view the capture can't draw lay out flat instead.
+    static var active = false
+
     static func prepare() {
+        active = true
         NSApp.setActivationPolicy(.accessory)
     }
 
@@ -322,6 +326,23 @@ enum AppWindowShots {
             for zone in RouterZone.allCases { model.setFolded(zone, false) }
         }),
         // Now as a canvas: each project a frame, its sessions grouped and joined to their groups by lines.
+        // Lanes (a prototype): a project to a row, a state to a column, on a day of seven projects.
+        Shot(name: "router-lanes", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340), compose: { model, store in
+            Demo.routerLanes(store)
+            model.pickLanes()
+        }, appearance: .aqua),
+        Shot(name: "router-lanes-dark", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1340), compose: { model, store in
+            Demo.routerLanes(store)
+            model.pickLanes()
+        }, appearance: .darkAqua),
+        Shot(name: "router-lanes-sidebar", destination: { _ in .router }, size: CGSize(width: 1440, height: 1340), compose: { model, store in
+            Demo.routerLanes(store)
+            model.pickLanes()
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-lanesdata", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 1600, height: 1000), compose: { model, store in
+            Demo.routerLanes(store)
+            model.pickCanvas()
+        }, appearance: .aqua),
         Shot(name: "router-canvas", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.pickCanvas() },
              appearance: .aqua),
         Shot(name: "router-canvas-dark", destination: { _ in .router }, size: canvasSize, compose: { model, _ in model.pickCanvas() },
@@ -505,8 +526,8 @@ enum AppWindowShots {
             for c in store.categories where c.isCI { store.moveCategory(c.id, toSection: builds.id) }
             store.toggleCollapsed(builds.id)
         }),
-        Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }, sidebarHidden: true),
-        Shot(name: "router-collapsed", destination: { _ in .router }, sidebarHidden: true),
+        Shot(name: "category-collapsed", destination: { $0.shownCategories[0].id.asCategory }),
+        Shot(name: "router-collapsed", destination: { _ in .router }),
         Shot(name: "router-760", destination: { _ in .router }, size: CGSize(width: 760, height: 1000)),
         Shot(name: "router-collapsed-760", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 760, height: 1000)),
         Shot(name: "category-narrow", destination: { $0.shownCategories[0].id.asCategory }, size: CGSize(width: 1000, height: 640)),
