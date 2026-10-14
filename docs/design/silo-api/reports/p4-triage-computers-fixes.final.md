@@ -1,0 +1,5 @@
+Fixed all 18 findings on `main`. The [fix report](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/p4-triage-computers-fixes.md) maps each finding to its commit and regression test. The report is committed as `995da9ff` (`docs: record p4 triage computer fixes`).
+
+The two Silo API needs are recorded there: add a `macosResources` variant to `computers.configuration.change`, and add top-level `deviceId?: string` to `guest.exec.get` so jobs can be addressed by `(deviceId, jobId)`. Fjord shows a “coming soon” state for macOS resource editing and retains the run owner identity.
+
+**Verification:** `swift build` passed; `scripts/test.sh` passed with 1,715 tests across 170 suites. Re-rendered 17 computer shots and inspected the [minimum-height long-summary shot](/Users/polarzero/code/projects/lookout/.build/shots/p4-triage/window-triage-computer-run-result-long-min.png); its result actions remain visible.

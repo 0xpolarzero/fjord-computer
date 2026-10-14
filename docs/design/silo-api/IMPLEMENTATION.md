@@ -31,6 +31,11 @@ P3-guest (`guest.exec`/`guest.files`/`guest.sshAlias`) · P3-checkpoints (automa
 
 Computers tool, complete · Router "Runs on" (sshConfigs, plugin and hook installed in the guest, delivery over `guest.files`) · Triage "Run in a computer" (headless runs, an automatic checkpoint first, proof recordings) · bundling `silod` and registering the LaunchAgent
 
+## API amendments queued (for the dispatch phase)
+
+- `computers.configuration.change`: a `macosResources` variant (`computerId`, `expected {cpus, memoryGiB, diskGiB}`, `cpus`, `memoryGiB`, `requestId`). Source: reports/p4-triage-computers-fixes.md.
+- `guest.exec.get`: an optional top-level `deviceId` (jobs addressed by `(deviceId, jobId)`). Same source.
+
 ## Implementer brief
 
 1. **The spec is the authority.** Read README.md, 95-decisions.md (with §3 amendments; later overrides earlier), 05-engine-architecture.md, and the sections for your domain. When the spec and the code disagree, follow the spec and note it in your report. Where the spec leaves something open, choose the simplest option and write it down.

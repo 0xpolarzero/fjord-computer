@@ -1,0 +1,28 @@
+**Merge verdict: request changes.** Seven findings, ranked by severity:
+
+1. **P1: Queue cancellation deletes a newly created computer.**  
+   [macos_computers.rs:1144](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/engine/src/macos_computers.rs:1144) converts `GateError::Cancelled` into `CANCEL_AND_REMOVE`. Cleanup then deletes the saved folder and registry row. Quit also triggers this through `cancel_all_waiting`, so ordinary Quit deletes queued creations. **Fix:** preserve the incomplete computer on queue cancellation; reserve removal for explicit Delete. Test the actual creation handler and assert that its folder, record, and row survive.
+
+2. **P1: Quit cannot abort active macOS provisioning.**  
+   [macos_computers.rs:1135](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/engine/src/macos_computers.rs:1135) holds a non-cancellable queue guard throughout provisioning; setup and fork do likewise. Shutdown waits for its device guard before reaching `stop_busy`, which sets the workflow abort flags. Consequently, Quit waits for provisioning to finish before requesting its cancellation. Developer-tools copy and install each allow one hour. **Fix:** close admission and signal workflow abort before waiting for the shutdown guard, then wait for ownership release before detaching disks. Test shutdown with an active, blocked workflow.
+
+3. **P1: Checkpoint restore leaves false developer-tools metadata.**  
+   [macos_computers.rs:2336](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/engine/src/macos_computers.rs:2336) restores the computer-use fingerprint but retains the current developer-tools progress and fingerprint. Restore a pre-CLT checkpoint after provisioning: the disk loses CLT while the record still declares tools current and setup complete. Start does not repair them, and recorder compilation fails. Interrupted-restore recovery has the same omission. **Fix:** capture and restore tools progress/fingerprint in checkpoint metadata, including recovery; treat missing metadata as incomplete. Test this upgrade-and-restore sequence.
+
+4. **P2: Stale developer tools cannot reach Retry setup.**  
+   [provision.rs:190](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/engine/src/macos_computers/provision.rs:190) implements fingerprint-based reprovisioning, but [store.rs:384](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/engine/src/macos_computers/store.rs:384) rejects every completed computer first. The UI also hides Retry for `setupComplete`. A changed lock or installer therefore leaves completed computers on old tools. **Fix:** include tools freshness in setup admission and exposed readiness. The new fingerprint test only exercises the comparison helper; test admission through to provisioning with a complete, stale record.
+
+5. **P2: A queued launch Start still boots after Quit or startup cancellation.**  
+   [macos_computers.rs:1623](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/engine/src/macos_computers.rs:1623) calls ordinary Start without rechecking cancellation after queue admission. The coordinator checks before calling, but cancellation while waiting is ignored. Quit waits for the coordinator before setting the macOS closed flag, so releasing the blocker starts the VM during Quit. Linux already rechecks both conditions after admission. **Fix:** check startup cancellation and shutdown inside the admitted launch closure. Test blocked lane → queued launch → cancel → release, asserting no VM starts.
+
+6. **P2: Resource-save failure splits disk and registry state.**  
+   [macos_computers.rs:1610](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/engine/src/macos_computers.rs:1610) returns on save failure before updating the registry, but `store::save` replaces `computer.json` before directory fsync. If that fsync fails, disk contains new resources while memory contains old resources. Next Start uses old values; relaunch loads values reported as failed, or a pristine computer’s Start overwrites them. **Fix:** restore the previous record transactionally or reconcile state and refuse Start until resolved. Inject a post-rename fsync failure and verify disk, registry, next boot, and reload.
+
+7. **P2: Matching CLT receipts prevent repair of missing payloads.**  
+   [silo-developer-tools.zsh:67](/Users/polarzero/silo-work/p3-macos-parity/app/SiloUI/src-tauri/guest/macos/silo-developer-tools.zsh:67) skips installation solely on receipt version. With matching receipts but missing or damaged CLT files, later verification fails and every retry skips installation again. **Fix:** verify usable payloads before skipping and reinstall damaged packages. Test matching receipts with missing executables.
+
+The fingerprint inputs cover the tools script, lock, shared GitHub helper, and recorder sources. TCC grants target the recorder’s own identity and Apple’s Screen Sharing identities, using designated requirements and an explicit guest SIP-disabled check. CPU and memory edits reuse host bounds, reject pending memory restore, and preserve disk size.
+
+Both guest scripts passed `zsh -n`. This was a read-only source review; no build, functional test, app launch, or live-data inspection occurred. The supplied probe leaves production cold CLT installation, network interruption/retry, actual recorder output, and authenticated Screen Sharing across boots unverified.
+
+Fix these regressions and add the behavior tests before merging.
