@@ -30,7 +30,7 @@ extension RouterTools {
     /// `question` caught questions you ask a session about its own work, p > 0.95, on 1 real message in 10.
     static let intentCriteria: [(name: String, criteria: String)] = [
         ("change_fjord", RouterCapability.changeFjordCriteria),
-        ("question", "A question to the Router, the assistant that watches the board, about the board: which sessions are working, finished or waiting on the user, or what a session named in the third person is doing. Not a question for a session about its own work or what it said"),
+        ("question", "A question to the Router, the assistant that watches the board, about the board: which sessions are working, done or waiting on the user, or what a session named in the third person is doing. Not a question for a session about its own work or what it said"),
         ("compound", "Requests meant for two or more different places in one message: Fjord itself and a session, or two different sessions. Not one long message with several points for one session"),
         ("unclear", "none of these: small talk, a fragment, or nothing says where it goes"),
     ]
@@ -51,7 +51,7 @@ extension RouterTools {
         "gate_compound": .structuredNoul(instructions: ["question": "Does `message` ask for two or more different things, meant for different places (sessions or Fjord itself)?"]),
         "gate_question": .structuredNoul(instructions: ["question": "Is `message` a question to the user's assistant about what is going on (a session's progress, what is waiting), rather than a message for a session to read?"]),
         "gate_compound2": .structuredNoul(instructions: ["question": "Does `message` ask for things meant for two or more different places: Fjord itself and a session, or two different sessions it names? A message with several points or steps for one session is no."]),
-        "gate_you": .structuredNoul(instructions: ["question": "Does `message` speak to one session as \"you\" about its own work (\"did you…\", \"your end\", \"what are you waiting for\", \"you said…\"), or reply to something it just said?"]),
+        "gate_you": .structuredNoul(instructions: ["question": "Does `message` speak to one agent as \"you\" about its own work (\"did you…\", \"your end\", \"what are you waiting for\", \"you said…\"), or reply to something it just said?"]),
     ]
 
     static let nextInstructions = "Is `message` the user's next message in `conversation`: what the user says back to it?"
