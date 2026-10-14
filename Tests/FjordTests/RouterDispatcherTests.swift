@@ -1882,13 +1882,13 @@ import Testing
             working: [.init(title: "Docs", project: "docs", doing: "Editing README.md")],
             decisions: "2m ago · you: “ship” → sent to Docs", projects: ["api"], message: "what is going on")
         let text = context.text()
-        #expect(text.contains("- [question] “Fix it” (lookout): Which database? (card c1)"))
+        #expect(text.contains("- [needs you] [question] “Fix it” (lookout): Which database? (card c1, can't be marked seen)"))
         #expect(text.contains("- “Docs” (docs): Editing README.md"))
         #expect(text.contains("The last decisions (oldest first):\n2m ago · you: “ship” → sent to Docs"))
         #expect(text.contains("Projects the user tagged: api"))
         #expect(text.hasSuffix("The user's message:\nwhat is going on"))
         let empty = RouterRunContext(message: "hi").text()
-        #expect(empty.contains("Open cards (what needs the user):\n- none") && empty.contains("Sessions working on their own:\n- none"))
+        #expect(empty.contains("Open cards (each with its tier: needs you, worth a look or waiting):\n- none") && empty.contains("Sessions working on their own:\n- none"))
     }
 
     @Test func whatSessionsWroteIsFencedInTheRunsContextAndOnlyTheMessageAsks() {
@@ -1925,14 +1925,14 @@ import Testing
             #expect(!read.contains(change), "a question can't \(change)")
         }
         let all = RouterRun.toolNames(.changeFjord, triage: true)
-        #expect(all == FjordTools.names && all.contains("set_setting") && all.contains("list_categories"))
+        #expect(all == FjordTools.names.union(["board"]) && all.contains("set_setting") && all.contains("list_categories"))
         #expect(RouterRun.toolNames(.compound, triage: true) == all)
         for intent in RouterRun.Intent.allCases {
             let served = RouterRun.specs(intent, triage: true).compactMap { $0["name"] as? String }
             #expect(Set(served) == RouterRun.toolNames(intent, triage: true), "\(intent) serves what it may call")
         }
         // With Triage off, none of its tools: only the settings (and the board, for a question).
-        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting", "mark_seen"])
+        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting", "mark_seen", "board"])
         #expect(RouterRun.toolNames(.question, triage: false) == ["get_settings", "board"])
         // Nothing of the sessions: no way to send, start or answer from a run.
         for intent in RouterRun.Intent.allCases {
