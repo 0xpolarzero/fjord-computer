@@ -70,6 +70,7 @@ struct GuestSessionEvidence: Equatable, Sendable {
     var capabilities: [String]
     var transcriptMessages: [SessionFork.Message]
     var transcript: GuestTranscriptSnapshot? = nil
+    var tasks: [ClaudeTask]? = nil
 }
 
 /// Guest execution is authoritative for the session body; the local SSH mirror supplies only Desktop metadata.
@@ -142,7 +143,9 @@ struct GuestSessionObserver: Sendable {
         return (watch, try await read(computer: computer, paths: paths))
     }
 
-    func read(computer: GuestReference, paths: GuestRouterPaths, guestNowMs: Int64? = nil) async throws -> [GuestSessionEvidence] {
+    func read(computer: GuestReference, paths: GuestRouterPaths, guestNowMs: Int64? = nil,
+              projectFoldersBySession: [String: String] = [:]) async throws -> [GuestSessionEvidence] {
+        let account = try await client.account(for: computer)
         let keyFile: GuestFileReadResult
         do { keyFile = try await client.filesRead(computer: computer, path: paths.key, offset: nil, length: nil) }
         catch GuestClientFailure.notFound(_) { return [] }
@@ -186,10 +189,13 @@ struct GuestSessionObserver: Sendable {
             let transcript = try await GuestTranscripts(client: client).read(computer: computer,
                 projectsRoot: paths.projects, cliSessionID: cli)
             let messages = transcript?.messages ?? []
+            let projectFolders = [projectFoldersBySession[cli], messages.last?.cwd].compactMap { $0 }
+            let taskResult = await GuestBackgroundTasks(client: client).read(computer: computer, account: account,
+                cliSessionID: cli, projectFolders: projectFolders, parentTranscript: transcript?.tail ?? Data())
             found.append(GuestSessionEvidence(computer: computer, cliSessionID: cli, hostSessionID: registryByPID[pid]?.host ?? "",
                                                pid: pid, startedAt: value.startedAt, renewedAt: renewed,
                                                capabilities: value.capabilities ?? [], transcriptMessages: messages,
-                                               transcript: transcript))
+                                               transcript: transcript, tasks: taskResult.certain ? taskResult.tasks : nil))
         }
         return found
     }

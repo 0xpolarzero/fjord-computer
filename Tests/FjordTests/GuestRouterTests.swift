@@ -733,6 +733,27 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(shrunk.messages.map(\.uuid) == ["three"])
     }
 
+    @Test func guestBackgroundCommandTasksUseTheGuestFdTable() async throws {
+        let guest = client()
+        let root = "/tmp/claude-\(account.uid)"
+        let tasks = GuestRouterPaths.join(GuestRouterPaths.join(GuestRouterPaths.join(root, "-workspace-repo"), "cli-parent"), "tasks")
+        let output = GuestRouterPaths.join(tasks, "task-1.output")
+        try await guest.filesWrite(.init(computer: computer, path: output, data: Data("still running".utf8), mode: 0o600))
+        let request = GuestBackgroundTasks.openOutputsRequest(computer: computer, account: account, root: root)
+        await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data((output + "\n").utf8), stderr: Data()), argv: request.argv)
+
+        let read = await GuestBackgroundTasks(client: guest).read(computer: computer, account: account,
+            cliSessionID: "cli-parent", projectFolders: ["/workspace/repo"], parentTranscript: Data(),
+            now: Date(timeIntervalSince1970: 1_800_000_000))
+
+        #expect(read.certain)
+        #expect(read.tasks.map(\.id) == ["task-1"])
+        #expect(read.tasks.first?.kind == .command)
+        let exec = try #require(await guest.execRecords().first)
+        #expect(Array(exec.argv.prefix(2)) == ["/bin/sh", "-c"])
+        #expect(Array(exec.argv.suffix(2)) == [String(account.uid), root])
+    }
+
     @MainActor @Test func routerGuestStartPersistsReadyStateBeforeOpenWithoutSendingPrompt() async throws {
         let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-router-guest-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)

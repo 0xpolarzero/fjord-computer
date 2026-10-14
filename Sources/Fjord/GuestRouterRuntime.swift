@@ -342,7 +342,12 @@ import Foundation
             store.router = state
         }
         store.routerFormsLoaded = true
-        evidence[computer.key] = try await GuestSessionObserver(client: client).read(computer: computer, paths: paths)
+        let projectFoldersBySession = Dictionary(store.router.pendingDesktopStarts.compactMap { pending -> (String, String)? in
+            guard pending.state == .matched, pending.location.key == computer.key, let cli = pending.guestSessionID else { return nil }
+            return (cli, pending.folder)
+        }, uniquingKeysWith: { _, latest in latest })
+        evidence[computer.key] = try await GuestSessionObserver(client: client).read(computer: computer, paths: paths,
+            projectFoldersBySession: projectFoldersBySession)
         reconcileDesktopMetadata()
         applyGuestEvidenceToStore()
     }
@@ -393,6 +398,10 @@ import Foundation
             } else if activities[desktopID] != nil {
                 activities[desktopID] = nil
                 changedActivities = true
+            }
+            if let guestTasks = evidence.tasks {
+                let value = guestTasks.isEmpty ? nil : guestTasks
+                if tasks[desktopID] != value { tasks[desktopID] = value; changedTasks = true }
             }
         }
         if changedSessions { store.claudeSessions = sessions }
