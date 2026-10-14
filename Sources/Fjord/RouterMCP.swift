@@ -1259,9 +1259,9 @@ final class RouterMCPServer: @unchecked Sendable {
                 $0.projectID == runsOn.id && $0.location == runsOn.placement.location && $0.prompt == ready.text
                     && $0.state == .readyInClaude && Date().timeIntervalSince($0.openedAt) < 15 * 60
             }) {
-                return Self.json(["state": "ready_in_claude", "project": runsOn.name, "location": previous.location,
+                return Self.json(["state": "ready_in_claude", "project": runsOn.name, "location": previous.location.key,
                                   "alias": previous.alias, "folder": previous.folder, "prompt": previous.prompt,
-                                  "openedAt": previous.openedAt, "pendingStart": previous.id.uuidString,
+                                  "openedAt": ISO8601DateFormatter().string(from: previous.openedAt), "pendingStart": previous.id.uuidString,
                                   "next": "This task is already prepared in Claude. Open its existing Router entry to continue."])
             }
             guard let reservation = GuestRouterRuntime.shared.reserveStart(projectID: runsOn.id,
@@ -1299,9 +1299,9 @@ final class RouterMCPServer: @unchecked Sendable {
                 GuestRouterRuntime.shared.reconcileDesktopMetadata()
                 let announcement = "Ready in Claude · \(runsOn.name): \(prepared.url.absoluteString)"
                 if let intercept = store.interceptOpen { intercept(announcement) } else { Link.open(prepared.url) }
-                return Self.json(["state": "ready_in_claude", "project": runsOn.name, "location": runsOn.placement.location,
+                return Self.json(["state": "ready_in_claude", "project": runsOn.name, "location": runsOn.placement.location.key,
                                   "alias": prepared.alias.alias, "folder": prepared.pending.folder,
-                                  "prompt": prepared.pending.prompt, "openedAt": prepared.pending.openedAt,
+                                  "prompt": prepared.pending.prompt, "openedAt": ISO8601DateFormatter().string(from: prepared.pending.openedAt),
                                   "pendingStart": prepared.pending.id.uuidString,
                                   "next": "Claude Desktop is open with the task prefilled. Review it and press Send in Claude."])
             } catch { throw Failure(error.localizedDescription) }

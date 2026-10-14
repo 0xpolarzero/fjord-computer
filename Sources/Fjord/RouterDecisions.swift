@@ -42,6 +42,8 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         /// A message sent to a session, with what you wrote when it was rephrased.
         case sent(to: String, text: String, original: String?)
         case started(session: String?, project: String, model: String?, effort: String?)
+        /// A prefilled guest session handed off to Claude Desktop, without a local peer or first delivery.
+        case preparedGuest(project: String, location: String, pendingStart: String)
         case changed(UUID)
         /// A card answered or marked handled (its id).
         case answered(card: String)
@@ -206,6 +208,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             switch item {
             case .sent(let to, let text, _): "sent to \(to): \(Self.clip(text, 80))"
             case .started(_, let project, let model, let effort): "started a session in \(project)" + settingsWords(model, effort)
+            case .preparedGuest(let project, let location, _): "ready in Claude · \(project) on \(location)"
             case .changed(let id): "changed Fjord (\(id.uuidString.prefix(8)))"
             case .answered(let card): "answered \(card)"
             case .asked(let options): "asked which: " + options.joined(separator: " / ")
@@ -229,6 +232,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         switch first {
         case .sent(let to, _, _): return "sent to \(to)" + more
         case .started(_, let project, let model, let effort): return "started in \(project)" + settingsWords(model, effort) + more
+        case .preparedGuest(let project, _, _): return "ready in Claude · \(project)" + more
         case .changed: return "changed Fjord" + more
         case .answered: return "answered" + more
         case .asked: return "asked you" + more
@@ -247,6 +251,7 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         switch done.first {
         case .sent: return "paperplane"
         case .started: return "plus.square"
+        case .preparedGuest: return "desktopcomputer"
         case .changed: return "slider.horizontal.3"
         case .answered: return "checkmark"
         case .asked: return "questionmark.bubble"
@@ -323,7 +328,10 @@ extension RouterState {
         for i in decisions.indices where decisions[i].outcome == .pending {
             // A start whose first message was held for the session to run: the session is there, the message never went.
             let held = decisions[i].done.contains { if case .started = $0 { true } else { false } }
-            decisions[i].add(.failed(held ? "its first message wasn't sent: Fjord quit while it waited for the session to run" : "interrupted"))
+            let guestPrepared = decisions[i].done.contains { if case .preparedGuest = $0 { true } else { false } }
+            if !guestPrepared {
+                decisions[i].add(.failed(held ? "its first message wasn't sent: Fjord quit while it waited for the session to run" : "interrupted"))
+            }
             decisions[i].outcome = .done
         }
     }

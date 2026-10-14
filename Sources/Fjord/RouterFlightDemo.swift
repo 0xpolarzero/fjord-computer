@@ -46,8 +46,8 @@ import SwiftUI
             },
             start: { _, folder, _, _ in
                 try await Task.sleep(for: .milliseconds(900))
-                return .init(to: "demo", text: "demo", body: "demo", original: "demo", rephrased: false, session: "local_demo-json",
-                             newSessionIn: store.folderName(folder))
+                return .delivery(.init(to: "demo", text: "demo", body: "demo", original: "demo", rephrased: false, session: "local_demo-json",
+                                       newSessionIn: store.folderName(folder)))
             },
             send: { _, _ in
                 try await Task.sleep(for: .milliseconds(650))

@@ -330,8 +330,8 @@ import Testing
         // The new session's first message is signed, so it can be taken back.
         w.dispatcher.effects.start = { _, _, title, settings in
             let signed = RelaySigner.sign(body: "hello", target: "cli-new", key: RelaySigning.key)
-            return RouterDispatcher.Delivery(to: "peer-new", text: signed, body: "hello", original: "hello", rephrased: false,
-                                             session: "local_new", newSessionIn: "solo", settings: settings, settingsSigned: false)
+            return .delivery(RouterDispatcher.Delivery(to: "peer-new", text: signed, body: "hello", original: "hello", rephrased: false,
+                                                       session: "local_new", newSessionIn: "solo", settings: settings, settingsSigned: false))
         }
         let (text, mentions) = w.store.composeForRouter([.text("Fix "), .pointer(.notification("pr:o/solo#3"))])
         var context = RouterContext()

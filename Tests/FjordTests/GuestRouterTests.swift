@@ -324,6 +324,52 @@ private actor GuestRelayStateRecorder {
         #expect((object["next"] as? String)?.contains("press Send in Claude") == true)
     }
 
+    @MainActor @Test func dispatcherRecordsGuestStartWithoutExpectingLocalPeerPreparation() async throws {
+        let tempHome = FileManager.default.temporaryDirectory.appendingPathComponent("fjord-router-dispatch-guest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        defer {
+            GuestRouterRuntime.shared.stopAll()
+            try? FileManager.default.removeItem(at: tempHome)
+        }
+
+        let store = Store(engineClient: engineWithComputer(state: .running))
+        store.stateFile = tempHome.appendingPathComponent("state.json")
+        store.router.enabled = true
+        store.agents.enabled = true
+        let source = "/local/widget"
+        store.claudeSessions["local_existing"] = ClaudeSession(id: "local_existing", title: "Existing", folder: source,
+            lastActivity: Date(), running: false)
+        store.setRunsOnPlacement(.computer(deviceId: nil, computerId: computer.computerId,
+                                           guestPath: "/workspace/repo"), for: source)
+        var opens = 0
+        store.interceptOpen = { _ in opens += 1 }
+
+        let guest = MockGuestClient(accounts: [localComputer: account])
+        await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data("1800000000000".utf8), stderr: Data()),
+            argv: [account.nodeExecutable, "-e", "process.stdout.write(String(Date.now()))"])
+        let dispatcher = store.routerDispatcher
+        dispatcher.configure = { tools in
+            tools.guestClient = guest
+            tools.guestSSHSettings = ClaudeSSHSettings(home: tempHome)
+        }
+
+        let id = try #require(dispatcher.submit("start a new session to fix the bug", context: RouterContext(projects: [source])))
+        await waitUntil { store.router.decisions.first(where: { $0.id == id })?.outcome == .done }
+        let entry = try #require(store.router.decisions.first(where: { $0.id == id }))
+
+        let prepared = try #require(entry.done.compactMap { item -> (String, String, String)? in
+            if case .preparedGuest(let project, let location, let pendingStart) = item { return (project, location, pendingStart) }
+            return nil
+        }.first)
+        #expect(entry.doneLines.allSatisfy { !$0.contains("Not prepared") && !$0.hasPrefix("failed:") })
+        #expect(entry.outcome == .done)
+        #expect(opens == 1)
+        #expect(store.router.pendingDesktopStarts.count == 1)
+        #expect(prepared.0 == "widget")
+        #expect(prepared.1 == "local/\(computer.computerId)")
+        #expect(prepared.2 == store.router.pendingDesktopStarts[0].id.uuidString)
+    }
+
     @Test func guestPresenceRequiresGuestPIDRegistryAndAuthoritativeTranscript() async throws {
         let guest = client()
         let paths = try GuestRouterPaths(home: account.home)

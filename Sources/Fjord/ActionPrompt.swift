@@ -175,10 +175,12 @@ extension InboxActions {
         // A model or effort that couldn't be set is said in the history; the message went all the same.
         let failed = failures.last { !$0.hasPrefix("model/effort:") }
         var started: String??
+        var guestPrepared = false
         var sent: String?
         for item in entry.done {
             switch item {
             case .started(let session, _, _, _): started = .some(session)
+            case .preparedGuest: guestPrepared = true
             case .sent(let to, _, _): sent = to
             case .answered(let card): sent = sent ?? card
             default: break
@@ -191,6 +193,7 @@ extension InboxActions {
             if let failed, sent == nil { return (.failed, failed, started) }
             return (.done, "session started", started)
         }
+        if guestPrepared { return failed.map { (.failed, $0, nil) } ?? (.done, "ready in Claude", nil) }
         if let sent {
             let session = entry.links.sessions.last
             return (.done, "sent to " + (session.flatMap(title) ?? sent), session)

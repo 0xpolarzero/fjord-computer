@@ -62,9 +62,9 @@ import Testing
                     started.append((folder, title))
                     startSettings.append(settings)
                     if let heldStart { throw heldStart }
-                    return RouterDispatcher.Delivery(to: "peer-new", text: "⟦signed⟧\nhello", body: "hello", original: "hello",
-                                                     rephrased: false, session: "local_new", newSessionIn: "x",
-                                                     settings: settings, settingsSigned: settingsSigned)
+                    return .delivery(RouterDispatcher.Delivery(to: "peer-new", text: "⟦signed⟧\nhello", body: "hello", original: "hello",
+                                                               rephrased: false, session: "local_new", newSessionIn: "x",
+                                                               settings: settings, settingsSigned: settingsSigned))
                 },
                 send: { [unowned self] _, delivery in
                     if let failSend { throw RouterTools.Failure(failSend) }

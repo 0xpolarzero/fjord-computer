@@ -167,6 +167,12 @@ struct RouterAskBack: Identifiable, Equatable {
         var settingsSigned = false
     }
 
+    /// Starting can either prepare a local peer for delivery or hand a prefilled guest session to Claude Desktop.
+    enum StartResult: Equatable {
+        case delivery(Delivery)
+        case guestPrepared(project: String, location: String, pendingStart: String)
+    }
+
     /// Everything a run does outside Fjord's own state, so a test stands in for each. The defaults are the real ones.
     struct Effects {
         /// Jev's probabilities over the targets, with the other questions of the same call, or why not.
@@ -175,7 +181,7 @@ struct RouterAskBack: Identifiable, Equatable {
         var prepare: @MainActor (RouterTools, _ session: String) async throws -> Delivery
         /// A new session in a project (folder) with the prepared first message. Throws `SessionStart.Held` when the Claude
         /// app has the session but doesn't run it yet.
-        var start: @MainActor (RouterTools, _ folder: String, _ title: String, _ settings: SessionSettings?) async throws -> Delivery
+        var start: @MainActor (RouterTools, _ folder: String, _ title: String, _ settings: SessionSettings?) async throws -> StartResult
         /// The signed send, through the gate: the plugin's ack when it went through the inbox.
         var send: @MainActor (RouterTools, Delivery) async throws -> String?
         /// A form answered for a card: what was answered.
@@ -861,7 +867,13 @@ struct RouterAskBack: Identifiable, Equatable {
         let delivery: Delivery
         try linked(job.context)
         do {
-            delivery = try await effects.start(job.tools, folder, job.context.action?.title ?? Self.title(for: task), settings)
+            switch try await effects.start(job.tools, folder, job.context.action?.title ?? Self.title(for: task), settings) {
+            case .delivery(let prepared):
+                delivery = prepared
+            case .guestPrepared(let project, let location, let pendingStart):
+                note(job, .preparedGuest(project: project, location: location, pendingStart: pendingStart))
+                return
+            }
         } catch let waiting as SessionStart.Held {
             // Not known as a session yet: the app doesn't run it, so it can't take the next action's message.
             return hold(job, waiting)
@@ -1362,6 +1374,15 @@ extension RouterDispatcher.Effects {
                          rephrased: ready.rephrased, session: answer["session"] as? String, newSessionIn: ready.newSessionIn,
                          settings: settings, settingsSigned: ready.text.hasPrefix("⟦fjord v2 "))
         }
+        func startResult(_ answer: [String: Any], _ tools: RouterTools, project: String,
+                         settings: SessionSettings?) throws -> RouterDispatcher.StartResult {
+            if answer["state"] as? String == "ready_in_claude" {
+                guard let location = answer["location"] as? String,
+                      let pendingStart = answer["pendingStart"] as? String else { throw RouterTools.Failure("Invalid guest start result") }
+                return .guestPrepared(project: project, location: location, pendingStart: pendingStart)
+            }
+            return .delivery(try started(answer, tools, project: project, settings: settings))
+        }
         return Self(
             rank: { [weak dispatcher] tools, message, projects in
                 guard let dispatcher, let store = dispatcher.storeForEffects else { throw RouterTools.Failure("Fjord isn't ready") }
@@ -1414,7 +1435,7 @@ extension RouterDispatcher.Effects {
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 let answer = object(try await tools.startSession(store, project: folder, title: title, ticket: tools.ticket(), settings: settings))
-                return try started(answer, tools, project: store.folderName(folder), settings: settings)
+                return try startResult(answer, tools, project: store.folderName(folder), settings: settings)
             },
             send: { [weak dispatcher] tools, delivery in
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
