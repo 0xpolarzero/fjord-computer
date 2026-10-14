@@ -65,6 +65,8 @@ enum AppWindowShots {
         var appearance: NSAppearance.Name?
         /// Opens the ⌘K palette over the window.
         var palette: PaletteShot?
+        /// A view drawn on its own in the window instead of the app (for what the app's pages don't show by themselves).
+        var standalone: ((Store, RouterModel) -> AnyView)?
     }
 
     /// How a shot opens the palette: with a query typed, on the first row's actions page, on fixture items rather than the
@@ -249,6 +251,16 @@ enum AppWindowShots {
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let d = store.router.decisions.first(where: { !$0.links.changes.isEmpty }) { model.expanded.insert(d.id.uuidString) }
         }),
+        // The Router's four card actions waiting for Apply, made by the tools themselves; then archive and stop applied.
+        Shot(name: "router-proposals", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
+            routerProposals(store, model: model, applied: false)
+        }, appearance: .aqua, standalone: proposalCards),
+        Shot(name: "router-proposals-applied", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
+            routerProposals(store, model: model, applied: true)
+        }, appearance: .aqua, standalone: proposalCards),
+        Shot(name: "router-proposals-dark", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
+            routerProposals(store, model: model, applied: false)
+        }, appearance: .darkAqua, standalone: proposalCards),
         Shot(name: "router-summary-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let summary = store.router.summaries.last { model.expanded.insert(RouterPage.Entry.summary(summary).id) }
@@ -699,6 +711,68 @@ enum AppWindowShots {
         }
     }
 
+    /// The four card-action changes as the history's run details draw them (`ChangeCard`, one under the other).
+    private static func proposalCards(_ store: Store, _ model: RouterModel) -> AnyView {
+        let changes = store.router.changes.filter { if case .cardAction = $0.patch { true } else { false } }
+        return AnyView(VStack(alignment: .leading, spacing: 10) {
+            ForEach(changes) { ChangeCard(change: $0, store: store) }
+        }
+        .environment(\.cdsColumnWidth, 780)
+        .padding(20)
+        .frame(width: 820, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(CDS.Surface.s1))
+    }
+
+    /// Four proposals as the Router's tools record them (archive a card, reopen an archived one, mute a project, stop a
+    /// running session's turn), waiting in one run's details; `applied` applies the archive and the stop.
+    private static func routerProposals(_ store: Store, model: RouterModel, applied: Bool) {
+        Demo.routerBusyDay(store)
+        store.router.enabled = true
+        // A card archived a few minutes ago, to reopen.
+        let archived = "local_demo-silo-rel#t\(store.claudeSessions["local_demo-silo-rel"]?.completedTurns ?? 0)"
+        if let i = store.router.cards.firstIndex(where: { $0.id == archived }) {
+            store.router.cards[i].addressedAt = Date().addingTimeInterval(-300)
+            store.router.cards[i].addressedBy = .you
+        }
+        // A message Fjord sent that started the running turn of a session.
+        let running = store.claudeSessions["local_demo-silo-ckpt"]
+        var sent = RouterDecision(at: Date().addingTimeInterval(-90), trigger: .you("run the checkpoint tests"), outcome: .done)
+        sent.delivered = .init(session: "local_demo-silo-ckpt", cli: "cli-ckpt", nonce: "shot-nonce", at: Date().addingTimeInterval(-60),
+                               turns: running?.completedTurns ?? 0, busy: false, abortable: true)
+        store.router.decisions.append(sent)
+        let tools = RouterTools(store: store)
+        tools.beginTurn("I'll do the zig test myself, reopen the release card, mute dotfiles and stop the checkpoint session")
+        let run = RouterDecision(at: Date(), trigger: .you(tools.turnText ?? ""), outcome: .done)
+        store.router.decisions.append(run)
+        tools.decision = run.id
+        var failures: [String] = []
+        func attempt(_ f: () throws -> String) { do { _ = try f() } catch { failures.append("\(error)") } }
+        attempt { try tools.archiveCards(store, ["cards": ["std.fs"]]) }
+        attempt { try tools.reopenCard(store, ["card": "Release v0.9"]) }
+        attempt { try tools.muteProject(store, ["project": "dotfiles", "muted": true]) }
+        attempt { try tools.stopSession(store, ["session": "Checkpoint restore"]) }
+        if !failures.isEmpty { print("router-proposals: refused:", failures) }
+        if applied {
+            for change in store.router.changes where change.isPending {
+                guard case .cardAction(let action) = change.patch else { continue }
+                switch action {
+                case .archive:
+                    store.applyFjordChange(change.id)
+                case .stop:
+                    // What `applyStopChange` leaves once the plugin acknowledged the abort.
+                    if let i = store.router.changes.firstIndex(where: { $0.id == change.id }) { store.router.changes[i].pending = nil }
+                    store.updateDecision(sent.id) { $0.delivered?.cancelled = .aborted; $0.add(.cancelled(.aborted)) }
+                default: break
+                }
+            }
+        }
+        model.expanded.insert(run.id.uuidString)
+        // The list layout draws no page body in shots; the canvas layout's history panel shows the same history.
+        model.layout = .canvas
+        model.pane = .history
+    }
+
     private static func manyNeeds(_ store: Store) {
         let open = store.router.cards.filter(\.isOpen)
         store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
@@ -742,6 +816,16 @@ enum AppWindowShots {
             palette.open()
             if !open.query.isEmpty { palette.setQuery(open.query) }
             if open.actions { palette.showActions() }
+        }
+        if let standalone = shot.standalone {
+            let controller = NSHostingController(rootView: standalone(store, routerModel).column(shot.size.width))
+            controller.sizingOptions = []
+            let window = ShotWindow(contentRect: NSRect(origin: .zero, size: shot.size), styleMask: [.titled], backing: .buffered, defer: false)
+            if let look = shot.appearance { window.appearance = NSAppearance(named: look) }
+            window.contentViewController = controller
+            window.setContentSize(shot.size)
+            ShotRun.show(window)
+            return window
         }
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, palette: palette,
                                checksClaudeCode: false,
