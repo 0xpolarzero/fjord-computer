@@ -204,17 +204,19 @@ enum GuestClaudeSettings {
         let command = FormHookInstaller.quoted(paths.hook, onlyIfNeeded: true)
         try await modify(client: client, computer: computer, paths: paths) { root in
             guard var hooks = root["hooks"] as? [String: Any], let entries = hooks["PermissionRequest"] as? [Any] else { return false }
+            var removedFjordHook = false
             let kept = entries.compactMap { entry -> Any? in
                 guard var object = entry as? [String: Any], let nested = object["hooks"] as? [Any] else { return entry }
                 let remaining = nested.filter { (($0 as? [String: Any])?["command"] as? String) != command
                     && (($0 as? [String: Any])?["command"] as? String) != paths.hook }
+                if remaining.count != nested.count { removedFjordHook = true }
                 if remaining.count == nested.count { return entry }
                 if remaining.isEmpty { return nil }
                 object["hooks"] = remaining
                 return object
             }
             if kept.isEmpty { hooks.removeValue(forKey: "PermissionRequest") } else { hooks["PermissionRequest"] = kept }
-            if kept.count == entries.count { return false }
+            if !removedFjordHook { return false }
             if hooks.isEmpty { root.removeValue(forKey: "hooks") } else { root["hooks"] = hooks }
             return true
         }

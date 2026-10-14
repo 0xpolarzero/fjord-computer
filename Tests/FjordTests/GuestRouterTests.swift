@@ -133,6 +133,28 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(await guest.filesSnapshot(for: computer)[GuestRouterPaths.join(paths.presence, "cli-1")] == nil)
     }
 
+    @Test func guestDisablePersistsNestedRemovalFromAMixedHookEntry() async throws {
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let command = FormHookInstaller.quoted(paths.hook, onlyIfNeeded: true)
+        let original = try JSONSerialization.data(withJSONObject: [
+            "hooks": ["PermissionRequest": [[
+                "matcher": FormHookInstaller.matcher,
+                "hooks": [["type": "command", "command": command], ["type": "command", "command": "custom-hook"]],
+            ]]],
+        ], options: [.sortedKeys])
+        _ = try await guest.filesWrite(.init(computer: computer, path: paths.settings, data: original, mode: 0o600))
+
+        try await GuestClaudeSettings.removeHook(client: guest, computer: computer, paths: paths)
+
+        let updated = try await guest.filesRead(computer: computer, path: paths.settings, offset: nil, length: nil)
+        let root = try #require(try JSONSerialization.jsonObject(with: updated.data) as? [String: Any])
+        let entries = try #require((root["hooks"] as? [String: Any])?["PermissionRequest"] as? [[String: Any]])
+        let hooks = try #require(entries.first?["hooks"] as? [[String: Any]])
+        #expect(!hooks.contains { $0["command"] as? String == command })
+        #expect(hooks.contains { $0["command"] as? String == "custom-hook" })
+    }
+
     @Test func guestFormWatcherAnswersCreateOnlyAndUsesGuestProcessChecks() async throws {
         let guest = client()
         let paths = try GuestRouterPaths(home: account.home)
