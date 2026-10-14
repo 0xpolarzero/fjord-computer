@@ -30,6 +30,9 @@ struct RunsOnProjectMenu: View {
                                     guestPath = ""
                                 }
                                 asksForGuestFolder = true
+                                if option.computer.displayState == .running {
+                                    Task { await store.computers.loadAgentTools(GuestReference(deviceId: option.deviceId, computerId: option.computer.id)) }
+                                }
                             } label: {
                                 Label(computerLabel(option.computer), systemImage: option.computer.kind == .linux ? "shippingbox" : "desktopcomputer")
                             }
@@ -84,6 +87,7 @@ struct RunsOnProjectMenu: View {
             TextField("/workspace/project", text: $guestPath).textFieldStyle(.roundedBorder)
                 .frame(width: 290)
                 .onSubmit { saveGuestFolder() }
+            if let computer { agentToolsRow(for: computer) }
             if let pathError { Text(pathError).font(.caption).foregroundStyle(.red) }
             HStack {
                 Button("Cancel") { asksForGuestFolder = false }
@@ -93,6 +97,33 @@ struct RunsOnProjectMenu: View {
             }
         }
         .padding(14)
+    }
+
+    @ViewBuilder private func agentToolsRow(for option: ComputerPlacementOption) -> some View {
+        let target = GuestReference(deviceId: option.deviceId, computerId: option.computer.id)
+        let model = store.computers
+        if let message = model.agentToolsSetupMessage[target.key] {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
+        } else if let status = model.agentTools(for: target), AgentToolsAdvice.needsSetup(status) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Claude Code tools: \(AgentToolsAdvice.headline(status).lowercased()). \(AgentToolsAdvice.detail(status))")
+                    .font(.caption).foregroundStyle(.secondary).frame(width: 290, alignment: .leading)
+                if option.computer.kind == .linux && option.computer.displayState == .running {
+                    Button(AgentToolsAdvice.actionTitle(status)) {
+                        Task { await model.setUpAgentTools(target, computerName: option.computer.name) }
+                    }
+                    .font(.caption)
+                    Text("Starting a session sets them up on its own if you skip this.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+        if let error = model.agentToolsError[target.key] {
+            Text(error).font(.caption).foregroundStyle(.red).frame(width: 290, alignment: .leading)
+        }
     }
 
     private var placementTitle: String {

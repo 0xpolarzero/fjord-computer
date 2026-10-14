@@ -169,6 +169,7 @@ struct ComputerDetailView: View {
                         switch model.selectedDetailSection {
                         case .overview:
                             ComputerOverview(row: row, model: model)
+                            ComputerAgentToolsPanel(row: row, model: model)
                             ComputerResourcesPanel(row: row, model: model)
                             ComputerCheckpointSection(row: row, model: model)
                             ComputerUsePanel(row: row, model: model)
@@ -198,10 +199,13 @@ struct ComputerDetailView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.never)
-            .task(id: "\(computerId)-\(model.selectedDetailSection.rawValue)") {
+            .task(id: "\(computerId)-\(model.selectedDetailSection.rawValue)-\(model.inventory?.computer(computerId)?.displayState == .running)") {
                 switch model.selectedDetailSection {
                 case .overview:
                     await model.loadComputerUse(computerId: computerId)
+                    if model.inventory?.computer(computerId)?.displayState == .running {
+                        await model.loadAgentTools(GuestReference(deviceId: nil, computerId: computerId))
+                    }
                     await model.loadCheckpointUsage(computerId: computerId)
                 case .files:
                     await model.loadFiles(computerId: computerId)

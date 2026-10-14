@@ -99,6 +99,11 @@ enum AppWindowShots {
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .overview
         }),
+        Shot(name: "computer-agent-tools", destination: { _ in .computerDetail(MockEngineClient.linuxID) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .overview
+            (store.engineClient as? MockEngineClient)?.mockAgentTools[MockEngineClient.linuxID] = MockEngineClient.agentTools(.outdated)
+        }),
         Shot(name: "computer-files", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
             store.setTool(.computers, on: true)
             store.computers.selectedDetailSection = .files

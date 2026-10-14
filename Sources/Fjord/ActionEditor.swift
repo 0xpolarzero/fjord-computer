@@ -239,6 +239,31 @@ private struct RunInComputerActionEditor: View {
         )
     }
 
+    /// Triage sets missing agent tools up on its own before a run; this offers it up front.
+    @ViewBuilder private var agentToolsRow: some View {
+        let target = GuestReference(deviceId: settings.deviceID, computerId: settings.computerID)
+        let model = store.computers
+        if settings.computerID.isEmpty {
+            EmptyView()
+        } else if let message = model.agentToolsSetupMessage[target.key] {
+            Text(message).cdsText(foot12, .regular, CDS.Text.muted)
+        } else if let status = model.agentTools(for: target), AgentToolsAdvice.needsSetup(status) {
+            HStack(spacing: 8) {
+                Text("Agent tools \(AgentToolsAdvice.headline(status).lowercased()). \(AgentToolsAdvice.detail(status))")
+                    .cdsText(foot12, .regular, CDS.Text.muted)
+                if selectedPlacement?.computer.kind == .linux && selectedPlacement?.computer.displayState == .running {
+                    ActionButton(AgentToolsAdvice.actionTitle(status)) {
+                        Task { await model.setUpAgentTools(target, computerName: settings.computerName) }
+                    }
+                }
+            }
+            Text("A run sets them up first if you leave this.").cdsText(foot12, .regular, CDS.Text.muted)
+        }
+        if let error = model.agentToolsError[target.key], !settings.computerID.isEmpty {
+            Text(error).cdsText(foot12, .regular, CDS.Text.secondary)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             MenuChip(title: "Computer: \(placementTitle)", label: "Computer placement") {
@@ -250,6 +275,9 @@ private struct RunInComputerActionEditor: View {
                                     settings.deviceID = option.deviceId
                                     settings.computerID = option.computer.id
                                     settings.computerName = option.computer.name
+                                    if option.computer.displayState == .running {
+                                        Task { await store.computers.loadAgentTools(GuestReference(deviceId: option.deviceId, computerId: option.computer.id)) }
+                                    }
                                 } label: {
                                     Label("\(option.computer.name) · \(option.computer.kind.title) · \(option.computer.displayState.title)",
                                           systemImage: option.computer.kind == .linux ? "shippingbox" : "desktopcomputer")
@@ -270,6 +298,7 @@ private struct RunInComputerActionEditor: View {
                 }
             }
             .help("Choose the computer and owner where every matching item will run")
+            agentToolsRow
 
             HStack(spacing: 8) {
                 MenuChip(title: "Model: \(settings.model?.capitalized ?? "Default")", label: "Run model") {

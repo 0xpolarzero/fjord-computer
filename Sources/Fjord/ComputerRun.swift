@@ -465,6 +465,7 @@ final class ComputerRunCoordinator {
             let account: GuestAccount
             do { account = try await guest.account(for: settings.target) }
             catch { throw ComputerRunFailure.computerUnavailable(error.localizedDescription) }
+            try await requireAgentTools(record: record, target: settings.target, kind: account.operatingSystem)
             let linuxDisplay: String?
             if settings.recordProof, account.operatingSystem == .linux {
                 linuxDisplay = try await requireLinuxDesktopReady(target: settings.target)
@@ -1054,6 +1055,20 @@ final class ComputerRunCoordinator {
             try? await engine.operationsCancel(jobId: jobID, deviceId: record.deviceID)
         }
         throw ComputerRunFailure.cancellationRequested
+    }
+
+    /// Node.js and the Claude Code CLI must be in the computer before the workspace is touched: missing or outdated tools
+    /// are set up here as a job (Linux), with their progress as the run's detail, rather than failing in the guest later.
+    private func requireAgentTools(record: ComputerRunRecord, target: GuestReference, kind: ComputerKind) async throws {
+        do {
+            try await AgentToolsSetup(engine: engine).ensureReady(target, kind: kind, computerName: record.computerName) { message in
+                _ = await self.progressWriter(record, message, Date())
+            }
+        } catch let failure as AgentToolsFailure {
+            throw ComputerRunFailure.computerUnavailable(failure.localizedDescription)
+        } catch {
+            throw ComputerRunFailure.computerUnavailable("Fjord couldn't check the agent tools in \(record.computerName): \(error.localizedDescription)")
+        }
     }
 
     private func requireLinuxDesktopReady(target: GuestReference) async throws -> String {

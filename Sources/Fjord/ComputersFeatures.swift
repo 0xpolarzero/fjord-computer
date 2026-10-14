@@ -617,6 +617,49 @@ extension ComputersModel {
         } catch { actionError = error.localizedDescription }
     }
 
+    func agentTools(for target: GuestReference) -> SiloWireAgentToolsStatus? { agentToolsByKey[target.key] }
+
+    func isSettingUpAgentTools(_ target: GuestReference) -> Bool { agentToolsSetupMessage[target.key] != nil }
+
+    func loadAgentTools(_ target: GuestReference) async {
+        do {
+            if let status = try await AgentToolsSetup(engine: client).status(target) {
+                agentToolsByKey[target.key] = status
+            } else {
+                agentToolsByKey[target.key] = nil
+            }
+            agentToolsError[target.key] = nil
+        } catch { agentToolsError[target.key] = error.localizedDescription }
+    }
+
+    /// Sets the tools up (or updates them) as a job, with its progress in `agentToolsSetupMessage`.
+    func setUpAgentTools(_ target: GuestReference, computerName: String) async {
+        guard !isSettingUpAgentTools(target) else { return }
+        agentToolsError[target.key] = nil
+        defer { agentToolsSetupMessage[target.key] = nil }
+        do {
+            let status = try await AgentToolsSetup(engine: client).setUp(target, computerName: computerName) { [weak self] message in
+                self?.agentToolsSetupMessage[target.key] = message
+            }
+            if let status { agentToolsByKey[target.key] = status }
+            if let status, AgentToolsAdvice.needsSetup(status) {
+                agentToolsError[target.key] = AgentToolsFailure.stillNotReady(computerName).localizedDescription
+            }
+        } catch { agentToolsError[target.key] = error.localizedDescription }
+    }
+
+    /// The gate for a Router session start: ready tools pass; otherwise they are set up first, with progress shown in Computers.
+    func ensureAgentTools(_ target: GuestReference, kind: ComputerKind, computerName: String) async throws {
+        guard !isSettingUpAgentTools(target) else {
+            throw AgentToolsFailure.setupFailed("\(computerName)'s agent tools are already being set up. Try again when that finishes.")
+        }
+        defer { agentToolsSetupMessage[target.key] = nil }
+        try await AgentToolsSetup(engine: client).ensureReady(target, kind: kind, computerName: computerName) { [weak self] message in
+            self?.agentToolsSetupMessage[target.key] = message
+        }
+        await loadAgentTools(target)
+    }
+
     func loadLogs(computerId: String, query: String? = nil, cursor: String? = nil,
                   source: SiloWireLogSource? = nil, since: String? = nil, until: String? = nil,
                   aroundId: String? = nil, follow: String? = nil) async {

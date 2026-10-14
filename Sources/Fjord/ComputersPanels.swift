@@ -232,6 +232,46 @@ struct ComputerUsePanel: View {
     }
 }
 
+struct ComputerAgentToolsPanel: View {
+    let row: ComputerRow
+    let model: ComputersModel
+    private var target: GuestReference { GuestReference(deviceId: nil, computerId: row.id) }
+    private var status: SiloWireAgentToolsStatus? { model.agentTools(for: target) }
+    private var setupMessage: String? { model.agentToolsSetupMessage[target.key] }
+
+    var body: some View {
+        ComputerPanel(title: "Agent tools") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(setupMessage != nil ? "Setting up…" : status.map(AgentToolsAdvice.headline)
+                         ?? (row.displayState == .running ? "Checking…" : "Start the computer to check"))
+                        .font(CDS.sans(11, .medium)).foregroundStyle(CDS.Text.secondary)
+                    Spacer()
+                    if setupMessage != nil {
+                        ProgressView().controlSize(.small)
+                    } else if let status, AgentToolsAdvice.needsSetup(status), row.displayState == .running {
+                        ActionButton(AgentToolsAdvice.actionTitle(status)) {
+                            Task { await model.setUpAgentTools(target, computerName: row.name) }
+                        }
+                    }
+                }
+                if let setupMessage {
+                    Text(setupMessage).font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+                } else if let status {
+                    Text(AgentToolsAdvice.detail(status)).font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+                    if AgentToolsAdvice.needsSetup(status), row.kind == .macos {
+                        Text("Silo installs these on a Mac computer with its developer-tools setup; retry the setup from this computer's activity.")
+                            .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+                    }
+                }
+                if let error = model.agentToolsError[target.key] { ComputerNotice(text: error, tone: .danger) }
+                Text("Router sessions and Triage runs in this computer need Node.js and Claude Code. Fjord checks them first and sets them up if they're missing.")
+                    .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+            }
+        }
+    }
+}
+
 struct ComputerFilesPanel: View {
     let row: ComputerRow
     let model: ComputersModel

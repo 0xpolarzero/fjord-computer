@@ -130,6 +130,11 @@ final class ComputersModel {
     var githubState: SiloWireGitHubState?
     var secrets: [SiloWireSecret] = []
     var computerUseByComputer: [String: SiloWireComputerUseState] = [:]
+    /// Agent tools by `GuestReference.key` (so a remote owner's computer never collides with a local one).
+    var agentToolsByKey: [String: SiloWireAgentToolsStatus] = [:]
+    /// The setup in progress for a computer, by key: what to show beside its status.
+    var agentToolsSetupMessage: [String: String] = [:]
+    var agentToolsError: [String: String] = [:]
     var logsByComputer: [String: SiloWireLogPage] = [:]
     var storageByComputer: [String: SiloWireStorageState] = [:]
     var exportState: SiloWireBackupState?

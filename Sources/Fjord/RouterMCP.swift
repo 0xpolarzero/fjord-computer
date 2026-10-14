@@ -1274,6 +1274,7 @@ final class RouterMCPServer: @unchecked Sendable {
             let routerGeneration = store.routerGeneration
             guestRuntime.registerInstallationTarget(store: store, client: guestClient, computer: computer)
             try await ensureGuestComputerReady(store: store, placement: runsOn.placement)
+            try await ensureGuestAgentTools(store: store, placement: runsOn.placement)
             if let previous = store.router.pendingDesktopStarts.first(where: {
                 $0.projectID == runsOn.id && $0.location == runsOn.placement.location && $0.prompt == ready.text
                     && $0.state == .readyInClaude && Date().timeIntervalSince($0.openedAt) < 15 * 60
@@ -1338,6 +1339,17 @@ final class RouterMCPServer: @unchecked Sendable {
         }
         return try await deliverable(store, started, ready: noTask ? nil : ready, title: title, project: name,
                                      settings: settings, ticket: ticket)
+    }
+
+    /// Router sessions in a computer need Node.js and the Claude Code CLI there: set up first, with progress in Computers,
+    /// rather than failing when the session starts.
+    private func ensureGuestAgentTools(store: Store, placement: ProjectPlacement) async throws {
+        guard case .computer(let deviceId, let computerId, _) = placement else { return }
+        let row = store.computers.inventory?.computer(computerId)
+        do {
+            try await store.computers.ensureAgentTools(GuestReference(deviceId: deviceId, computerId: computerId),
+                kind: row?.kind ?? .linux, computerName: row?.name ?? computerId)
+        } catch { throw Failure(error.localizedDescription) }
     }
 
     private func ensureGuestComputerReady(store: Store, placement: ProjectPlacement) async throws {

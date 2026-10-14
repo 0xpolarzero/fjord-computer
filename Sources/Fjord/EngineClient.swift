@@ -333,12 +333,14 @@ enum EngineErrorText {
         case "desktop_update_required": "This needs a newer Silo desktop. Use Update desktop, then try again."
         case "permission_denied": "Silo doesn't have permission to do that. Check this Mac's privacy settings, then try again."
         case "output_too_large": "The output was too large to return. Narrow the request or send it to a file."
+        case "credential_access_denied": "Silo's engine isn't allowed to use its saved GitHub sign-in. Open Keychain Access to allow it, or connect GitHub again."
         default: fallback
         }
     }
 
     static let known: Set<String> = ["not_running", "needs_personalizing", "setup_incomplete", "screen_sharing_unavailable",
-                                     "running_limit", "desktop_update_required", "permission_denied", "output_too_large"]
+                                     "running_limit", "desktop_update_required", "permission_denied", "output_too_large",
+                                     "credential_access_denied"]
 }
 
 struct OperationJobFinished: Codable, Equatable, Sendable {
@@ -684,6 +686,9 @@ final class MockEngineClient: EngineClient {
     private(set) var uploadRequests: [SiloWireFileUploadParams] = []
     var nextUploadOutcome: SiloWireUploadOutcome?
     private var mockComputerUse: [String: SiloWireComputerUseState] = [:]
+    /// Agent tools per computer id; a computer not listed has them ready.
+    var mockAgentTools: [String: SiloWireAgentToolsStatus] = [:]
+    private(set) var agentToolsSetupRequests: [String] = []
     private var mockExportDestination: String?
     private var mockArchives: [SiloWireArchive] = []
     var mockExportState = SiloWireBackupState(archives: [], availability: .available, snapshotId: "mock-exports")
@@ -1233,6 +1238,24 @@ final class MockEngineClient: EngineClient {
             return try mockResult(mockSecrets, as: Result.self)
         case "secrets.retry":
             return try mockResult(mockSecrets, as: Result.self)
+        case "desktop.status":
+            let params = try mockDecode(call.params, as: SiloWireComputerTargetParams.self)
+            let agentTools = mockAgentTools[params.computerId] ?? Self.readyAgentTools
+            let status = SiloWireDesktopStatus(agentTools: agentTools, autoStart: false, installed: true,
+                state: "running", updateAvailable: false, updateRequired: false)
+            return try mockResult(status, as: Result.self)
+        case "desktop.action":
+            let params = try mockDecode(call.params, as: SiloWireDesktopActionParams.self)
+            guard params.action == .setupAgentTools else { return try mockResult(mockFeatureJob(), as: Result.self) }
+            agentToolsSetupRequests.append(params.computerId)
+            let jobId = nextJobId()
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(40))
+                guard let self else { return }
+                if self.nextJobFailure == nil { self.mockAgentTools[params.computerId] = Self.readyAgentTools }
+                self.finish(jobId)
+            }
+            return try mockResult(SiloWireJobStartResult(jobId: jobId), as: Result.self)
         case "computerUse.state":
             let params = try mockDecode(call.params, as: SiloWireComputerUseStateParams.self)
             let state = mockComputerUse[params.computerId]
@@ -1667,6 +1690,23 @@ final class MockEngineClient: EngineClient {
 
     private func mockShellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    static let readyAgentTools = SiloWireAgentToolsStatus(claudeVersion: "2.1.287", expectedClaudeVersion: "2.1.287",
+        expectedNodeVersion: "24.21.0", expectedRecipeVersion: 1, missing: [], nodeVersion: "24.21.0",
+        recipeVersion: 1, state: .ready)
+
+    static func agentTools(_ state: SiloWireAgentToolsState) -> SiloWireAgentToolsStatus {
+        switch state {
+        case .ready: readyAgentTools
+        case .missing:
+            SiloWireAgentToolsStatus(expectedClaudeVersion: "2.1.287", expectedNodeVersion: "24.21.0",
+                expectedRecipeVersion: 1, missing: ["node", "claude"], state: .missing)
+        case .outdated:
+            SiloWireAgentToolsStatus(claudeVersion: "2.1.250", expectedClaudeVersion: "2.1.287",
+                expectedNodeVersion: "24.21.0", expectedRecipeVersion: 2, missing: [], nodeVersion: "24.18.0",
+                recipeVersion: 1, state: .outdated)
+        }
     }
 
     private func mockFeatureJob(result: SiloJSONValue? = nil, jobId explicitJobId: String? = nil) -> SiloWireJobStartResult {
