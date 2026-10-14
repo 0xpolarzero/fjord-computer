@@ -1,0 +1,234 @@
+import Foundation
+import Testing
+@testable import Fjord
+
+@MainActor
+@Suite struct PalettePlacesSourceTests {
+    /// A context over a demo store (Triage on; the Router off until a test turns it on), recording where `go` was asked to go.
+    @MainActor private final class Rig {
+        let store = Store()
+        let navigator = AppNavigator(start: .router, defaults: nil)
+        let routerModel = RouterModel()
+        let hub = HubState()
+        var went: [AppDestination] = []
+
+        init(router: Bool = false, triage: Bool = true, computers: Bool = false) {
+            Demo.populate(store, .router)
+            store.settings.triage = triage
+            store.settings.computers = computers
+            // The demo has the Router on: each test says whether it wants it.
+            store.router.enabled = router
+            store.agents.enabled = router
+        }
+
+        var context: PaletteContext {
+            PaletteContext(store: store, navigator: navigator, routerModel: routerModel, hub: hub, go: { [self] in went.append($0) })
+        }
+
+        var items: [PaletteItem] { PalettePlacesSource.make(context).items }
+
+        func item(_ id: String) -> PaletteItem? { items.first { $0.id == id } }
+    }
+
+    @Test func pagesFollowTheToolsThatAreOn() {
+        let all = Rig(router: true, computers: true)
+        let ids = Set(all.items.filter { $0.kind == .page }.map(\.id))
+        #expect(ids == ["page:done", "page:router", "page:computers", "page:snippets", "page:settings", "page:categories"])
+
+        let none = Rig(router: false, triage: false)
+        #expect(Set(none.items.filter { $0.kind == .page }.map(\.id)) == ["page:settings"])
+
+        let triage = Rig()
+        let pages = Set(triage.items.filter { $0.kind == .page }.map(\.id))
+        #expect(pages == ["page:done", "page:snippets", "page:settings", "page:categories"])
+    }
+
+    @Test func pagesAreNamedAsTheWindowNamesThemAndGoThere() throws {
+        let rig = Rig(router: true, computers: true)
+        let router = try #require(rig.item("page:router"))
+        #expect(router.title == "Router" && router.weight == 1)
+        #expect(try #require(rig.item("page:done")).title == "Archive")
+        #expect(try #require(rig.item("page:categories")).title == "Inbox categories")
+        // The same names as the Go menu.
+        let window = AppDestination.all(shown: rig.store.shownCategories.map(\.id), tools: rig.store.tools)
+        #expect(window.count > 6)
+        router.actions[0].run()
+        #expect(rig.went == [.router])
+        // ⌘1…: the categories come first in the sidebar, so the Router's number counts them.
+        let position = try #require(window.firstIndex(of: .router))
+        #expect(router.actions[0].caps == ["⌘", String(position + 1)])
+        // A category is the Triage source's.
+        #expect(!rig.items.contains { $0.id.hasPrefix("page:category") })
+    }
+
+    @Test func settingsRowsFollowTheConditionsOfTheirSection() {
+        let off = Rig()
+        let offIDs = Set(off.items.filter { $0.kind == .setting }.map(\.id))
+        #expect(offIDs.contains("setting:github.token"))
+        #expect(offIDs.contains("setting:general.interval"))
+        #expect(!offIDs.contains { $0.hasPrefix("setting:claude.") })
+        #expect(!offIDs.contains { $0.hasPrefix("setting:computer-defaults.") || $0.hasPrefix("setting:connected-macs.") })
+
+        let on = Rig(router: true, computers: true)
+        let onIDs = Set(on.items.filter { $0.kind == .setting }.map(\.id))
+        #expect(onIDs.contains("setting:claude.key") && onIDs.contains("setting:claude.comments"))
+        #expect(onIDs.contains("setting:computer-defaults.launch") && onIDs.contains("setting:connected-macs.add"))
+        // Shortcuts follow the tools too.
+        #expect(onIDs.contains("setting:shortcuts.router"))
+        #expect(!offIDs.contains("setting:shortcuts.router"))
+
+        let routerOnly = Rig(router: true, triage: false)
+        let routerIDs = Set(routerOnly.items.filter { $0.kind == .setting }.map(\.id))
+        #expect(!routerIDs.contains("setting:github.token") && !routerIDs.contains("setting:claude.comments"))
+        #expect(!routerIDs.contains("setting:general.interval"))
+        #expect(routerIDs.contains("setting:code-folders.clones"))
+
+        let neither = Rig(triage: false)
+        #expect(!Set(neither.items.map(\.id)).contains("setting:code-folders.clones"))
+    }
+
+    @Test func aSettingsRowScrollsToItsSectionAndGoesToSettings() throws {
+        let rig = Rig(router: true)
+        let token = try #require(rig.item("setting:github.token"))
+        #expect(token.title == "Personal access token" && token.subtitle == "Settings · GitHub" && token.weight == 0.8)
+        #expect(token.keywords.contains("PAT") && token.keywords.contains("GitHub"))
+        token.actions[0].run()
+        #expect(rig.hub.settingsScroll?.id == SettingsView.githubID)
+        #expect(rig.went == [.settings])
+        // Another request is a new one, also for the same section.
+        let first = rig.hub.settingsScroll?.seq ?? 0
+        token.actions[0].run()
+        #expect((rig.hub.settingsScroll?.seq ?? 0) > first)
+        // The Router's row in Tools has an anchor of its own.
+        try #require(rig.item("setting:tools.router")).actions[0].run()
+        #expect(rig.hub.settingsScroll?.id == SettingsView.routerID)
+        try #require(rig.item("setting:tools.triage")).actions[0].run()
+        #expect(rig.hub.settingsScroll?.id == SettingsView.toolsID)
+    }
+
+    @Test func everySettingsRowHasAnAnchorInSettings() {
+        let rig = Rig(router: true, computers: true)
+        var sections = Set<String>()
+        for item in rig.items where item.kind == .setting {
+            item.actions[0].run()
+            let anchor = rig.hub.settingsScroll?.id ?? ""
+            #expect(SettingsView.anchors.contains(anchor) || anchor == SettingsView.routerID, "\(item.id) -> \(anchor)")
+            sections.insert(anchor)
+        }
+        #expect(sections.isSuperset(of: Set(SettingsView.anchors)))
+        #expect(Set(SettingsView.anchors).count == SettingsView.anchors.count)
+    }
+
+    @Test func idsAreUniqueAndStable() {
+        let rig = Rig(router: true, computers: true)
+        let first = rig.items.map(\.id)
+        #expect(Set(first).count == first.count)
+        #expect(rig.items.map(\.id) == first)
+        for item in rig.items {
+            #expect(item.id.hasPrefix(item.kind.rawValue + ":") || item.kind == .project && item.id.hasPrefix("project:"), "\(item.id)")
+            #expect(!item.actions.isEmpty)
+        }
+    }
+
+    @Test func theKeywordsLeadTheSynonyms() throws {
+        let rig = Rig(router: true)
+        #expect(try #require(rig.item("page:done")).keywords.contains("done"))
+        #expect(try #require(rig.item("page:snippets")).keywords.contains("prompts"))
+        #expect(try #require(rig.item("setting:general.login")).keywords.contains("startup"))
+        #expect(try #require(rig.item("setting:claude.key")).keywords.contains("Jev") || rig.item("setting:claude.key")?.keywords.contains("jev") == true)
+        #expect(try #require(rig.item("setting:notifications.desktop")).keywords.contains("banner"))
+        #expect(try #require(rig.item("setting:shortcuts.refresh")).keywords.contains("keyboard"))
+    }
+
+    @Test func aSnippetsFirstActionFillsTheRouterWhileItIsOn() throws {
+        let rig = Rig(router: true)
+        let snippet = try #require(rig.store.snippets.first)
+        let item = try #require(rig.item("snippet:" + snippet.id.uuidString))
+        #expect(item.title == snippet.title && item.subtitle == snippet.preview)
+        #expect(item.actions.map(\.title) == ["Use in the Router", "Show snippets", "Copy text"])
+        item.actions[0].run()
+        #expect(rig.routerModel.draft.contains(snippet.text.split(separator: "\n").first.map(String.init) ?? ""))
+        #expect(rig.went == [.router])
+        item.actions[1].run()
+        #expect(rig.went == [.router, .snippets])
+
+        let off = Rig()
+        let plain = try #require(off.item("snippet:" + snippet.id.uuidString))
+        #expect(plain.actions.map(\.title) == ["Show snippets", "Copy text"])
+    }
+
+    @Test func computersAreListedOnlyWithTheToolOnAndTheEngineUp() throws {
+        let rig = Rig(computers: true)
+        let rows = try #require(rig.store.computers.inventory?.allComputers)
+        #expect(!rows.isEmpty)
+        let items = rig.items.filter { $0.kind == .computer }
+        #expect(items.map(\.id) == rows.map { "computer:" + $0.id })
+        let row = rows[0]
+        let item = try #require(items.first)
+        #expect(item.title == row.name && item.subtitle == "\(row.kind.title) · \(row.displayState.title)")
+        item.actions[0].run()
+        #expect(rig.went == [.computerDetail(row.id)])
+        #expect(Rig(computers: false).items.filter { $0.kind == .computer }.isEmpty)
+    }
+
+    @Test func aRunningComputerHasTheRunningDot() throws {
+        let rig = Rig(computers: true)
+        let rows = try #require(rig.store.computers.inventory?.allComputers)
+        for item in rig.items where item.kind == .computer {
+            let row = try #require(rows.first { "computer:" + $0.id == item.id })
+            #expect((item.dot == .running) == (row.displayState == .running))
+        }
+    }
+
+    @Test func projectsAskTheRouterWhileItIsOn() throws {
+        let rig = Rig(router: true)
+        let folder = try #require(rig.store.projectFolders.first)
+        let item = try #require(rig.item("project:" + folder))
+        #expect(item.title == rig.store.folderName(folder))
+        #expect(item.subtitle == (folder as NSString).abbreviatingWithTildeInPath)
+        #expect(folder.split(separator: "/").allSatisfy { item.keywords.contains(String($0)) })
+        #expect(item.actions.map(\.title) == ["Ask the Router about it", "Reveal in Finder"])
+        item.actions[0].run()
+        #expect(rig.routerModel.pointers == [.project(folder)])
+        #expect(rig.went == [.router])
+        let off = Rig()
+        #expect(off.item("project:" + folder)?.actions.map(\.title) == ["Reveal in Finder"])
+    }
+
+    @Test func commandsAreThereOnlyUnderTheirConditions() throws {
+        let triage = Rig()
+        let ids = Set(triage.items.filter { $0.kind == .command }.map(\.id))
+        #expect(ids.isSuperset(of: ["command:new-category", "command:add-code-folder", "command:refresh", "command:tools"]))
+        // A build from source never updates itself.
+        #expect(ids.contains("command:check-updates") == triage.store.updater.isRelease)
+        #expect((triage.item("setting:updates.automatic") != nil) == triage.store.updater.isRelease)
+
+        let none = Rig(triage: false)
+        #expect(Set(none.items.filter { $0.kind == .command }.map(\.id)) == ["command:tools"])
+
+        let routerOnly = Rig(router: true, triage: false)
+        #expect(Set(routerOnly.items.filter { $0.kind == .command }.map(\.id)) == ["command:add-code-folder", "command:tools"])
+
+        let refresh = try #require(triage.item("command:refresh"))
+        #expect(refresh.actions[0].caps == triage.store.shortcut(.refresh).caps)
+        triage.item("command:add-code-folder")?.actions[0].run()
+        #expect(triage.hub.settingsScroll?.id == SettingsView.codeFoldersID && triage.went == [.settings])
+        triage.item("command:tools")?.actions[0].run()
+        #expect(triage.hub.settingsScroll?.id == SettingsView.toolsID)
+    }
+
+    @Test func newCategoryAsksForTheEditorOnTheCategoriesPage() throws {
+        let rig = Rig()
+        try #require(rig.item("command:new-category")).actions[0].run()
+        #expect(rig.store.newCategoryRequest)
+        #expect(rig.went == [.categories])
+    }
+
+    @Test func buildingItIsCheap() {
+        let rig = Rig(router: true, computers: true)
+        _ = rig.items
+        let clock = ContinuousClock()
+        let took = clock.measure { _ = rig.items }
+        #expect(took < .milliseconds(50), "took \(took)")
+    }
+}
