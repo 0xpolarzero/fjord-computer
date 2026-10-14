@@ -133,6 +133,108 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(await guest.filesSnapshot(for: computer)[GuestRouterPaths.join(paths.presence, "cli-1")] == nil)
     }
 
+    @Test func guestFormHookExitsQuietlyOnTerminationWhileStdinIsHeldOpen() throws {
+        let dir = TempDir()
+        let module = dir.path("form-hook.mjs")
+        let ready = dir.path("ready")
+        let registration = "for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, stop)"
+        let source = GuestRouterArtifacts.formModule
+        #expect(source.contains(registration))
+        let instrumented = source.replacingOccurrences(of: registration,
+                                                        with: registration + "\nfs.writeFileSync(process.env.FJORD_TEST_READY, 'ready')")
+        try Data(instrumented.utf8).write(to: module)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["node", module.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = dir.url.path
+        environment["FJORD_TEST_READY"] = ready.path
+        process.environment = environment
+        let stdin = Pipe()
+        let stdout = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer {
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
+            try? stdin.fileHandleForWriting.close()
+        }
+
+        let readyDeadline = Date().addingTimeInterval(3)
+        while !FileManager.default.fileExists(atPath: ready.path), process.isRunning, Date() < readyDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect(FileManager.default.fileExists(atPath: ready.path) && process.isRunning)
+        process.terminate()
+        let exitDeadline = Date().addingTimeInterval(1)
+        while process.isRunning && Date() < exitDeadline { Thread.sleep(forTimeInterval: 0.01) }
+        let exited = !process.isRunning
+        if !exited {
+            kill(process.processIdentifier, SIGKILL)
+            process.waitUntilExit()
+        }
+        try? stdin.fileHandleForWriting.close()
+        #expect(exited && process.terminationReason == .exit && process.terminationStatus == 0)
+        #expect(stdout.fileHandleForReading.readDataToEndOfFile().isEmpty)
+    }
+
+    @Test func guestFormHookBoundsAnOpenStdinRead() throws {
+        let dir = TempDir()
+        let module = dir.path("form-hook.mjs")
+        let ready = dir.path("ready")
+        let inputTimeout = "const INPUT_TIMEOUT = 30_000"
+        let registration = "for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, stop)"
+        var source = GuestRouterArtifacts.formModule
+        #expect(source.contains(inputTimeout))
+        #expect(source.contains(registration))
+        source = source.replacingOccurrences(of: inputTimeout, with: "const INPUT_TIMEOUT = 40")
+        source = source.replacingOccurrences(of: registration,
+                                             with: registration + "\nfs.writeFileSync(process.env.FJORD_TEST_READY, 'ready')")
+        try Data(source.utf8).write(to: module)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["node", module.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = dir.url.path
+        environment["FJORD_TEST_READY"] = ready.path
+        process.environment = environment
+        let stdin = Pipe()
+        let stdout = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer {
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
+            try? stdin.fileHandleForWriting.close()
+        }
+
+        let readyDeadline = Date().addingTimeInterval(3)
+        while !FileManager.default.fileExists(atPath: ready.path), process.isRunning, Date() < readyDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect(FileManager.default.fileExists(atPath: ready.path) && process.isRunning)
+        let exitDeadline = Date().addingTimeInterval(1)
+        while process.isRunning && Date() < exitDeadline { Thread.sleep(forTimeInterval: 0.01) }
+        let exited = !process.isRunning
+        if !exited {
+            kill(process.processIdentifier, SIGKILL)
+            process.waitUntilExit()
+        }
+        try? stdin.fileHandleForWriting.close()
+        #expect(exited && process.terminationReason == .exit && process.terminationStatus == 0)
+        #expect(stdout.fileHandleForReading.readDataToEndOfFile().isEmpty)
+    }
+
     @Test func guestDisablePersistsNestedRemovalFromAMixedHookEntry() async throws {
         let guest = client()
         let paths = try GuestRouterPaths(home: account.home)

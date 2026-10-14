@@ -275,23 +275,35 @@ const ROOT = path.join(process.env.HOME || '', '.local/share/fjord/router')
 const FORMS = path.join(ROOT, 'forms')
 const MARKER = path.join(FORMS, '.enabled')
 const MAX = 8 * 1024 * 1024
+const INPUT_TIMEOUT = 30_000
 const INTERVAL = 250
 const LIMIT = 24 * 60 * 60 * 1000
 const rejected = 'The user doesn\'t want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.'
 const rejectedWithNote = 'The user doesn\'t want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n'
 let stopped = false
-for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => { stopped = true })
+const stop = () => { stopped = true; process.stdin.destroy() }
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, stop)
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const safe = value => [...value].filter(c => /[\p{L}\p{N}_-]/u.test(c)).join('') || 'unknown'
 const readInput = async () => {
   const chunks = []
   let size = 0
-  for await (const chunk of process.stdin) {
-    size += chunk.length
-    if (size > MAX) return undefined
-    chunks.push(chunk)
+  let timedOut = false
+  let tooLarge = false
+  const timer = setTimeout(() => { timedOut = true; process.stdin.destroy() }, INPUT_TIMEOUT)
+  try {
+    for await (const chunk of process.stdin) {
+      size += chunk.length
+      if (size > MAX) { tooLarge = true; process.stdin.destroy(); break }
+      chunks.push(chunk)
+    }
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
   }
+  if (stopped || timedOut || tooLarge) return undefined
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return undefined }
 }
 const lineObjects = text => text.split('\n').filter(line => line.trim()).flatMap(line => {
@@ -330,7 +342,7 @@ const verdict = (tool, input, answer) => {
 }
 
 const request = await readInput()
-if (request?.hook_event_name !== 'PermissionRequest' || !['AskUserQuestion', 'ExitPlanMode'].includes(request.tool_name) ||
+if (stopped || request?.hook_event_name !== 'PermissionRequest' || !['AskUserQuestion', 'ExitPlanMode'].includes(request.tool_name) ||
     !request.tool_input || !fs.existsSync(MARKER)) process.exit(0)
 const started = Date.now()
 const session = String(request.session_id || 'unknown')
