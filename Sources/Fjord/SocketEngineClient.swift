@@ -28,6 +28,7 @@ private enum SocketClientFailure: LocalizedError, Sendable {
             case "not_found": EngineClientError.notFound(message)
             case "unsupported_remote_operation", "incompatible_version": EngineClientError.unsupported(message)
             case "changed", "already_queued", "busy": EngineClientError.invalidAction(message)
+            case _ where EngineErrorText.known.contains(code): EngineClientError.coded(code: code, message: message)
             default: EngineClientError.jobFailed(message)
             }
         case .incompatibleVersion(_, _): EngineClientError.unsupported(errorDescription ?? "Incompatible Silo protocol.")

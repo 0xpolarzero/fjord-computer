@@ -316,6 +316,29 @@ struct OperationJobProgress: Codable, Equatable {
 struct OperationJobError: Codable, Equatable, Sendable {
     var code: String
     var message: String
+
+    /// The message to show: a plain-language text for the stable codes Fjord knows, the engine's otherwise.
+    var userMessage: String { EngineErrorText.message(code: code, fallback: message) }
+}
+
+/// Plain-language texts for the engine's stable error codes.
+enum EngineErrorText {
+    static func message(code: String, fallback: String) -> String {
+        switch code {
+        case "not_running": "This computer isn't running. Start it, then try again."
+        case "needs_personalizing": "This Mac computer needs personalizing first. Open it and finish its setup, then try again."
+        case "setup_incomplete": "This computer's setup isn't finished. Finish setup, then try again."
+        case "screen_sharing_unavailable": "Screen sharing isn't available for this computer right now. Try again in a moment."
+        case "running_limit": "Too many computers are running at once. Stop one, then try again."
+        case "desktop_update_required": "This needs a newer Silo desktop. Use Update desktop, then try again."
+        case "permission_denied": "Silo doesn't have permission to do that. Check this Mac's privacy settings, then try again."
+        case "output_too_large": "The output was too large to return. Narrow the request or send it to a file."
+        default: fallback
+        }
+    }
+
+    static let known: Set<String> = ["not_running", "needs_personalizing", "setup_incomplete", "screen_sharing_unavailable",
+                                     "running_limit", "desktop_update_required", "permission_denied", "output_too_large"]
 }
 
 struct OperationJobFinished: Codable, Equatable, Sendable {
@@ -400,11 +423,14 @@ enum EngineClientError: LocalizedError, Equatable {
     case unsupported(String)
     case invalidAction(String)
     case jobFailed(String)
+    /// A stable engine error code with a plain-language message.
+    case coded(code: String, message: String)
     case unavailable
 
     var errorDescription: String? {
         switch self {
         case .notFound(let message), .unsupported(let message), .invalidAction(let message), .jobFailed(let message): message
+        case .coded(let code, let message): EngineErrorText.message(code: code, fallback: message)
         case .unavailable: "No Silo engine is connected."
         }
     }
@@ -632,6 +658,7 @@ final class MockEngineClient: EngineClient {
     private(set) var checkpointListCallCount = 0
     var nextJobFailure: OperationJobError?
     private(set) var generatedCalls: [String] = []
+    private(set) var lastConfigurationChange: SiloWireComputerConfigurationChange?
     private(set) var revokedDeviceIDs: [String] = []
     private(set) var logFollowRequests: [String?] = []
     var nextConnectionRemovalError: String?
@@ -982,7 +1009,7 @@ final class MockEngineClient: EngineClient {
             throw EngineClientError.unsupported("A display is only available for a macOS computer.")
         }
         guard case .macos(let row)? = inventory.computer(reference.computerId), row.state == .running else {
-            throw EngineClientError.invalidAction("Start the computer to open its display.")
+            throw EngineClientError.coded(code: "not_running", message: "Start the computer to open its display.")
         }
         updateMacos(reference.computerId) { $0.displayOpen = true }
     }
@@ -1032,24 +1059,30 @@ final class MockEngineClient: EngineClient {
             }
             return try mockResult(mockFeatureJob(), as: Result.self)
         case "computers.configuration.change":
-            let data = try JSONEncoder().encode(call.params)
-            let object = (try JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let change = object?["change"] as? [String: Any]
-            let cpus = (change?["cpus"] as? NSNumber)?.uint64Value
-            let memory = (change?["memoryGiB"] as? NSNumber)?.uint64Value
-            if change?["kind"] as? String == "macosResources",
-               let id = change?["computerId"] as? String,
-               let cpus, let memory {
-                updateMacos(id) { $0.cpus = cpus; $0.memoryGiB = memory }
-            } else {
-                let params = try mockDecode(call.params, as: SiloWireComputerConfigurationChangeParams.self)
-                if let configuration = params.change.configuration,
-                   let index = inventory.linux.computers.firstIndex(where: { $0.id == configuration.id }) {
-                    if let expected = params.change.expected, inventory.linux.computers[index].configuration != expected {
-                        throw EngineClientError.invalidAction("This computer changed while the edit was waiting.")
-                    }
-                    updateLinux(configuration.id) { $0.configuration = configuration }
+            let params = try mockDecode(call.params, as: SiloWireComputerConfigurationChangeParams.self)
+            let change = params.change
+            lastConfigurationChange = change
+            if change.kind == .macosResources {
+                guard let id = change.computerId, let cpus = change.cpus, let memory = change.memoryGiB,
+                      let expected = change.expected,
+                      let computer = inventory.macos.computers.first(where: { $0.id == id }) else {
+                    throw EngineClientError.notFound("That Mac computer no longer exists.")
                 }
+                guard computer.state == .stopped else {
+                    throw EngineClientError.coded(code: "changed", message: "Stop the computer before changing its resources.")
+                }
+                guard expected.cpus == computer.cpus, expected.memoryGiB == computer.memoryGiB,
+                      expected.diskGiB == computer.diskGiB else {
+                    throw EngineClientError.invalidAction("This computer's resources changed while the edit was waiting.")
+                }
+                updateMacos(id) { $0.cpus = cpus; $0.memoryGiB = memory }
+            } else if let configuration = change.configuration,
+                      let index = inventory.linux.computers.firstIndex(where: { $0.id == configuration.id }) {
+                if let expected = change.expected,
+                   SiloWireConfiguration(inventory.linux.computers[index].configuration) != expected {
+                    throw EngineClientError.invalidAction("This computer changed while the edit was waiting.")
+                }
+                updateLinux(configuration.id) { $0.configuration = configuration }
             }
             return try mockResult(mockFeatureJob(), as: Result.self)
         case "files.list":

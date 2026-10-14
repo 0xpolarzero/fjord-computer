@@ -64,10 +64,8 @@ actor SiloGuestClient: GuestClient {
     }
 
     func execGet(computer: GuestReference, jobId: String, sinceSequence: UInt64) async throws -> GuestExecJobResult {
-        // Fjord keeps the owner at this boundary. The current generated guest.exec.get params have no deviceId field;
-        // Silo must add optional `deviceId?: string` before the adapter can address jobs by (deviceId, jobId).
-        _ = computer
-        let wire = try await engine.guestExecGet(SiloWireGuestExecGetParams(jobId: jobId, sinceSeq: sinceSequence))
+        let wire = try await engine.guestExecGet(SiloWireGuestExecGetParams(
+            deviceId: computer.deviceId, jobId: jobId, sinceSeq: sinceSequence))
         var stdout = Data()
         var stderr = Data()
         var nextSequence = sinceSequence

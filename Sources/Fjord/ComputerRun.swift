@@ -919,7 +919,7 @@ final class ComputerRunCoordinator {
     private static func isConfirmedRestoreRejection(_ error: Error) -> Bool {
         guard let error = error as? EngineClientError else { return false }
         switch error {
-        case .notFound, .unsupported, .invalidAction, .jobFailed: return true
+        case .notFound, .unsupported, .invalidAction, .jobFailed, .coded: return true
         case .unavailable: return false
         }
     }
@@ -1025,7 +1025,7 @@ final class ComputerRunCoordinator {
                 throw ComputerRunFailure.unconfirmed("Silo accepted job \(jobID), but Fjord lost its durable result connection. It will not submit a duplicate. \(error.localizedDescription)")
             }
             if snapshot.state == .finished {
-                if let error = snapshot.outcome?.error { throw ComputerRunFailure.job(error.message) }
+                if let error = snapshot.outcome?.error { throw ComputerRunFailure.job(error.userMessage) }
                 return snapshot
             }
             try await Task.sleep(for: .milliseconds(250))

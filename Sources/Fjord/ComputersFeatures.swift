@@ -175,14 +175,14 @@ extension ComputersModel {
     func updateResources(for computerId: String, cpus: Int, memoryGiB: Int,
                          expectedConfiguration: ComputerConfiguration? = nil) async {
         guard var row = inventory?.computer(computerId) else { return }
-        guard case .linux(let initialComputer) = row else {
-            actionError = "Mac resource editing is coming soon while the engine API contract is being finalized."
-            return
-        }
-        let displayedConfiguration = expectedConfiguration ?? initialComputer.configuration
-        guard displayedConfiguration.id == computerId else {
-            actionError = "This computer changed while you were editing it. Refresh the values and try again."
-            return
+        let initialLinux: ComputerConfiguration?
+        if case .linux(let computer) = row { initialLinux = computer.configuration } else { initialLinux = nil }
+        let displayedConfiguration = expectedConfiguration ?? initialLinux
+        if initialLinux != nil {
+            guard displayedConfiguration?.id == computerId else {
+                actionError = "This computer changed while you were editing it. Refresh the values and try again."
+                return
+            }
         }
         actionError = nil
         do {
@@ -203,7 +203,7 @@ extension ComputersModel {
             }
             switch row {
             case .linux(let computer):
-                guard computer.configuration == displayedConfiguration else {
+                guard let displayedConfiguration, computer.configuration == displayedConfiguration else {
                     throw EngineClientError.invalidAction(
                         "This computer's resources changed while you were editing. Refresh the values and reapply your changes.")
                 }
@@ -215,14 +215,25 @@ extension ComputersModel {
                 updated.cpus = cpus
                 updated.memoryGiB = memoryGiB
                 let change = SiloWireComputerConfigurationChange(configuration: updated,
-                                                                  expected: displayedConfiguration,
+                                                                  expected: SiloWireConfiguration(displayedConfiguration),
                                                                   kind: .upsert)
                 let result = try await client.invoke(SiloGeneratedMethods.computersConfigurationChange(
                     SiloWireComputerConfigurationChangeParams(change: change, requestId: UUID().uuidString)))
                 await waitForFeatureJob(result.jobId, label: "Update computer resources")
-            case .macos:
-                throw EngineClientError.invalidAction(
-                    "Mac resource editing is coming soon while the engine API contract is being finalized.")
+            case .macos(let computer):
+                let limits = try await resourceLimits(for: .macos)
+                guard (limits.minCPUs...limits.maxCPUs).contains(cpus),
+                      (limits.minMemoryGiB...limits.maxMemoryGiB).contains(memoryGiB) else {
+                    throw EngineClientError.invalidAction("CPU and memory values exceed this Mac's available capacity.")
+                }
+                let expected = SiloWireConfiguration(cpus: computer.cpus, memoryGiB: computer.memoryGiB,
+                                                     diskGiB: computer.diskGiB)
+                let change = SiloWireComputerConfigurationChange(
+                    expected: expected, kind: .macosResources, computerId: computerId,
+                    cpus: UInt64(cpus), memoryGiB: UInt64(memoryGiB), requestId: UUID().uuidString)
+                let result = try await client.invoke(SiloGeneratedMethods.computersConfigurationChange(
+                    SiloWireComputerConfigurationChangeParams(change: change, requestId: UUID().uuidString)))
+                await waitForFeatureJob(result.jobId, label: "Update computer resources")
             }
         } catch { actionError = error.localizedDescription }
     }
@@ -871,5 +882,17 @@ extension ComputersModel {
             presentJobOutcome(outcome, action: label)
         }
         catch { actionError = error.localizedDescription }
+    }
+}
+
+extension SiloWireConfiguration {
+    /// The optimistic-check baseline of a Linux edit: the generated union shares one `expected` type
+    /// between Linux (the whole configuration) and macOS (cpus, memory, disk).
+    init(_ configuration: ComputerConfiguration) {
+        self.init(cpus: UInt64(configuration.cpus), desktop: configuration.desktop, id: configuration.id,
+                  maxCPUs: configuration.maxCPUs, maxMemoryGiB: configuration.maxMemoryGiB,
+                  memoryGiB: UInt64(configuration.memoryGiB), name: configuration.name,
+                  runtimeStorageGiB: configuration.runtimeStorageGiB,
+                  workspaceStorageGiB: configuration.workspaceStorageGiB)
     }
 }

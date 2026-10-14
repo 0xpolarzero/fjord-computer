@@ -395,7 +395,7 @@ private struct CheckpointRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(checkpoint.displayName).font(CDS.sans(12, .medium)).foregroundStyle(CDS.Text.primary)
                     HStack(spacing: 6) {
-                        Text(checkpoint.kind == .automatic ? "Automatic" : "Manual")
+                        Text(checkpoint.kindLabel)
                         Text("·")
                         Text(checkpoint.scope.rawValue.capitalized)
                         if checkpoint.kind == .automatic {
@@ -536,7 +536,10 @@ struct ComputerPanel<Content: View, Action: View>: View {
     }
 }
 
-private extension ComputerCheckpoint {
+extension ComputerCheckpoint {
+    /// Where the checkpoint came from, read from the engine's `kind` field.
+    var kindLabel: String { kind == .automatic ? "Automatic" : "Manual" }
+
     var displayName: String {
         let suffix = ", deleted automatically"
         guard kind == .automatic, name.hasSuffix(suffix) else { return name }

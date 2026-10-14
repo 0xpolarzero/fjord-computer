@@ -135,6 +135,59 @@ import Testing
         }
     }
 
+    @Test func guestExecGetCarriesTheOwnerDeviceId() async throws {
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "controller", "name": "Fake",
+                                                                     "protocol": 1, "capabilities": ["guest.*"]]])
+            case "guest.exec.get":
+                try? socket.write(["id": request.id, "result": ["firstRetainedSeq": 0, "output": [], "state": "running"]])
+            default:
+                try? socket.write(["id": request.id, "result": NSNull()])
+            }
+        }
+        defer { server.stop() }
+        let engine = SocketEngineClient(path: server.path)
+        let client = SiloGuestClient(engine: engine)
+
+        _ = try await client.execGet(computer: GuestReference(deviceId: "owner-1", computerId: "computer-1"),
+                                     jobId: "job:7", sinceSequence: 0)
+        _ = try await client.execGet(computer: GuestReference(deviceId: nil, computerId: "computer-1"),
+                                     jobId: "job:8", sinceSequence: 0)
+
+        let gets = await server.requestLog.requests.filter { $0.method == "guest.exec.get" }
+        #expect(gets.count == 2)
+        let first = try #require(try JSONSerialization.jsonObject(with: gets[0].params) as? [String: Any])
+        #expect(first["deviceId"] as? String == "owner-1")
+        #expect(first["jobId"] as? String == "job:7")
+        let second = try #require(try JSONSerialization.jsonObject(with: gets[1].params) as? [String: Any])
+        #expect(second["deviceId"] == nil || second["deviceId"] is NSNull)
+        try await engine.engineDisconnect()
+    }
+
+    @Test func remoteErrorCodesBecomeCodedClientErrors() async throws {
+        let server = try FakeSiloUnixServer { request, socket in
+            switch request.method {
+            case "engine.handshake":
+                try? socket.write(["id": request.id, "result": ["deviceId": "controller", "name": "Fake",
+                                                                     "protocol": 1, "capabilities": []]])
+            default:
+                try? socket.write(["id": request.id, "error": ["code": "desktop_update_required", "message": "old"]])
+            }
+        }
+        defer { server.stop() }
+        let engine = SocketEngineClient(path: server.path)
+        do {
+            try await engine.operationsCancel(jobId: "job:1", deviceId: nil)
+            Issue.record("The error must propagate.")
+        } catch let error as EngineClientError {
+            #expect(error == .coded(code: "desktop_update_required", message: "old"))
+            #expect(error.errorDescription?.contains("Update desktop") == true)
+        }
+        try? await engine.engineDisconnect()
+    }
+
     @Test func unixSocketHandshakesCorrelatesRequestsAndResyncsEventGaps() async throws {
         let server = try FakeSiloUnixServer()
         defer { server.stop() }

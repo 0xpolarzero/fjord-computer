@@ -408,7 +408,7 @@ final class ComputersModel {
             for computer in prompt.runningComputers {
                 let job = try await client.computersStop(ComputerReference(computerId: computer.computerId))
                 let finished = try await waitForFinish(job.jobId)
-                if let failure = finished.error { throw EngineClientError.jobFailed(failure.message) }
+                if let failure = finished.error { throw EngineClientError.jobFailed(failure.userMessage) }
             }
             try await waitUntilStopped(Set(prompt.runningComputers.map(\.computerId)))
             try await flushEngineSettings()
@@ -554,7 +554,7 @@ final class ComputersModel {
         if let failure = result.error {
             let wasCancelled = failure.code == "cancelled"
             return ComputerJobReceipt(jobId: jobId, action: action,
-                message: wasCancelled ? "\(action) was cancelled." : "\(action) failed: \(failure.message)",
+                message: wasCancelled ? "\(action) was cancelled." : "\(action) failed: \(failure.userMessage)",
                 tone: wasCancelled ? .warning : .danger)
         }
         return ComputerJobReceipt(jobId: jobId, action: action, message: "\(action) completed.", tone: .success)
@@ -700,7 +700,7 @@ final class ComputersModel {
             }
         }
         if let failure = result.error, failure.code != "cancelled" {
-            actionError = "\(action) failed: \(failure.message)"
+            actionError = "\(action) failed: \(failure.userMessage)"
         }
         enqueueJobReceipt(result.jobId)
     }

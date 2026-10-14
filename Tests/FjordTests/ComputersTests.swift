@@ -171,7 +171,7 @@ import Testing
             initScript: "", name: connectionId, url: "http://127.0.0.1:5099/")
     }
 
-    @Test func macosResourceEditStaysDisabledUntilTheWireContractExists() async {
+    private func stoppedMacosInventory() -> ComputerInventory {
         var inventory = MockEngineClient.demoInventory
         inventory.macos.computers = inventory.macos.computers.map { computer in
             var computer = computer
@@ -181,13 +181,85 @@ import Testing
             computer.displayOpen = false
             return computer
         }
+        return inventory
+    }
+
+    @Test func macosResourceEditSendsTheExpectedBaselineAndNewValues() async throws {
+        let inventory = stoppedMacosInventory()
         let client = MockEngineClient(inventory: inventory)
         let model = ComputersModel(client: client, initialInventory: inventory)
+        let before = try #require(inventory.macos.computers.first { $0.id == MockEngineClient.devID })
 
         await model.updateResources(for: MockEngineClient.devID, cpus: 6, memoryGiB: 20)
 
-        #expect(!client.generatedCalls.contains("computers.configuration.change"))
-        #expect(model.actionError?.localizedCaseInsensitiveContains("coming soon") == true)
+        #expect(model.actionError == nil)
+        #expect(client.generatedCalls.contains("computers.configuration.change"))
+        let sent = try #require(client.lastConfigurationChange)
+        #expect(sent.kind == .macosResources)
+        #expect(sent.computerId == MockEngineClient.devID)
+        #expect(sent.expected?.cpus == before.cpus)
+        #expect(sent.expected?.memoryGiB == before.memoryGiB)
+        #expect(sent.expected?.diskGiB == before.diskGiB)
+        #expect(sent.cpus == 6)
+        #expect(sent.memoryGiB == 20)
+        #expect(sent.requestId?.isEmpty == false)
+        let after = try #require(client.inventory.macos.computers.first { $0.id == MockEngineClient.devID })
+        #expect(after.cpus == 6 && after.memoryGiB == 20 && after.diskGiB == before.diskGiB)
+    }
+
+    @Test func staleMacosResourceBaselineIsRejectedByTheMock() async throws {
+        let inventory = stoppedMacosInventory()
+        let client = MockEngineClient(inventory: inventory)
+        let change = SiloWireComputerConfigurationChange(
+            expected: SiloWireConfiguration(cpus: 1, memoryGiB: 1, diskGiB: 1), kind: .macosResources,
+            computerId: MockEngineClient.devID, cpus: 4, memoryGiB: 8, requestId: "r1")
+        await #expect(throws: EngineClientError.self) {
+            _ = try await client.invoke(SiloGeneratedMethods.computersConfigurationChange(
+                SiloWireComputerConfigurationChangeParams(change: change, requestId: "r1")))
+        }
+    }
+
+    @Test func newStableErrorCodesHaveClearMessages() {
+        let cases: [(String, String)] = [
+            ("not_running", "isn't running"), ("needs_personalizing", "personalizing"), ("setup_incomplete", "setup"),
+            ("screen_sharing_unavailable", "Screen sharing"), ("running_limit", "Too many computers"),
+            ("desktop_update_required", "Update desktop"), ("permission_denied", "permission"),
+            ("output_too_large", "too large"),
+        ]
+        for (code, fragment) in cases {
+            let job = OperationJobError(code: code, message: "raw engine text")
+            #expect(job.userMessage.contains(fragment), "\(code): \(job.userMessage)")
+            #expect(!job.userMessage.contains("raw engine text"))
+            #expect(EngineClientError.coded(code: code, message: "raw").errorDescription?.contains(fragment) == true)
+        }
+        #expect(OperationJobError(code: "timed_out", message: "It timed out.").userMessage == "It timed out.")
+    }
+
+    @Test func failedJobsShowTheMappedMessageInTheReceipt() async throws {
+        let client = MockEngineClient()
+        client.nextJobFailure = OperationJobError(code: "running_limit", message: "limit 2")
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        await model.start(MockEngineClient.failedID)
+
+        #expect(model.actionError == "Start failed: Too many computers are running at once. Stop one, then try again.")
+        #expect(model.currentJobReceipt?.message.contains("Too many computers") == true)
+    }
+
+    @Test func checkpointKindComesFromTheEngineField() throws {
+        // A name without the legacy suffix still reads as automatic when the field says so.
+        let automatic = ComputerCheckpoint(id: "a", name: "Before run: x", createdAt: "2026-10-14T10:00:00Z",
+                                           scope: .disk, reason: .manual, kind: .automatic, sizeBytes: nil)
+        let manual = ComputerCheckpoint(id: "m", name: "Before run: x, deleted automatically",
+                                        createdAt: "2026-10-14T10:00:00Z", scope: .disk, reason: .manual,
+                                        kind: .manual, sizeBytes: nil)
+        #expect(automatic.kindLabel == "Automatic")
+        #expect(manual.kindLabel == "Manual")
+        #expect(manual.displayName == "Before run: x, deleted automatically")
+        let decoded = try JSONDecoder().decode(ComputerCheckpoint.self, from: Data(
+            #"{"createdAt":"2026-10-14T10:00:00Z","id":"c","kind":"automatic","name":"n","reason":"manual","scope":"full"}"#.utf8))
+        #expect(decoded.kind == .automatic)
     }
 
     @Test func failedConnectedMacRemovalKeepsDeviceUntilKeyRevocationSucceeds() async {

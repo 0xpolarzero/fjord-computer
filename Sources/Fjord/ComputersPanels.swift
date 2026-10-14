@@ -100,11 +100,12 @@ struct ComputerResourcesPanel: View {
     @State private var maxMemoryGiB = 1
     @State private var hostLimitsLoaded = false
     @State private var limitError: String?
+    @State private var minCPUsValue = 2
+    @State private var minMemoryValue = 4
     @State private var confirmsStop = false
     @State private var displayedConfiguration: ComputerConfiguration?
 
     private var isRunning: Bool { row.displayState == .running }
-    private var isMacos: Bool { row.kind == .macos }
 
     var body: some View {
         ComputerPanel(title: "Resources", action: {
@@ -112,16 +113,11 @@ struct ComputerResourcesPanel: View {
                 if isRunning { confirmsStop = true }
                 else { save() }
             }
-            .disabled(isMacos || !hostLimitsLoaded || (cpus == currentCPUs && memoryGiB == currentMemory)
+            .disabled(!hostLimitsLoaded || (cpus == currentCPUs && memoryGiB == currentMemory)
                       || (row.displayState != .running && row.displayState != .stopped))
         }) {
             VStack(alignment: .leading, spacing: 9) {
-                if isMacos {
-                    Label("Mac resource editing is coming soon.", systemImage: "clock")
-                        .font(CDS.sans(11, .medium)).foregroundStyle(CDS.Text.secondary)
-                    Text("The engine API contract for changing Mac resources is not ready yet.")
-                        .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
-                } else if let limitError {
+                if let limitError {
                     ComputerNotice(text: limitError, tone: .warning)
                 } else if !hostLimitsLoaded {
                     ProgressView("Reading host limits…").font(CDS.sans(10))
@@ -155,9 +151,17 @@ struct ComputerResourcesPanel: View {
                 maxCPUs = max(2, cpus)
                 maxMemoryGiB = max(4, memoryGiB)
                 hostLimitsLoaded = false
+                Task { await loadMacosLimits() }
             }
         }
         .onChange(of: row.id) { _, _ in
+            if case .macos(let computer) = row {
+                cpus = Int(clamping: computer.cpus)
+                memoryGiB = Int(clamping: computer.memoryGiB)
+                hostLimitsLoaded = false
+                Task { await loadMacosLimits() }
+                return
+            }
             guard case .linux(let computer) = row else { return }
             cpus = computer.configuration.cpus
             memoryGiB = computer.configuration.memoryGiB
@@ -167,14 +171,26 @@ struct ComputerResourcesPanel: View {
         }
     }
 
+    private func loadMacosLimits() async {
+        do {
+            let limits = try await model.resourceLimits(for: .macos)
+            maxCPUs = max(limits.maxCPUs, currentCPUs)
+            maxMemoryGiB = max(limits.maxMemoryGiB, currentMemory)
+            minCPUsValue = limits.minCPUs
+            minMemoryValue = limits.minMemoryGiB
+            limitError = nil
+            hostLimitsLoaded = true
+        } catch { limitError = error.localizedDescription }
+    }
+
     private var currentCPUs: Int {
         switch row { case .linux(let c): c.configuration.cpus; case .macos(let c): Int(clamping: c.cpus) }
     }
     private var currentMemory: Int {
         switch row { case .linux(let c): c.configuration.memoryGiB; case .macos(let c): Int(clamping: c.memoryGiB) }
     }
-    private var minCPUs: Int { row.kind == .macos ? 2 : 1 }
-    private var minMemory: Int { row.kind == .macos ? 4 : 1 }
+    private var minCPUs: Int { row.kind == .macos ? min(minCPUsValue, currentCPUs) : 1 }
+    private var minMemory: Int { row.kind == .macos ? min(minMemoryValue, currentMemory) : 1 }
 
     private func save() {
         Task {
