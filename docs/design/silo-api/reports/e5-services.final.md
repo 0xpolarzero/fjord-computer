@@ -1,0 +1,5 @@
+**E5 is partially complete.** The applications group is Tauri-free outside `src/commands/` and committed as `af0a78e212aae2136ccb249ae41aed0339d4c15c`. The worktree is clean.
+
+The remaining coupled modules are `desktop.rs`, `desktop_viewer.rs`, `chatgpt_app.rs`, `settings.rs`, and `updates.rs`. The report lists their remaining references and cross-track needs: [e5-services.md](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/e5-services.md).
+
+Verification passed: the applications filter ran 43 tests; the final full suite passed with 2,229 `silo-ui` tests, 60 `silo-engine` tests, and doc tests; `cargo +1.94.0 fmt --check` passed. Two unrelated tests failed once in an earlier full run, passed individually, and did not fail in the final run. Linux cross-compilation remains unverified because this environment lacks the required target and cross sysroot.
