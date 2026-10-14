@@ -20,8 +20,10 @@ extension Store {
     }
 
     /// Takes a delivery back through its session's inbox, and reads how far it had gone from the plugin's answer. `gate` is
-    /// asked on the main actor right before the abort is written (local and guest alike): a reason refuses it, unwritten.
-    func cancelDelivery(_ sent: RouterDecision.Delivered, gate: (@MainActor @Sendable () -> String?)? = nil) async throws -> RouterDecision.Cancelled {
+    /// asked on the main actor right before the abort is written (local and guest alike): a reason refuses it, unwritten. `preflight` is the check made before the guest path's awaited reads: it only checks, so a
+    /// refusal there or later leaves nothing committed.
+    func cancelDelivery(_ sent: RouterDecision.Delivered, gate: (@MainActor @Sendable () -> String?)? = nil,
+                        preflight: (@MainActor @Sendable () -> String?)? = nil) async throws -> RouterDecision.Cancelled {
         guard let paths = routerFiles else { throw RouterTools.Failure("The Router is off") }
         if let computer = GuestRouterRuntime.shared.guestReference(for: sent.session) {
             let connected: (any GuestClient)? = if let location = GuestRouterRuntime.shared.location(for: sent.session) {
@@ -46,7 +48,7 @@ extension Store {
             }
             let text = RelaySigner.signAbort(target: sent.cli, cancels: sent.nonce, key: key,
                                              now: GuestClock.date(milliseconds: guestNowMs))
-            let ack = try await GuestRouterRuntime.shared.deliver(text, to: sent.cli, computer: computer, gate: gate)
+            let ack = try await GuestRouterRuntime.shared.deliver(text, to: sent.cli, computer: computer, gate: gate, preflight: preflight)
             guard let how = RouterDecision.Cancelled(ack: ack) else {
                 throw RouterTools.Failure("The guest session's plugin answered “\(RouterDecision.clip(ack, 60))”")
             }

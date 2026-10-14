@@ -580,9 +580,11 @@ enum RouterFeed {
     /// background work has been looked at since: with some still running it is work under way, and the card waits until
     /// that is done.
     static func update(_ state: inout RouterState, sessions: [ClaudeSession], activity: [String: ClaudeActivity],
-                       muted: Set<String>, viewing: String?, unread: Set<String>? = nil, forms: [String: Set<String>]? = nil,
+                       muted: Set<String>, mutedSessions: Set<String> = [], viewing: String?, unread: Set<String>? = nil, forms: [String: Set<String>]? = nil,
                        tasks: [String: [ClaudeTask]] = [:], inventory: Set<String>? = nil, listed: [String: Date]? = nil,
                        now: Date) {
+        // Muted by folder, or by session when its project's canonical key is muted (`Store.mutedSessionIDs`).
+        func isMuted(_ session: ClaudeSession) -> Bool { mutedSessions.contains(session.id) || muted.contains(session.folderKey) }
         let live = Dictionary(sessions.filter { !$0.isArchived }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // Written only where it differs: a part left as it was keeps its storage, so the store's check of what changed
         // (`state != router`, every read while sessions work) is a glance at each part rather than a walk of it.
@@ -638,7 +640,7 @@ enum RouterFeed {
                 }
 
                 // No card for what you watched happen in the app, nor for muted projects.
-                let quiet = watching || muted.contains(session.folderKey)
+                let quiet = watching || isMuted(session)
                 if session.completedTurns > before.turns {
                     // A newer turn ended: the cards of the turns before it are past, whether or not this one gets a card of
                     // its own (none when you watched it end): the session went on from them.
@@ -646,10 +648,10 @@ enum RouterFeed {
                     // A newer turn: one still waiting is past (the usual rules apply to this one). It waits too, until it
                     // can be told whether it left work running (decided below, at once when it can be). One that ended
                     // while you look at the session is held, not dropped: see below.
-                    state.pendingTurns[id] = muted.contains(session.folderKey) ? nil
+                    state.pendingTurns[id] = isMuted(session) ? nil
                         : RouterState.PendingTurn(turns: session.completedTurns, message: stamp.message, held: watching)
                 }
-                if let current, current.ms != previous, watching, !muted.contains(session.folderKey) {
+                if let current, current.ms != previous, watching, !isMuted(session) {
                     state.heldWaits[id] = RouterState.HeldWait(ms: current.ms, toolUseID: current.toolUseID, kind: current.kind, text: current.text)
                 }
                 if let current, current.ms != previous, !quiet {
@@ -660,7 +662,7 @@ enum RouterFeed {
 
             // A wait held while you looked: carded when you leave, if it is still on; dropped once it is over.
             if let held = state.heldWaits[id] {
-                if ongoing != held.ms || muted.contains(session.folderKey) {
+                if ongoing != held.ms || isMuted(session) {
                     state.heldWaits[id] = nil
                 } else if !watching {
                     state.heldWaits[id] = nil
@@ -675,7 +677,7 @@ enum RouterFeed {
                 if stamp.message != pending.message || session.completedTurns != pending.turns {
                     state.pendingTurns[id] = nil
                 } else if !session.running, inventory?.contains(id) ?? true, !busy {
-                    if muted.contains(session.folderKey) {
+                    if isMuted(session) {
                         state.pendingTurns[id] = nil
                     } else if watching {
                         // Being looked at: no card now. If you leave without having read it, it comes then.
@@ -1028,7 +1030,7 @@ extension Store {
             RouterFeed.reconcile(&state, sessions: Array(claudeSessions.values), activity: claudeActivity, forms: forms, now: now)
         }
         RouterFeed.update(&state, sessions: Array(claudeSessions.values), activity: claudeActivity,
-                          muted: mutedSessionFolders(agents.mutedFolders, among: Array(claudeSessions.values)), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
+                          muted: [], mutedSessions: mutedSessionIDs(), viewing: viewingNow, unread: agents.appUnread.map(Set.init), forms: forms, tasks: claudeTasks,
                           inventory: claudeTaskInventory, listed: claudeSessionsListed, now: now)
         applyTurnSummaries(&state)
         if state != router {

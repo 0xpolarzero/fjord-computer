@@ -55,7 +55,8 @@ struct GuestRelayInbox: Sendable {
 
     func deliver(_ signedText: String, to sessionID: String, computer: GuestReference,
                  now: Date = Date(), decisionID: UUID? = nil, hostSessionID: String? = nil,
-                 body: String? = nil, gate: (@MainActor @Sendable () -> String?)? = nil) async throws -> String {
+                 body: String? = nil, gate: (@MainActor @Sendable () -> String?)? = nil,
+                 preflight: (@MainActor @Sendable () -> String?)? = nil) async throws -> String {
         guard let header = RelayInbox.header(of: signedText), header.target == sessionID,
               Self.safeSegment(sessionID), Self.safeSegment(header.nonce) else { throw Failure.invalidMessage }
         let account = try await client.account(for: computer)
@@ -70,14 +71,14 @@ struct GuestRelayInbox: Sendable {
 
         let watch = try await client.filesWatch(computer: computer, paths: [sessionFolder])
         do {
-            func checkGate() async throws {
-                if let gate, let refusal = await MainActor.run(body: gate) {
+            func checkGate(_ check: (@MainActor @Sendable () -> String?)?) async throws {
+                if let check, let refusal = await MainActor.run(body: check) {
                     receipt.state = .refused
                     await onState(receipt)
                     throw Failure.refused(refusal)
                 }
             }
-            try await checkGate()
+            try await checkGate(preflight ?? gate)
             if let ack = try await readAck(ackPath, computer: computer) {
                 return try await finish(ack, computer: computer, messagePath: messagePath, ackPath: ackPath, receipt: receipt)
             }
@@ -85,7 +86,7 @@ struct GuestRelayInbox: Sendable {
                 // The reads above are awaited: what the gate saw before them may be gone (Discard, the Router turned off), so
                 // it is asked again, and the task's cancellation looked at, right before the write.
                 try Task.checkCancellation()
-                try await checkGate()
+                try await checkGate(gate)
                 let message = GuestFileWriteRequest(computer: computer, path: messagePath, data: Data(signedText.utf8), mode: 0o600,
                                                     createParents: true, replace: .never)
                 do { _ = try await client.filesWrite(message) }

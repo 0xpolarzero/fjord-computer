@@ -333,17 +333,62 @@ struct RouterCardActionsTests {
         let key = store.routerProjectGroupKey(sessionID: "g", folder: "/mirror/host/proj")
         store.setFolderMuted(key, true)
         // The session-side readers (sessions list, notifications, the feed) compare the session's folder.
-        let folders = store.mutedSessionFolders(store.agents.mutedFolders, among: Array(store.claudeSessions.values))
-        #expect(folders.contains("/mirror/host/proj") && !folders.contains("/code/other"))
+        let muted = store.mutedSessionIDs()
+        #expect(muted.contains("g") && !muted.contains("l"))
         // A local project's key is its folder, so its mute reads as it always did.
         store.setFolderMuted("/code/other", true)
-        #expect(store.mutedSessionFolders(store.agents.mutedFolders, among: Array(store.claudeSessions.values)).contains("/code/other"))
+        #expect(store.mutedSessionIDs().contains("l"))
         // The canvas and the Brief group by the Router's key: the guest frame is gone.
         var page = RouterPage()
         page.needs = [card("g#1", kind: .asks, title: "Guest work", folder: "/mirror/host/proj")]
         let frames = RouterCanvasModel.make(page: page, done: [], muted: Set(store.agents.mutedFolders), name: { $0 }, color: { _ in nil },
                                             projectKey: store.routerProjectGroupKey, projectSource: store.routerProjectGroupSource)
         #expect(frames.isEmpty)
+    }
+
+    @Test func twoGuestProjectsSharingAMirrorFolderAreMutedApart() async throws {
+        let location = SessionLocation.computer(deviceId: "owner", computerId: "c1")
+        let a = session("a", "A work", folder: "/mirror/host/proj")
+        let b = session("b", "B work", folder: "/mirror/host/proj")
+        let (store, _) = world("mute apart", sessions: [a, b])
+        let one = RunsOnProject(id: UUID(), name: "One", sourceFolder: "/code/one", placement: .computer(deviceId: "owner", computerId: "c1", guestPath: "/w/one"))
+        let two = RunsOnProject(id: UUID(), name: "Two", sourceFolder: "/code/two", placement: .computer(deviceId: "owner", computerId: "c1", guestPath: "/w/two"))
+        store.router.runsOnProjects = [one, two]
+        store.router.pendingDesktopStarts = [
+            PendingDesktopStart(projectID: one.id, location: location, alias: "vm", folder: "/w/one", prompt: "Start", state: .matched, desktopSessionID: "a", guestSessionID: "cli-a"),
+            PendingDesktopStart(projectID: two.id, location: location, alias: "vm", folder: "/w/two", prompt: "Start", state: .matched, desktopSessionID: "b", guestSessionID: "cli-b")]
+        store.setFolderMuted(store.routerProjectGroupKey(sessionID: "a", folder: "/mirror/host/proj"), true)
+        #expect(store.mutedSessionIDs() == ["a"])
+        // Changing the mute is read at once, not from the kept answer.
+        store.setFolderMuted(store.routerProjectGroupKey(sessionID: "b", folder: "/mirror/host/proj"), true)
+        #expect(store.mutedSessionIDs() == ["a", "b"])
+    }
+
+    @Test func aStopRefusedBeforeItsWriteStaysWaitingAndRetryable() async throws {
+        let (store, t) = world("stop the CI session", sessions: [session("a", "Fix CI", running: true)])
+        _ = delivery(store, session: "a")
+        _ = await t.call("stop_session", ["session": "ci"])
+        let change = try #require(waiting(store).first)
+        var refused = false
+        store.deliveryCanceller = { _, gate in
+            // The final look refuses (the Router went off): nothing was written.
+            store.router.enabled = false
+            refused = gate() != nil
+            throw RouterTools.Failure("The Router is off")
+        }
+        let after = await store.applyStopChange(change.id)
+        #expect(refused && after?.isPending == true && after?.applying == nil && after?.failureNote?.contains("Couldn't stop") == true)
+    }
+
+    @Test func aStopStillApplyingWhenFjordQuitSettlesAsSentButUnconfirmed() {
+        var state = RouterState()
+        var change = FjordChange(title: "Stop it", patch: .cardAction(.mute(project: "/p", name: "p", muted: true)))
+        change.pending = "Stopping can't be undone"
+        change.applying = "Stopping…"
+        state.changes = [change]
+        state.settleInterrupted()
+        #expect(state.changes[0].pending == nil && state.changes[0].applying == nil)
+        #expect(state.changes[0].failureNote == "The stop was sent, but Fjord quit before it was confirmed.")
     }
 
     // MARK: stop identity and state

@@ -628,6 +628,7 @@ final class Store {
     @ObservationIgnored var relayKeyCache: RelayKeyCache?
     /// The proposed stops being applied now (a second click on Apply does nothing).
     @ObservationIgnored var stopsApplying: Set<UUID> = []
+    @ObservationIgnored var mutedIDsCache: (muted: [String], starts: [PendingDesktopStart], folders: [String: String], result: Set<String>)?
     /// Takes back a delivery through its session's plugin (a proposed stop, once applied); tests answer for it. Nil: `cancelDelivery`.
     @ObservationIgnored var deliveryCanceller: ((RouterDecision.Delivered, @escaping @MainActor @Sendable () -> String?) async throws -> RouterDecision.Cancelled)?
     @ObservationIgnored var pluginQuitObserver: NSObjectProtocol?

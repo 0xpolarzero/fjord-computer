@@ -412,14 +412,15 @@ import Foundation
 
     func deliver(_ signedText: String, to cliSessionID: String, computer: GuestReference,
                  decisionID: UUID? = nil, hostSessionID: String? = nil, body: String? = nil,
-                 gate: (@MainActor @Sendable () -> String?)? = nil) async throws -> String {
+                 gate: (@MainActor @Sendable () -> String?)? = nil,
+                 preflight: (@MainActor @Sendable () -> String?)? = nil) async throws -> String {
         guard let store, let client = clients[computer.key] else { throw GuestClientFailure.notRunning(computer.key) }
         let callback: @MainActor @Sendable (GuestRelayRecord) async -> Void = { [weak store] record in
             store?.saveGuestRelayState(record)
         }
         return try await GuestRelayInbox(client: client, onState: callback)
             .deliver(signedText, to: cliSessionID, computer: computer, decisionID: decisionID,
-                     hostSessionID: hostSessionID, body: body, gate: gate)
+                     hostSessionID: hostSessionID, body: body, gate: gate, preflight: preflight)
     }
 
     /// Reconciles the exact signed payload saved before its first guest inbox write.

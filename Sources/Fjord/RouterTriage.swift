@@ -604,7 +604,7 @@ extension Store {
     private func rescannable(_ session: ClaudeSession) -> Bool {
         let id = "\(session.id)#t\(session.completedTurns)"
         return !session.isArchived && !session.running && session.completedTurns > 0
-            && !mutedSessionFolders(agents.mutedFolders, among: [session]).contains(session.folderKey) && (claudeTasks[session.id] ?? []).isEmpty
+            && !mutedSessionIDs().contains(session.id) && (claudeTasks[session.id] ?? []).isEmpty
             && !router.cards.contains(where: { $0.id == id || ($0.sessionID == session.id && $0.isOpen) })
             && session.completedTurns > router.handledTurns[session.id] ?? 0
             && router.pendingTurns[session.id] == nil && router.waits[session.id] == nil

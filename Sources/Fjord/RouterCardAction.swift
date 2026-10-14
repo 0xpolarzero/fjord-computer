@@ -86,16 +86,27 @@ extension Store {
         return keys.map { (key: $0, name: routerProjectGroupName($0)) }.sorted { ($0.name.lowercased(), $0.key) < ($1.name.lowercased(), $1.key) }
     }
 
-    /// The folders the session-side readers (the sessions list, notifications, the feed) compare `session.folderKey` with:
-    /// the muted keys, and the folder of each session whose Router project is muted by its canonical key (a guest session's
-    /// project is `guest-project:…`, not its host mirror folder). A local project's key is its folder, so those are the same.
-    func mutedSessionFolders(_ muted: [String], among sessions: [ClaudeSession]) -> Set<String> {
-        var out = Set(muted)
-        guard muted.contains(where: { $0.hasPrefix("guest-project:") }) else { return out }
-        for session in sessions where out.contains(routerProjectGroupKey(sessionID: session.id, folder: session.folderKey)) {
-            out.insert(session.folderKey)
+    /// The sessions whose Router project is muted, which the session-side readers (the sessions list, notifications, the
+    /// feed) skip. A session belongs to its canonical project key (`routerProjectGroupKey`: a guest session's project is
+    /// `guest-project:…`, a local one's is its folder), so two guest projects sharing a host mirror folder are muted apart.
+    /// The answer is kept until the muted keys, the guest starts or the sessions' folders change.
+    func mutedSessionIDs(_ muted: [String]? = nil, among sessions: [ClaudeSession]? = nil) -> Set<String> {
+        let muted = muted ?? agents.mutedFolders
+        guard !muted.isEmpty else { return [] }
+        let sessions = sessions ?? Array(claudeSessions.values)
+        let folders = Dictionary(sessions.map { ($0.id, $0.folderKey) }, uniquingKeysWith: { a, _ in a })
+        let starts = router.pendingDesktopStarts
+        if let cache = mutedIDsCache, cache.muted == muted, cache.starts == starts, cache.folders == folders { return cache.result }
+        // The first matched start of a session names its project, as `routerProjectGroupKey` finds it.
+        var guestKeys: [String: String] = [:]
+        for start in starts where start.state == .matched {
+            guard let id = start.desktopSessionID, guestKeys[id] == nil else { continue }
+            guestKeys[id] = "guest-project:\(start.projectID.uuidString):\(start.location.key):\(start.folder)"
         }
-        return out
+        let keys = Set(muted)
+        let result = Set(folders.compactMap { id, folder in keys.contains(guestKeys[id] ?? folder) ? id : nil })
+        mutedIDsCache = (muted, starts, folders, result)
+        return result
     }
 
     /// A session's project and where it runs: this Mac, or the guest computer's name.
@@ -205,19 +216,24 @@ extension Store {
             return nil
         }
         guard let found = check() else { return fail("“\(title)” isn't running that turn any more, so there is nothing to stop") }
-        let gate: @MainActor @Sendable () -> String? = { [weak self] in
+        // Whether the stop may still go ahead; it changes nothing, so a refusal anywhere before the write leaves it waiting.
+        let valid: @MainActor @Sendable () -> String? = { [weak self] in
             guard let self else { return "Fjord is closing" }
             guard self.routerOn else { return "The Router is off" }
             guard let i = self.router.changes.firstIndex(where: { $0.id == id }), self.router.changes[i].isPending, check() != nil else {
                 return "The turn isn't running any more"
             }
+            return nil
+        }
+        let gate: @MainActor @Sendable () -> String? = { [weak self] in
+            if let refusal = valid() { return refusal }
             // Past this look the abort is written: Discard is no longer there, and the card says it is stopping.
-            self.router.changes[i].applying = "Stopping…"
+            if let self, let i = self.router.changes.firstIndex(where: { $0.id == id }) { self.router.changes[i].applying = "Stopping…" }
             return nil
         }
         let how: RouterDecision.Cancelled
         do {
-            how = try await (deliveryCanceller ?? { try await self.cancelDelivery($0, gate: $1) })(found.delivery, gate)
+            how = try await (deliveryCanceller ?? { try await self.cancelDelivery($0, gate: $1, preflight: valid) })(found.delivery, gate)
         } catch {
             let committed = router.changes.first(where: { $0.id == id })?.applying != nil
             return fail(committed ? "The stop was sent, but wasn't confirmed: \(error.localizedDescription)"

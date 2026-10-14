@@ -222,13 +222,13 @@ extension Store {
     private func buildAgentCache(_ state: AgentsState, _ sessions: [String: ClaudeSession],
                                  _ activity: [String: ClaudeActivity], _ tasks: [String: [ClaudeTask]]) -> AgentCache {
         let byID = Dictionary(state.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let muted = mutedSessionFolders(state.mutedFolders, among: Array(sessions.values))
+        let muted = mutedSessionIDs(state.mutedFolders, among: Array(sessions.values))
         // Sessions stay while they work or wait to be read, and for an hour after their last activity; then only a
         // search finds them.
         let now = Date(), cutoff = now.addingTimeInterval(-Self.recentWindow)
         let pending = sessions.values
             .compactMap { s -> (ClaudeSession, AgentEntry)? in
-                guard let e = byID[s.id], e.hiddenAt == nil, !muted.contains(s.folderKey) else { return nil }
+                guard let e = byID[s.id], e.hiddenAt == nil, !muted.contains(s.id) else { return nil }
                 guard s.running || e.unread || tasks[s.id]?.isEmpty == false || s.lastActivity > cutoff else { return nil }
                 return (s, e)
             }
@@ -502,7 +502,7 @@ extension Store {
             }
             return (session.id, session)
         }, uniquingKeysWith: { a, _ in a })
-        let muted = mutedSessionFolders(state.mutedFolders, among: live)
+        let muted = mutedSessionIDs(state.mutedFolders, among: live)
         let previousDots = state.appUnread.map(Set.init)
         // The session shown in the app right now: the most recently focused one, if the app is in front.
         let viewing = claudeFrontmost ? live.max { ($0.lastFocused ?? .distantPast) < ($1.lastFocused ?? .distantPast) }?.id : nil
@@ -520,7 +520,7 @@ extension Store {
             guard let i = index[session.id] else {
                 // First sight of a session: offered as pending if it moved recently enough to matter.
                 let recent = state.seeded ? session.lastActivity > since : seedIDs.contains(session.id)
-                guard recent, !muted.contains(session.folderKey) else { continue }
+                guard recent, !muted.contains(session.id) else { continue }
                 var entry = AgentEntry(id: session.id, seen: session.activity, focusedAt: session.lastFocused)
                 // The sidebar dot lags; a session that just finished a turn elsewhere is unread already.
                 let finished = state.seeded && session.completedTurns > 0 && session.id != viewing && !session.running
