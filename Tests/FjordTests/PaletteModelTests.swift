@@ -22,12 +22,18 @@ import Testing
         ])
     }
 
-    private func make(_ sources: PaletteSources, usage: PaletteUsage? = nil) -> PaletteModel {
-        let store = InboxFixture.store([])
-        let model = PaletteModel(store: store, navigator: AppNavigator(fallback: .done, defaults: nil), routerModel: RouterModel(),
-                                 hub: HubState(), usage: usage, sources: sources)
+    private func make(_ sources: PaletteSources, usage: PaletteUsage? = nil, store: Store? = nil,
+                      navigator: AppNavigator? = nil) -> PaletteModel {
+        let store = store ?? InboxFixture.store([])
+        let model = PaletteModel(store: store, navigator: navigator ?? AppNavigator(fallback: .done, defaults: nil),
+                                 routerModel: RouterModel(), hub: HubState(), usage: usage, sources: sources)
         model.later = { $0() }
         return model
+    }
+
+    private func key(_ code: Int, _ chars: String, _ flags: NSEvent.ModifierFlags = .command) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                         characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: UInt16(code))!
     }
 
     private func send() -> PaletteItem { item("send:router", "Send to the Router", kind: .send) }
@@ -281,6 +287,162 @@ import Testing
         #expect(!model.isOpen && model.query.isEmpty && model.sections.isEmpty && model.selection == nil)
         model.open()
         #expect(model.query.isEmpty && model.selection == "page:1")
+    }
+
+    // MARK: Review fixes
+
+    @Test func whileOpenOnlyFieldEditingChordsReachTheWindowsKeyEquivalents() {
+        let model = make(.fixed([item("page:1", "Router", kind: .page)]))
+        model.open()
+        // ⌘1–9 (Go), ⌘↩ (a plan's Accept), ⌘F and ⌘, are swallowed: no key equivalent behind the palette.
+        for (code, chars) in [(18, "1"), (19, "2"), (36, "\r"), (3, "f"), (43, ",")] {
+            #expect(model.takes(key(code, chars)), "⌘\(chars)")
+        }
+        // What edits the field, and the app's own quit, reach it.
+        for (code, chars) in [(0, "a"), (8, "c"), (9, "v"), (7, "x"), (6, "z"), (123, "\u{F702}"), (124, "\u{F703}"), (51, "\u{7F}"),
+                              (12, "q")] {
+            #expect(!model.takes(key(code, chars)), "⌘\(chars)")
+        }
+        #expect(!model.takes(key(6, "z", [.command, .shift])))
+        // Typing is the field's.
+        #expect(!model.takes(key(0, "a", [])) && !model.takes(key(36, "\r", [])))
+        // ⌘W closes the palette, and not the window (by the character: the Z key on AZERTY).
+        #expect(model.takes(key(13, "w")) && !model.isOpen)
+    }
+
+    @Test func theSendRowHasItsActionsPageAndAKeptItemSurvivesAReload() {
+        let model = make(.fixed([item("entry:1", "Fix one")], send: send()))
+        model.open()
+        model.setQuery("zzzqx")
+        #expect(model.selection == "send:router")
+        model.showActions()
+        #expect(model.actionRows.map(\.title) == ["Open", "Copy link", "Archive"])
+        model.reload()
+        #expect(model.page == .actions("send:router") && model.actionRows.count == 3)
+    }
+
+    @Test func anActionThatWentLeavesThePickOnTheFirstAfterAReload() {
+        var archived = false
+        func entry() -> PaletteItem {
+            var made = item("entry:1", "Fix one")
+            if archived { made.actions = [PaletteAction(id: "restore", title: "Back to inbox", run: {}), made.actions[0]] }
+            return made
+        }
+        var sources = PaletteSources.fixed([])
+        sources.router = { _ in PaletteSourceOutput(items: [entry()]) }
+        let model = make(sources)
+        model.open()
+        model.setQuery("fix")
+        model.showActions()
+        model.move(down: true); model.move(down: true)
+        #expect(model.selection == "entry:1.archive")
+        archived = true
+        model.reload()
+        // The action it was on is gone: the first one is.
+        #expect(model.selection == "restore")
+        // One still there stays.
+        model.move(down: true)
+        model.reload()
+        #expect(model.selection == "entry:1.open")
+    }
+
+    @Test func theIndexIsMadeAfterTheFirstFrameOrByTheFirstKeystroke() {
+        var pending: [@MainActor () -> Void] = []
+        let model = make(.fixed([item("entry:1", "Fix one"), item("page:1", "Router", kind: .page)]))
+        model.afterFirstFrame = { pending.append($0) }
+        model.open()
+        // The empty palette is already listed, with no index made.
+        #expect(model.indexBuilds == 0 && model.sections.count == 1 && model.selection != nil)
+        // Typing before the first frame is out makes it then, once.
+        model.setQuery("fix")
+        #expect(model.indexBuilds == 1 && ids(model).contains("entry:1"))
+        pending.forEach { $0() }
+        model.setQuery("fixe")
+        #expect(model.indexBuilds == 1)
+        // The turn that comes after a close makes nothing.
+        model.close()
+        model.open()
+        model.close()
+        pending.forEach { $0() }
+        #expect(model.indexBuilds == 1)
+        // A data change makes the next one.
+        model.open()
+        model.reload()
+        pending.forEach { $0() }
+        #expect(model.indexBuilds == 2)
+    }
+
+    @Test func scrollingAndListChangesTakeTheHoverBackUntilThePointerMovesAgain() {
+        let model = make(.fixed((1...6).map { item("entry:\($0)", "Fix \($0)") }))
+        model.open()
+        model.setQuery("fix")
+        let rows = ids(model)
+        func hover(_ id: String, _ x: CGFloat) {
+            model.pointer(over: id, at: CGPoint(x: x, y: 50))
+            model.pointer(over: id, at: CGPoint(x: x + 10, y: 50))
+        }
+        hover(rows[2], 10)
+        #expect(model.selection == rows[2])
+        // The list scrolls (the view reports the offset): the next hover only notes where the pointer is.
+        model.listScrolled(offset: 0)
+        model.listScrolled(offset: -40)
+        model.pointer(over: rows[4], at: CGPoint(x: 100, y: 50))
+        #expect(model.selection == rows[2])
+        model.pointer(over: rows[4], at: CGPoint(x: 120, y: 50))
+        #expect(model.selection == rows[4])
+        // The same offset again is no scroll.
+        model.listScrolled(offset: -40)
+        model.pointer(over: rows[1], at: CGPoint(x: 130, y: 50))
+        #expect(model.selection == rows[1])
+        // A new query changes the rows under the pointer too.
+        model.setQuery("fix 3")
+        model.pointer(over: ids(model)[0], at: CGPoint(x: 300, y: 50))
+        #expect(model.selection == ids(model).first)
+    }
+
+    @Test func whatTheSourcesAreMadeOfMovesTheStampThatReloads() {
+        let store = InboxFixture.store([])
+        store.persists = false
+        let model = make(.fixed([]), store: store)
+        let before = model.sourceStamp
+        #expect(model.sourceStamp == before)
+        store.snippets.append(Snippet(name: "A prompt", text: "Do it"))
+        let withSnippet = model.sourceStamp
+        #expect(withSnippet != before)
+        store.categories[0].name = "Renamed"
+        #expect(model.sourceStamp != withSnippet)
+    }
+
+    @Test func theOwnerOfTheKeyboardIsTheFieldBeingEditedNotTheSharedEditor() {
+        final class Owner: NSTextField, NSTextViewDelegate {}
+        let field = Owner()
+        let editor = NSTextView()
+        editor.isFieldEditor = true
+        editor.delegate = field
+        #expect(PaletteModel.owner(of: editor) === field)
+        let composer = NSTextView()
+        #expect(PaletteModel.owner(of: composer) === composer)
+        #expect(PaletteModel.owner(of: nil) == nil)
+    }
+
+    @Test func itDoesNotOpenOverTheQuitDialogAndFollowsTheWindowsPlace() {
+        let store = InboxFixture.store([])
+        let navigator = AppNavigator(fallback: .done, defaults: nil)
+        let model = make(.fixed([item("page:1", "Router", kind: .page)]), store: store, navigator: navigator)
+        let place = model.navigationSelection
+        navigator.go(.router)
+        #expect(model.navigationSelection != place)
+        if let prompt = ComputerQuitPrompt.make(inventory: MockEngineClient.demoInventory) {
+            store.computers.presentQuitPrompt(prompt)
+            #expect(model.quitPromptUp)
+            model.open()
+            #expect(!model.isOpen)
+        }
+    }
+
+    @Test func keycapsAreGlyphsWhereTheKeyHasOne() {
+        #expect(["Return", "Enter", "⌫", "Delete", "Esc", "Space", "Tab", "⌘", "K"].map(PaletteCaps.glyph)
+            == ["↩", "↩", "⌫", "⌫", "Esc", "Space", "Tab", "⌘", "K"])
     }
 
     // MARK: Window layout and labels

@@ -274,6 +274,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// Open, or on its way in (its morph plays before the window itself is in); one on its way out is closed already (a
     /// toggle opens it again).
     var isOpen: Bool { phase == .opening || (phase != .closing && window?.isVisible == true) }
+    /// Whether the palette is over the window: the menus' window actions wait for it to close.
+    var paletteIsOpen: Bool { palette.isOpen }
     /// What the window shortcut does: close the window you are looking at (or one on its way in), else bring it in front.
     /// A window open behind another app or minimized comes forward: closing it would leave nothing to see.
     var shortcutCloses: Bool { Self.shortcutCloses(phase: phase, front: isFront) }
@@ -315,6 +317,8 @@ final class AppWindowController: NSObject, NSWindowDelegate {
         let asked = MorphSignposts.signposter.beginInterval("Open to first flush")
         defer { MorphSignposts.signposter.endInterval("Open to first flush", asked) }
         LatencySignposts.windowAsked()
+        // Taken somewhere else (a shortcut, a notification): the palette would cover the new place.
+        palette.close(restoringFocus: false)
         Self.active = self
         settle()
         var destination = destination
@@ -1033,7 +1037,7 @@ final class AppWindowController: NSObject, NSWindowDelegate {
                     self.palette.toggle()
                     return true
                 }
-                if self.palette.isOpen { return false }
+                if self.palette.isOpen { return self.palette.takes(event) }
                 return self.navigator.selection == .router ? self.keys.key(event) : self.inboxKeys.key(event)
             }
             return consumed ? nil : event

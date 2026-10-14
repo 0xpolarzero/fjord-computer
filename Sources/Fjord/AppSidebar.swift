@@ -55,7 +55,7 @@ final class SidebarMenu: NSObject, NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         menuItem.title = SidebarState.shared.collapsed ? "Expand Sidebar" : "Collapse Sidebar"
-        return AppWindowController.active?.isOpen == true
+        return AppWindowController.active?.isOpen == true && AppWindowController.active?.paletteIsOpen != true
     }
 }
 

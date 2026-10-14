@@ -279,7 +279,7 @@ final class GoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         refresh()
-        guard let window, window.isOpen else { return false }
+        guard let window, window.isOpen, !window.paletteIsOpen else { return false }
         if item === backItem { return window.navigator.canGoBack }
         if item === forwardItem { return window.navigator.canGoForward }
         return !item.isHidden

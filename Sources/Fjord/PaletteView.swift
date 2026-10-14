@@ -116,8 +116,10 @@ struct PaletteView: View {
         .ignoresSafeArea()
         .accessibilityAddTraits(.isModal)
         // The data under the open palette moved (an item arrived, a card was archived): the rows follow it.
-        .onChange(of: store.inboxRevision) { palette.reload() }
-        .onChange(of: store.router.cards.count) { palette.reload() }
+        .onChange(of: palette.sourceStamp) { palette.reload() }
+        // The window went elsewhere without the palette (a shortcut, a notification), or the quit dialog came up: out of the way.
+        .onChange(of: palette.navigationSelection) { palette.close(restoringFocus: false) }
+        .onChange(of: palette.quitPromptUp) { _, up in if up { palette.close(restoringFocus: false) } }
     }
 
     private func surface(_ layout: PaletteLayout) -> some View {
@@ -223,8 +225,10 @@ struct PaletteView: View {
                     VStack(spacing: 0) {
                         // The probe whose position says whether the content has scrolled under the top edge.
                         Color.clear.frame(height: 0)
-                            .onGeometryChange(for: Bool.self) { $0.frame(in: .named("palette-scroll")).minY < -0.5 } action: {
-                                if scrolled != $0 { scrolled = $0 }
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("palette-scroll")).minY } action: { offset in
+                                // Rows moved under the pointer: it has to move again before it selects.
+                                palette.listScrolled(offset: offset)
+                                if scrolled != (offset < -0.5) { scrolled = offset < -0.5 }
                             }
                         LazyVStack(spacing: 0) {
                             ForEach(entries) { entry in row(entry) }
@@ -413,7 +417,7 @@ private struct PaletteActionRow: View, Equatable {
                 Text(action.title).font(CDS.sans(M.fontSize)).foregroundStyle(ink).lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if !action.caps.isEmpty { Keycaps(caps: action.caps, ink: CDS.Keycap.ink) }
+            if !action.caps.isEmpty { Keycaps(caps: action.caps.map(PaletteCaps.glyph), ink: CDS.Keycap.ink) }
         }
         .padding(.horizontal, M.rowPadX)
         .frame(height: M.row)
@@ -548,6 +552,19 @@ extension PaletteIcon {
         case (.symbol(let a, let tintA), .symbol(let b, let tintB)): a == b && tintA == tintB
         case (.session(let a), .session(let b)): a == b
         default: false
+        }
+    }
+}
+
+/// The palette's keycaps are glyphs where the key has one (↩, ⌫), as the footer's are; the rest keep their names.
+enum PaletteCaps {
+    static func glyph(_ cap: String) -> String {
+        switch cap {
+        case "Return", "Enter", "⏎": "↩"
+        case "Delete", "Backspace": "⌫"
+        case "Forward Delete": "⌦"
+        case "Escape": "Esc"
+        default: cap
         }
     }
 }

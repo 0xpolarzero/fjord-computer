@@ -87,10 +87,18 @@ final class PaletteModel {
     @ObservationIgnored var later: (@escaping @MainActor () -> Void) -> Void = { work in
         DispatchQueue.main.async { MainActor.assumeIsolated(work) }
     }
+    /// Puts the index's making off until the first frame is out. Tests replace it.
+    @ObservationIgnored var afterFirstFrame: (@escaping @MainActor () -> Void) -> Void = { work in
+        DispatchQueue.main.async { MainActor.assumeIsolated(work) }
+    }
 
     /// Everything made when it opened: the corpus, what the empty palette lists first, and what ids map to.
     @ObservationIgnored private var context: PaletteContext?
-    @ObservationIgnored private var index = PaletteIndex([])
+    /// Built after the first frame (or by the first keystroke): the empty palette doesn't need it.
+    @ObservationIgnored private var index: PaletteIndex?
+    @ObservationIgnored private var items: [PaletteItem] = []
+    /// How many indexes this palette has made (a test reads it).
+    @ObservationIgnored private(set) var indexBuilds = 0
     @ObservationIgnored private var byID: [String: PaletteItem] = [:]
     @ObservationIgnored private var needsYou: [PaletteItem] = []
     /// The actions page's way back: the list's query and pick.
@@ -102,6 +110,7 @@ final class PaletteModel {
     @ObservationIgnored private var pointerAnchor: CGPoint?
     @ObservationIgnored private var pointerMoved = false
     @ObservationIgnored private var lastPointer: CGPoint?
+    @ObservationIgnored private var lastOffset: CGFloat?
     @ObservationIgnored private weak var previousWindow: NSWindow?
     @ObservationIgnored private weak var previousResponder: NSResponder?
     @ObservationIgnored private var announced = Date.distantPast
@@ -128,7 +137,12 @@ final class PaletteModel {
     /// The actions page's item.
     var actionsItem: PaletteItem? {
         guard case .actions(let id) = page else { return nil }
-        return byID[id]
+        return item(id)
+    }
+
+    /// An item by id: the corpus's, or one the list holds that the corpus doesn't (the Router's send row, made for a query).
+    private func item(_ id: String) -> PaletteItem? {
+        byID[id] ?? sections.lazy.flatMap(\.hits).first { $0.id == id }?.item
     }
 
     /// The actions page's rows: the item's actions the query leaves.
@@ -164,6 +178,69 @@ final class PaletteModel {
     /// Whether the footer's hints give way to the list (a query is typed: Claude's palette folds them).
     var footerCollapsed: Bool { page == .list && !query.isEmpty }
 
+    // MARK: What the palette follows
+
+    /// Where the window is: a change while the palette is open came from outside it (an action closes it first).
+    var navigationSelection: AppDestination { navigator.selection }
+
+    /// Whether the computers' quit dialog is up, which the palette gives way to.
+    var quitPromptUp: Bool { store.computers.quitPrompt != nil }
+
+    /// Everything the sources make items of, boiled down to a number that moves when it does (a card archived, a session
+    /// titled or made, a computer, a snippet, a category, a tool switched): the open palette lists the data again then.
+    var sourceStamp: Int {
+        var hasher = Hasher()
+        hasher.combine(store.inboxRevision)
+        hasher.combine(store.routerOn)
+        hasher.combine(store.tools)
+        for card in store.router.cards {
+            hasher.combine(card.id)
+            hasher.combine(card.addressedAt != nil)
+            hasher.combine(card.title)
+        }
+        // Dictionaries have no order: each session adds its own hash.
+        var sessions = 0
+        for (id, session) in store.claudeSessions {
+            sessions &+= Hasher.hash(id, session.title, session.running, session.isArchived, session.folder)
+        }
+        hasher.combine(sessions)
+        for computer in store.computers.inventory?.allComputers ?? [] {
+            hasher.combine(computer.id)
+            hasher.combine(computer.name)
+            hasher.combine(computer.displayState.title)
+        }
+        for snippet in store.snippets {
+            hasher.combine(snippet.id)
+            hasher.combine(snippet.name)
+        }
+        for category in store.categories {
+            hasher.combine(category.id)
+            hasher.combine(category.name)
+            hasher.combine(category.hidden)
+        }
+        return hasher.finalize()
+    }
+
+    // MARK: Keys
+
+    /// Whether the window's key monitor takes a key while the palette is open (true) or lets it through to the field (false).
+    /// Only ⌘K (its own) and ⌘W (closes the palette, not the window) are acted on; the other ⌘ chords are swallowed so no key
+    /// equivalent (Go ▸ pages, a plan's Accept on ⌘↩) reaches the window behind, except what edits the field and the app's
+    /// own quit, hide and minimize. By the character, so it is the same key on any layout.
+    func takes(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(Shortcut.relevant)
+        guard flags.contains(.command) else { return false }
+        let typed = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if typed == "w", flags == .command {
+            close()
+            return true
+        }
+        if [123, 124, 125, 126, 51, 117].contains(Int(event.keyCode)) { return false }
+        if ["a", "c", "v", "x", "q", "h", "m"].contains(typed) { return false }
+        if typed == "z" { return false }
+        return true
+    }
+
     // MARK: Opening and closing
 
     /// Opens the palette: the corpus built from the sources (synchronously, a few thousand items at most) so that the first
@@ -171,10 +248,11 @@ final class PaletteModel {
     /// keyboard.
     func open(replaying event: NSEvent? = nil, pointer: Bool = false) {
         if let event { pendingKeys.append(event) }
-        guard !isOpen else { return }
+        // Not over the quit dialog: the keyboard is its own.
+        guard !isOpen, store.computers.quitPrompt == nil else { return }
         let span = LatencySignposts.signposter.beginInterval("Palette open to first flush")
         previousWindow = NSApp?.keyWindow
-        previousResponder = previousWindow?.firstResponder
+        previousResponder = Self.owner(of: previousWindow?.firstResponder)
         build()
         query = ""
         page = .list
@@ -186,6 +264,27 @@ final class PaletteModel {
             isOpen = true
         }
         LatencySignposts.endAfterCommit("Palette open to first flush", span)
+        afterFirstFrame { [weak self] in self?.makeIndex() }
+    }
+
+    /// What has the keyboard, as it is given back: a field being edited is its field (the editor is shared, and is the
+    /// palette's own field's by then), anything else itself.
+    static func owner(of responder: NSResponder?) -> NSResponder? {
+        guard let editor = responder as? NSTextView, editor.isFieldEditor else { return responder }
+        return editor.delegate as? NSResponder
+    }
+
+    /// The index the ranker needs, made once per corpus.
+    @discardableResult
+    private func makeIndex() -> PaletteIndex? {
+        guard isOpen else { return nil }
+        if let index { return index }
+        let span = LatencySignposts.signposter.beginInterval("Palette index")
+        let made = PaletteIndex(items)
+        LatencySignposts.signposter.endInterval("Palette index", span)
+        indexBuilds += 1
+        index = made
+        return made
     }
 
     func toggle() {
@@ -207,7 +306,9 @@ final class PaletteModel {
         listSelection = nil
         sections = []
         context = nil
-        index = PaletteIndex([])
+        index = nil
+        items = []
+        lastOffset = nil
         byID = [:]
         needsYou = []
         pointerAnchor = nil
@@ -218,8 +319,6 @@ final class PaletteModel {
     private func giveBackKeyboard() {
         guard let window = previousWindow else { return }
         var target = previousResponder
-        // A text field was being edited: the field itself takes the editor back, not the editor that went away.
-        if let editor = target as? NSTextView, editor.isFieldEditor, let owner = editor.delegate as? NSResponder { target = owner }
         if let view = target as? NSView, view.window !== window { target = nil }
         window.makeFirstResponder(target)
     }
@@ -232,16 +331,20 @@ final class PaletteModel {
         switch page {
         case .list:
             recompute(keeping: selection)
+            afterFirstFrame { [weak self] in self?.makeIndex() }
         case .actions(let id):
-            // The row it belongs to gone: back to the list. Otherwise the list behind it follows the data.
-            if byID[id] == nil {
+            sections = rankedSections(for: listQuery)
+            // The row it belongs to gone: back to the list.
+            guard item(id) != nil else {
                 page = .list
                 query = listQuery
                 recompute(keeping: listSelection)
-            } else {
-                listSelection = rankedSections(for: listQuery).flatMap(\.hits).contains { $0.id == listSelection } ? listSelection : nil
-                sections = rankedSections(for: listQuery)
+                return
             }
+            if !sections.flatMap(\.hits).contains(where: { $0.id == listSelection }) { listSelection = nil }
+            // An action that went (Archive, once archived, is Back to inbox) leaves the pick on the first.
+            let ids = actionRows.map(\.id)
+            if selection.map(ids.contains) != true { selection = ids.first }
         }
     }
 
@@ -254,7 +357,8 @@ final class PaletteModel {
         var seen = Set<String>()
         let items = (router.items + triage.items + places.items + router.needsYou + triage.needsYou + places.needsYou)
             .filter { seen.insert($0.id).inserted }
-        index = PaletteIndex(items)
+        self.items = items
+        index = nil
         byID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         needsYou = router.needsYou + triage.needsYou.prefix(Self.triageNeeds) + places.needsYou
         canSend = sources.send("a", ctx) != nil
@@ -278,6 +382,8 @@ final class PaletteModel {
 
     /// The rows for the current query and the one to select: `kept` if it is among them, else the first.
     private func recompute(keeping kept: String?) {
+        // Other rows are under the pointer now: it has to move again before it selects.
+        scrolled()
         sections = rankedSections(for: query)
         let ids = selectableIDs
         let target = kept.flatMap { ids.contains($0) ? $0 : nil } ?? ids.first
@@ -289,6 +395,7 @@ final class PaletteModel {
     /// The rows `query` lists: the ranked hits with the Router's send row last, or the empty palette's groups.
     private func rankedSections(for query: String) -> [PaletteSection] {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return emptySections() }
+        guard let index = makeIndex() else { return [] }
         var found = sources.rank?(query, index, Self.limit)
             ?? PaletteRanker.rank(query, in: index, usage: usage, now: Date(), limit: Self.limit)
         if let context, let send = sources.send(query, context), !found.contains(where: { $0.id == send.id }) {
@@ -310,7 +417,7 @@ final class PaletteModel {
             .prefix(Self.recents)
         if !recent.isEmpty { result.append(PaletteSection(id: "recents", title: "Recents", hits: Array(recent))) }
         if result.isEmpty {
-            let pages = hits(index.items.filter { $0.kind == .page })
+            let pages = hits(items.filter { $0.kind == .page })
             if !pages.isEmpty { result.append(PaletteSection(id: "pages", title: "Go to", hits: pages)) }
         }
         return result
@@ -359,6 +466,14 @@ final class PaletteModel {
         pointerAnchor = nil
     }
 
+    /// The list's content is at `offset` (how far it has gone up under the top edge): a different one than last time is a
+    /// scroll, by the wheel, the keys or the list changing.
+    func listScrolled(offset: CGFloat) {
+        defer { lastOffset = offset }
+        guard let last = lastOffset, abs(last - offset) >= 0.5 else { return }
+        scrolled()
+    }
+
     private func requestScroll(_ id: String?) {
         scrollSeq &+= 1
         scroll = PaletteScroll(id: id, seq: scrollSeq)
@@ -369,6 +484,7 @@ final class PaletteModel {
     /// Tab or ⌥↩: the selected row's actions. Nothing on the actions page already, or with no row selected.
     func showActions() {
         guard page == .list, let hit = selectedHit else { return }
+        scrolled()
         listQuery = query
         listSelection = selection
         page = .actions(hit.id)
@@ -381,6 +497,7 @@ final class PaletteModel {
     @discardableResult
     func back() -> Bool {
         guard page != .list else { return false }
+        scrolled()
         page = .list
         query = listQuery
         recompute(keeping: listSelection)
@@ -428,5 +545,14 @@ final class PaletteModel {
         close()
         let run = action.run
         later(run)
+    }
+}
+
+private extension Hasher {
+    /// One hash of a few values.
+    static func hash(_ values: AnyHashable...) -> Int {
+        var hasher = Hasher()
+        values.forEach { hasher.combine($0) }
+        return hasher.finalize()
     }
 }
