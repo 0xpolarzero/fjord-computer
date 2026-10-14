@@ -121,6 +121,37 @@ enum FjordGate {
         }
     }
 
+    /// The words that name a card, session or project by its title: those of the title that are neither a command's words nor
+    /// little ones ("fix", "the", "session").
+    static func nameWords(_ title: String) -> [String] {
+        words(title).filter { $0.count >= 2 && !commandWords.contains($0) && !littleWords.contains($0) }
+    }
+
+    /// Whether your message names a card or session by its title: it says a word of it (or its plural, or the singular of
+    /// one), as "the login card" names “Fix login redirect”. A title with no such word can't be named this way.
+    static func namesTitle(_ request: String, title: String) -> Bool {
+        func stem(_ w: String) -> String { w.count > 3 && w.hasSuffix("s") ? String(w.dropLast()) : w }
+        let said = words(request).map(stem)
+        return nameWords(title).map(stem).contains { word in
+            said.contains { $0 == word || (min($0.count, word.count) >= 4 && ($0.hasPrefix(word) || word.hasPrefix($0))) }
+        }
+    }
+
+    /// Whether your message asks to stop or interrupt something.
+    static func asksToStop(_ request: String) -> Bool {
+        words(request).contains { word in ["stop", "interrupt", "abort", "cancel", "halt", "kill"].contains { word.hasPrefix($0) } }
+    }
+
+    /// Whether your message asks to mute or unmute.
+    static func asksToMute(_ request: String) -> Bool {
+        words(request).contains { word in ["mute", "unmute", "silen", "quiet", "hush"].contains { word.hasPrefix($0) } }
+    }
+
+    private static let littleWords: Set<String> = [
+        "fix", "add", "update", "new", "session", "card", "project", "is", "on", "for", "with", "by", "at", "my", "me", "we", "i",
+        "up", "do", "be", "no", "not", "from", "into", "one", "its", "are", "was",
+    ]
+
     /// The words of a marking command, which name no thing or category however they are titled.
     private static let commandWords: Set<String> = [
         "done", "undone", "seen", "unseen", "read", "unread", "mark", "marked", "marking", "restore", "restored", "clear",

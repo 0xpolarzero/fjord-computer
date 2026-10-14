@@ -10,13 +10,38 @@ struct RouterCapabilitiesTests {
     @Test func routingTextIsTheMeasuredWording() throws {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/router-capabilities-parity.json")
         let fixture = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: String])
-        let change = "Fjord itself does something for the user, without any session: turn a setting on or off, including its notifications; change Triage's inbox categories, rules or groups; mark a Router card the user has seen or read as seen (a worth-a-look card: \"seen the docs\", \"got it\", \"I read the headlines\"); mark things in the inbox as done or seen. Not asking a session to build or change code, and not a message for a session to act on (an instruction or a reply addressed to it, even one that mentions what the user has seen)"
-        let gate = "Does `message` ask Fjord itself to do something for the user, without any session: turn a setting on or off, including its notifications; change Triage's inbox categories, rules or groups; mark a Router card the user has seen or read as seen (a worth-a-look card: \"seen the docs\", \"got it\", \"I read the headlines\"); mark things in the inbox as done or seen? Not code to be written, and not a message for a session to do or answer something."
+        let change = "Fjord itself does something for the user, without any session: turn a setting on or off, including its notifications; change Triage's inbox categories, rules or groups; mark a Router card the user has seen or read as seen (a worth-a-look card: \"seen the docs\", \"got it\", \"I read the headlines\"); mark things in the inbox as done or seen; archive a Router card the user will handle themselves or doesn't need (\"I'll do the theme one myself\", \"archive the login card\"); reopen a Router card the user archived (\"reopen the docs card\"). Not asking a session to build or change code, and not a message for a session to act on (an instruction or a reply addressed to it, even one that mentions what the user has seen)"
+        let gate = "Does `message` ask Fjord itself to do something for the user, without any session: turn a setting on or off, including its notifications; change Triage's inbox categories, rules or groups; mark a Router card the user has seen or read as seen (a worth-a-look card: \"seen the docs\", \"got it\", \"I read the headlines\"); mark things in the inbox as done or seen; archive a Router card the user will handle themselves or doesn't need (\"I'll do the theme one myself\", \"archive the login card\"); reopen a Router card the user archived (\"reopen the docs card\")? Not code to be written, and not a message for a session to do or answer something."
         #expect(RouterCapability.changeFjordCriteria == change && fixture["change_fjord"] == change)
         #expect(RouterCapability.settingQuestion == gate && fixture["gate_setting"] == gate)
         #expect(RouterTools.intentCriteria.first { $0.name == "change_fjord" }?.criteria == change)
         let shown = gate.replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "'", with: "\\'")
         #expect(String(describing: RouterTools.gates["gate_setting"]).contains(shown))
+    }
+
+    @Test func theRoutingTextNamesTheMeasuredActionsAndLeavesOutTheOnesThatFailed() {
+        let text = RouterCapability.changeFjordCriteria
+        #expect(text.contains("archive a Router card") && text.contains("reopen a Router card"))
+        // Muting and stopping measured no better than without a phrase (research notes): their tools stay, their phrase doesn't.
+        #expect(!text.contains("mute or unmute a project") && !text.contains("stop a running session"))
+        #expect(RouterCapability.all.filter { !$0.routed }.map(\.id) == ["mute-project", "stop-session"])
+        #expect(RouterCapability.toolNames(.changeFjord, triage: false).isSuperset(of: ["mute_project", "stop_session"]))
+    }
+
+    @Test func theRolesAreMadeFromTheCapabilities() {
+        for triage in [true, false] {
+            let change = RouterRun.role(.changeFjord, triage: triage)
+            for capability in RouterCapability.available(.changeFjord, triage: triage) {
+                #expect(capability.scope.map(change.contains) == true, "\(capability.id) is in the change role")
+                #expect(capability.guidance.map(change.contains) ?? true)
+            }
+            #expect(change.contains("Triage's inbox categories") == triage)
+            let compound = RouterRun.role(.compound, triage: triage)
+            #expect(RouterCapability.available(.compound, triage: triage).allSatisfy { $0.scope.map(compound.contains) == true })
+            let question = RouterRun.role(.question, triage: triage)
+            #expect(question.contains("cards, working sessions, the Brief, settings") && question.contains("the inbox, categories") == triage)
+        }
+        #expect(FjordTools.triageNames == RouterCapability.triageToolNames && FjordTools.triageNames.contains("mark_entries"))
     }
 
     @Test func toolSetsAreTheCapabilitiesTools() {

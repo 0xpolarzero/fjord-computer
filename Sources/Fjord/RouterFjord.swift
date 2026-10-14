@@ -99,6 +99,15 @@ enum FjordTools {
                       ]] as [String: Any]),
         Tool(name: "mark_seen", doc: "Router cards (Claude Code sessions') worth a look, marked as seen when the user says they've seen or read them: they leave Now and the Brief. Not for GitHub things: use mark_entries for those. Name each by the `card` or `session` id the board tool gives, or words of its title; only cards the board says `canMarkSeen`: one that needs the user (a question, a plan, an OK) is answered, not marked seen.",
              fields: [.init("cards", .list(.string("session id or title words")), "The cards worth a look the user has seen.")]),
+        Tool(name: "archive_cards", doc: "Archives Router cards (Claude Code sessions'), any open one, even one that needs the user: for when the user says they will handle it themselves or don't need it. It is the Archive button: the card goes to the history, where Reopen brings it back. Name each by the `card` or `session` id the board tool gives, or words of its title; only cards the user's message names (else it is refused). Not for GitHub things: use mark_entries. The change is recorded in the history: don't repeat it back.",
+             fields: [.init("cards", .list(.string("session id or title words")), "The open cards the user named.")]),
+        Tool(name: "reopen_card", doc: "Reopens a Router card the user archived lately (the board tool lists the latest archived ones, with `card`, title and when): it is back in Needs you or Worth a look. Name it by its `card` id or words of its title; only a card the user's message names.",
+             fields: [.init("card", .string("card id or title words"), "The archived card.")]),
+        Tool(name: "mute_project", doc: "Mutes or unmutes a project's sessions in the Router, so their cards, notifications and the Brief leave it or come back. Name the project as the board tool shows it; only a project the user's message names, and only when it asks to mute or unmute. If the name fits more than one project, nothing is changed and the choices are listed.",
+             fields: [.init("project", .string("project name"), "The project, as the board's `projects` shows it."),
+                      .init("muted", .bool, "true to mute it, false to unmute it.")]),
+        Tool(name: "stop_session", doc: "Stops what a running session is working on now. Only when the user's message names the session and asks to stop or interrupt it. It works only for a turn that a message sent through Fjord started, in a session whose Fjord plugin supports it (the answer says why when it can't); what the turn already did stays done.",
+             fields: [.init("session", .string("session id or title words"), "The running session, by the `session` id the board tool gives or words of its title.")]),
         Tool(name: "list_known", doc: "The repos, people or teams Triage knows (from what it has fetched and what the user has), to fill a rule's values; also the special values and the groups of that kind.",
              fields: [.init("kind", .choice(["repos", "people", "teams"]), "What to list."),
                       .init("query", .string("text"), "Only those containing it.", fallback: .absent),
@@ -107,8 +116,8 @@ enum FjordTools {
 
     static let specs: [[String: Any]] = tools.map(\.spec)
     static let names: Set<String> = Set(tools.map(\.name))
-    /// Triage's own (all but the settings'): offered only while it is on.
-    static let triageNames = names.subtracting(["get_settings", "set_setting", "mark_seen"])
+    /// Triage's own (those of the capabilities that need it): offered only while it is on.
+    static let triageNames = RouterCapability.triageToolNames
 
     /// A tool's input as a shape: what the Router sends is checked against it, and its schema is made from it.
     static func shape(of name: String) -> JSONShape? { tools.first { $0.name == name }.map { .object($0.fields) } }
@@ -147,6 +156,10 @@ extension RouterTools {
             case "set_setting": text = try setSetting(store, args)
             case "list_known": text = try listKnown(store, args)
             case "mark_seen": text = try markSeen(store, args)
+            case "archive_cards": text = try archiveCards(store, args)
+            case "reopen_card": text = try reopenCard(store, args)
+            case "mute_project": text = try muteProject(store, args)
+            case "stop_session": text = try await stopSession(store, args)
             default: return nil
             }
             return RouterRPC.ToolResult(text: text)
@@ -161,7 +174,7 @@ extension RouterTools {
 
     /// What the Router sent, checked against the tool's own schema (unknown fields, wrong types, missing parts), with the
     /// left-out fields filled in.
-    private func checked(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
+    func checked(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
         guard let shape = FjordTools.shape(of: name) else { return args }
         return (try Shapes.normalize(args, as: shape)) as? [String: Any] ?? args
     }
@@ -576,6 +589,7 @@ extension RouterTools {
                 continue
             }
             store.setCardAddressed(card.id, true)
+            store.logCardAction("Archived", card: card.id)
             marked.append("“\(card.title)”")
         }
         if marked.isEmpty { throw Failure("Nothing marked: " + unknown.joined(separator: "; ")) }

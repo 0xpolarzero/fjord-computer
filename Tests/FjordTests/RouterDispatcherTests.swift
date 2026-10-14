@@ -2382,7 +2382,7 @@ import Testing
             #expect(Set(served) == RouterRun.toolNames(intent, triage: true), "\(intent) serves what it may call")
         }
         // With Triage off, none of its tools: only the settings (and the board, for a question).
-        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting", "mark_seen", "board"])
+        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting", "mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session", "board"])
         #expect(RouterRun.toolNames(.question, triage: false) == ["get_settings", "board"])
         // Nothing of the sessions: no way to send, start or answer from a run.
         for intent in RouterRun.Intent.allCases {

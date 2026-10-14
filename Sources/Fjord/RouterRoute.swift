@@ -527,7 +527,7 @@ extension Store {
     func toldAll() -> [String: [String]] {
         var out: [String: [String]] = [:]
         for entry in router.decisions {
-            guard case .you(let text) = entry.trigger, let session = entry.links.sessions.last,
+            guard case .you(let text) = entry.trigger, entry.generated != true, let session = entry.links.sessions.last,
                   entry.done.contains(where: { if case .sent = $0 { true } else if case .started = $0 { true } else { false } })
             else { continue }
             out[session, default: []].append(text)
@@ -539,7 +539,7 @@ extension Store {
     func lastTold() -> [String: (text: String, at: Date)] {
         var out: [String: (text: String, at: Date)] = [:]
         for entry in router.decisions {
-            guard case .you(let text) = entry.trigger, let session = entry.links.sessions.last,
+            guard case .you(let text) = entry.trigger, entry.generated != true, let session = entry.links.sessions.last,
                   entry.done.contains(where: { if case .sent = $0 { true } else if case .started = $0 { true } else { false } })
             else { continue }
             out[session] = (text, entry.at)
