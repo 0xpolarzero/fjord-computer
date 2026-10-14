@@ -8,6 +8,14 @@ import {
 
 const formats = new Set(["uint8", "uint16", "uint32", "uint64", "uint", "int32", "int64", "display-axis"]);
 
+const widthOrder = ["uint8", "uint16", "uint32", "uint", "int32", "int64", "uint64"];
+
+function widest(values) {
+  if (values.every((value) => value === values[0])) return values[0];
+  if (values.some((value) => !widthOrder.includes(value))) return undefined;
+  return values.reduce((a, b) => (widthOrder.indexOf(b) > widthOrder.indexOf(a) ? b : a));
+}
+
 class SiloIntegerFormat extends TypeAttributeKind {
   constructor() {
     super("siloIntegerFormat");
@@ -21,12 +29,14 @@ class SiloIntegerFormat extends TypeAttributeKind {
     return kind === "integer";
   }
 
+  // Same-named properties of different widths can be merged into one class
+  // (the variants of a tagged union): keep the widest representation.
   combine(values) {
-    return values.every((value) => value === values[0]) ? values[0] : undefined;
+    return widest(values);
   }
 
   intersect(values) {
-    return values.every((value) => value === values[0]) ? values[0] : undefined;
+    return widest(values);
   }
 
   makeInferred(value) {

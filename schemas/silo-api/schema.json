@@ -18,7 +18,7 @@
       "type": "object"
     },
     "ApplicationComputer": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ApplicationComputer` (lines\n591-628). `kind` is the discriminator required by 10 §1.3 and is added by\nthe canonical API; source fields retain their names and omission behavior.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ApplicationComputer` (lines\n591-628). `kind` is the discriminator required by 10 §1.3 and is added by\nthe canonical API; source fields retain their names and omission behavior.",
       "properties": {
         "attention": {
           "anyOf": [
@@ -155,7 +155,7 @@
       "type": "object"
     },
     "ApplicationSource": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ApplicationSource` (lines\n548-565), retaining its field types and camelCase serialization.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ApplicationSource` (lines\n548-565), retaining its field types and camelCase serialization.",
       "properties": {
         "activities": {
           "items": true,
@@ -429,7 +429,7 @@
       "type": "object"
     },
     "BackupState": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/backup_controller.rs::BackupState`, with\nthe API's remembered destination field added for a client-owned folder picker.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/backup_controller.rs::BackupState`, with\nthe API's remembered destination field added for a client-owned folder picker.",
       "properties": {
         "archives": {
           "items": {
@@ -1079,7 +1079,7 @@
       "type": "object"
     },
     "ComputerAttention": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerAttention`\n(lines 638-650).",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerAttention`\n(lines 638-650).",
       "properties": {
         "level": {
           "$ref": "#/$defs/AttentionLevel"
@@ -1096,7 +1096,7 @@
     },
     "ComputerConfiguration": {
       "additionalProperties": false,
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfiguration`\n(lines 304-319), including rejection of unknown fields.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfiguration`\n(lines 304-319), including rejection of unknown fields.",
       "properties": {
         "cpus": {
           "format": "uint8",
@@ -1251,6 +1251,42 @@
             "changes"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "computerId": {
+              "type": "string"
+            },
+            "cpus": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "expected": {
+              "$ref": "#/$defs/MacosResourceConfiguration"
+            },
+            "kind": {
+              "const": "macosResources",
+              "type": "string"
+            },
+            "memoryGiB": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "requestId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "computerId",
+            "expected",
+            "cpus",
+            "memoryGiB",
+            "requestId"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1284,7 +1320,7 @@
       "type": "object"
     },
     "ComputerConfigurationProgress": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfigurationProgress`\n(lines 3343 and 3462-3494), including its explicit `type` field.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfigurationProgress`\n(lines 3343 and 3462-3494), including its explicit `type` field.",
       "properties": {
         "computer": {
           "type": "string"
@@ -1391,7 +1427,7 @@
     },
     "ComputerConfigurationRequest": {
       "additionalProperties": false,
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfigurationRequest`\n(lines 297-302).",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfigurationRequest`\n(lines 297-302).",
       "properties": {
         "computers": {
           "items": {
@@ -1713,7 +1749,7 @@
       "type": "string"
     },
     "ComputerUseState": {
-      "description": "State projection described by 40 §4 and `computer_use::state_object` in\n`app/SiloUI/src-tauri/src/computer_use.rs`.",
+      "description": "State projection described by 40 §4 and `computer_use::state_object` in\n`app/SiloUI/src-tauri/engine/src/computer_use.rs`.",
       "properties": {
         "agents": {
           "items": {
@@ -1942,7 +1978,7 @@
       "type": "object"
     },
     "ConnectionsStatus": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/remote.rs::ConnectionsStatus`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::ConnectionsStatus`.",
       "properties": {
         "address": {
           "type": "string"
@@ -2091,7 +2127,7 @@
     },
     "DesktopConfiguration": {
       "additionalProperties": false,
-      "description": "Mirrors `app/SiloUI/src-tauri/src/desktop.rs::DesktopConfiguration`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/desktop.rs::DesktopConfiguration`.",
       "properties": {
         "builtIn": {
           "type": "boolean"
@@ -2226,7 +2262,7 @@
       "type": "object"
     },
     "Device": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/remote.rs::Device`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::Device`.",
       "properties": {
         "address": {
           "type": "string"
@@ -2269,7 +2305,7 @@
       "type": "string"
     },
     "DeviceCapacity": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime.rs::DeviceCapacity`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::DeviceCapacity`.",
       "properties": {
         "logicalCpus": {
           "format": "uint",
@@ -2522,7 +2558,7 @@
       "type": "object"
     },
     "ErrorCode": {
-      "description": "Stable snake_case wire error code. Existing values are sourced from\n`app/SiloUI/src-tauri/src/bridge_error.rs`; pending values are listed in 95 A-10.",
+      "description": "Stable snake_case wire error code. Existing values are sourced from\n`app/SiloUI/src-tauri/engine/src/bridge_error.rs`; pending values are listed in 95 A-10.",
       "enum": [
         "update_in_progress",
         "unsupported_remote_operation",
@@ -2546,7 +2582,8 @@
         "running_limit",
         "needs_personalizing",
         "setup_incomplete",
-        "screen_sharing_unavailable"
+        "screen_sharing_unavailable",
+        "desktop_update_required"
       ],
       "type": "string"
     },
@@ -2566,10 +2603,20 @@
       "type": "object"
     },
     "ErrorObject": {
-      "description": "A method error. The canonical multiplexed envelope carries only a stable\ncode and message; version diagnostics belong to the handshake contract.",
+      "description": "A method error with optional structured version diagnostics for handshake refusal.",
       "properties": {
         "code": {
           "$ref": "#/$defs/ErrorCode"
+        },
+        "diagnostics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IncompatibleVersionDiagnostics"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "message": {
           "type": "string"
@@ -3776,6 +3823,14 @@
         },
         "jobId": {
           "$ref": "#/$defs/JobId"
+        },
+        "offsetBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -4010,7 +4065,7 @@
       "type": "string"
     },
     "GitHubPolicy": {
-      "description": "Public projection of `app/SiloUI/src-tauri/src/github.rs::public_snapshot`;\n`computer` references are replaced with canonical `computerId` identifiers.",
+      "description": "Public projection of `app/SiloUI/src-tauri/engine/src/github.rs::public_snapshot`;\n`computer` references are replaced with canonical `computerId` identifiers.",
       "properties": {
         "allRepositoriesAllowChanges": {
           "type": "boolean"
@@ -4114,7 +4169,7 @@
       "type": "object"
     },
     "GitHubState": {
-      "description": "Public projection of `app/SiloUI/src-tauri/src/github.rs::public_snapshot`\nfrom 50 §2. Token values and other credential material are absent.",
+      "description": "Public projection of `app/SiloUI/src-tauri/engine/src/github.rs::public_snapshot`\nfrom 50 §2. Token values and other credential material are absent.",
       "properties": {
         "accessEnabled": {
           "type": "boolean"
@@ -4283,6 +4338,12 @@
     },
     "GuestExecGetParams": {
       "properties": {
+        "deviceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "jobId": {
           "$ref": "#/$defs/JobId"
         },
@@ -5168,6 +5229,32 @@
       ],
       "type": "object"
     },
+    "IncompatibleVersionDiagnostics": {
+      "description": "Engine and client versions reported when handshake protocol negotiation fails.",
+      "properties": {
+        "clientAppVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clientProtocolRange": {
+          "$ref": "#/$defs/ProtocolRange"
+        },
+        "engineAppVersion": {
+          "type": "string"
+        },
+        "engineProtocolRange": {
+          "$ref": "#/$defs/ProtocolRange"
+        }
+      },
+      "required": [
+        "engineProtocolRange",
+        "clientProtocolRange",
+        "engineAppVersion"
+      ],
+      "type": "object"
+    },
     "JobContractSchema": {
       "properties": {
         "acknowledge": {
@@ -5211,6 +5298,10 @@
         "jobId": {
           "$ref": "#/$defs/JobId"
         },
+        "outcomeChunked": {
+          "description": "The complete outcome is retained and available through `operations.job.get` chunks.",
+          "type": "boolean"
+        },
         "result": true
       },
       "required": [
@@ -5238,6 +5329,17 @@
             }
           ]
         },
+        "outcomeChunk": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobOutcomeChunk"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when the retained outcome is too large for one response. `data`\nis an exact UTF-8 slice of the persisted JobOutcome JSON."
+        },
         "state": {
           "$ref": "#/$defs/JobState"
         }
@@ -5262,6 +5364,37 @@
         },
         "result": true
       },
+      "type": "object"
+    },
+    "JobOutcomeChunk": {
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "nextOffsetBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offsetBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "data",
+        "totalBytes",
+        "offsetBytes"
+      ],
       "type": "object"
     },
     "JobProgress": {
@@ -5653,7 +5786,7 @@
       "type": "object"
     },
     "LifecycleProgress": {
-      "description": "Canonical lifecycle payload at `runtime.rs:3343`; the step values mirror\n`app/SiloUI/src-tauri/src/runtime.rs::LifecycleStep` (line 1275).",
+      "description": "Canonical lifecycle payload at `runtime.rs:3343`; the step values mirror\n`app/SiloUI/src-tauri/engine/src/runtime.rs::LifecycleStep` (line 1275).",
       "properties": {
         "action": {
           "type": "string"
@@ -5897,7 +6030,7 @@
       "type": "object"
     },
     "MacosComputer": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/macos_computers.rs::MacosComputer`\n(lines 68-92). `kind` is added by the unified `computers.list` contract;\nsource `Option` fields remain explicit JSON nulls.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers.rs::MacosComputer`\n(lines 68-92). `kind` is added by the unified `computers.list` contract;\nsource `Option` fields remain explicit JSON nulls.",
       "properties": {
         "checkpointOperation": {
           "anyOf": [
@@ -6033,7 +6166,7 @@
       "type": "object"
     },
     "MacosComputerState": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/macos_computers/store.rs::State`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers/store.rs::State`.",
       "enum": [
         "preparing",
         "copying",
@@ -6049,7 +6182,7 @@
       "type": "string"
     },
     "MacosComputersState": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/macos_computers.rs::MacosComputersState`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers.rs::MacosComputersState`.",
       "properties": {
         "computers": {
           "items": {
@@ -6272,6 +6405,33 @@
       "required": [
         "computerId",
         "state"
+      ],
+      "type": "object"
+    },
+    "MacosResourceConfiguration": {
+      "additionalProperties": false,
+      "description": "Optimistic state check for a stopped macOS computer's resource edit.",
+      "properties": {
+        "cpus": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "diskGiB": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memoryGiB": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cpus",
+        "memoryGiB",
+        "diskGiB"
       ],
       "type": "object"
     },
@@ -11709,7 +11869,7 @@
       "type": "object"
     },
     "OperationEntry": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime/operation_gate.rs::OperationEntry`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime/operation_gate.rs::OperationEntry`.",
       "properties": {
         "blockedByHidden": {
           "default": false,
@@ -11788,7 +11948,7 @@
       "type": "string"
     },
     "OperationKind2": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime/operation_gate.rs::OperationKind`\nand its camelCase serde names.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime/operation_gate.rs::OperationKind`\nand its camelCase serde names.",
       "enum": [
         "lifecycle",
         "checkpointCapture",
@@ -11809,7 +11969,7 @@
       "type": "string"
     },
     "OperationQueue": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/runtime/operation_gate.rs::OperationQueue`\nand adds the retained completed-job discovery list required by 95 §3.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/runtime/operation_gate.rs::OperationQueue`\nand adds the retained completed-job discovery list required by 95 §3.",
       "properties": {
         "running": {
           "items": {
@@ -11916,7 +12076,7 @@
       "type": "object"
     },
     "PreparationStatus": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/preparation.rs::PreparationStatus`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/preparation.rs::PreparationStatus`.",
       "properties": {
         "image": {
           "$ref": "#/$defs/PreparationTask"
@@ -12077,7 +12237,7 @@
       "type": "object"
     },
     "PushOperation": {
-      "description": "Mirrors the push-operation value recorded by\n`app/SiloUI/src-tauri/src/host_push_operations.rs`.",
+      "description": "Mirrors the push-operation value recorded by\n`app/SiloUI/src-tauri/engine/src/host_push_operations.rs`.",
       "properties": {
         "commitCount": {
           "format": "uint64",
@@ -12567,7 +12727,7 @@
       "type": "object"
     },
     "SettingsSnapshot": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/settings.rs::Snapshot`, with the\nengine-owned API draft fixed to JSON null as 60 §2.1 and 95 A-5 require.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/settings.rs::Snapshot`, with the\nengine-owned API draft fixed to JSON null as 60 §2.1 and 95 A-5 require.",
       "properties": {
         "onboardingDraft": {
           "type": "null"
@@ -13032,7 +13192,7 @@
       "type": "object"
     },
     "TemplateSummary": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/macos_computers.rs::TemplateSummary`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers.rs::TemplateSummary`.",
       "properties": {
         "build": {
           "type": "string"
@@ -13084,7 +13244,7 @@
       "type": "string"
     },
     "TransferProgress": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/transfer.rs::Progress`; the serialized\nnames deliberately retain `id` and `computer`, not the surrounding job's\n`jobId` and `computerId`.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/transfer.rs::Progress`; the serialized\nnames deliberately retain `id` and `computer`, not the surrounding job's\n`jobId` and `computerId`.",
       "properties": {
         "bytesDone": {
           "format": "uint64",
@@ -13164,7 +13324,7 @@
       "type": "object"
     },
     "UnfinishedRestore": {
-      "description": "Mirrors the Linux restore journal view in\n`app/SiloUI/src-tauri/src/runtime/checkpoints.rs` (lines 2381-2403).",
+      "description": "Mirrors the Linux restore journal view in\n`app/SiloUI/src-tauri/engine/src/runtime/checkpoints.rs` (lines 2381-2403).",
       "properties": {
         "checkpointId": {
           "type": "string"
@@ -13186,7 +13346,7 @@
       "type": "object"
     },
     "UpdateProgressData": {
-      "description": "The `operations.job.progress` source projection mirrors the current Rust\n`updates::Snapshot` at `app/SiloUI/src-tauri/src/updates.rs:41-61` exactly.\nMethod and `updates.changed` results use `UpdateSnapshot`, which omits the\nobsolete install helper field per 60 §5.1.",
+      "description": "The `operations.job.progress` source projection mirrors the current Rust\n`updates::Snapshot` at `app/SiloUI/src-tauri/engine/src/updates.rs:41-61` exactly.\nMethod and `updates.changed` results use `UpdateSnapshot`, which omits the\nobsolete install helper field per 60 §5.1.",
       "properties": {
         "automaticChecks": {
           "type": "boolean"
@@ -13287,7 +13447,7 @@
       "type": "object"
     },
     "UpdateSnapshot": {
-      "description": "Mirrors `app/SiloUI/src-tauri/src/updates.rs::Snapshot` with camelCase\nfields. `installStatus` is excluded by 60 §5.1 even though the current Rust\nsource still serializes its obsolete Debian helper value.",
+      "description": "Mirrors `app/SiloUI/src-tauri/engine/src/updates.rs::Snapshot` with camelCase\nfields. `installStatus` is excluded by 60 §5.1 even though the current Rust\nsource still serializes its obsolete Debian helper value.",
       "properties": {
         "automaticChecks": {
           "type": "boolean"

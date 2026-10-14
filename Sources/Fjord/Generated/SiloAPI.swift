@@ -175,11 +175,13 @@
 //   let siloWireGuestSshPurpose = try? JSONDecoder().decode(SiloWireGuestSshPurpose.self, from: jsonData)
 //   let siloWireHandshakeParams = try? JSONDecoder().decode(SiloWireHandshakeParams.self, from: jsonData)
 //   let siloWireHandshakeResult = try? JSONDecoder().decode(SiloWireHandshakeResult.self, from: jsonData)
+//   let siloWireIncompatibleVersionDiagnostics = try? JSONDecoder().decode(SiloWireIncompatibleVersionDiagnostics.self, from: jsonData)
 //   let siloWireJobContractSchema = try? JSONDecoder().decode(SiloWireJobContractSchema.self, from: jsonData)
 //   let siloWireJobFinished = try? JSONDecoder().decode(SiloWireJobFinished.self, from: jsonData)
 //   let siloWireJobId = try? JSONDecoder().decode(SiloWireJobId.self, from: jsonData)
 //   let siloWireJobLookupResult = try? JSONDecoder().decode(SiloWireJobLookupResult.self, from: jsonData)
 //   let siloWireJobOutcome = try? JSONDecoder().decode(SiloWireJobOutcome.self, from: jsonData)
+//   let siloWireJobOutcomeChunk = try? JSONDecoder().decode(SiloWireJobOutcomeChunk.self, from: jsonData)
 //   let siloWireJobProgress = try? JSONDecoder().decode(SiloWireJobProgress.self, from: jsonData)
 //   let siloWireJobStartResult = try? JSONDecoder().decode(SiloWireJobStartResult.self, from: jsonData)
 //   let siloWireJobState = try? JSONDecoder().decode(SiloWireJobState.self, from: jsonData)
@@ -206,6 +208,7 @@
 //   let siloWireMacosDisplaySessionResult = try? JSONDecoder().decode(SiloWireMacosDisplaySessionResult.self, from: jsonData)
 //   let siloWireMacosHostLimits = try? JSONDecoder().decode(SiloWireMacosHostLimits.self, from: jsonData)
 //   let siloWireMacosJobProgress = try? JSONDecoder().decode(SiloWireMacosJobProgress.self, from: jsonData)
+//   let siloWireMacosResourceConfiguration = try? JSONDecoder().decode(SiloWireMacosResourceConfiguration.self, from: jsonData)
 //   let siloWireMethodContractSchema = try? JSONDecoder().decode(SiloWireMethodContractSchema.self, from: jsonData)
 //   let siloWireMethodName = try? JSONDecoder().decode(SiloWireMethodName.self, from: jsonData)
 //   let siloWireMethodParams = try? JSONDecoder().decode(SiloWireMethodParams.self, from: jsonData)
@@ -305,7 +308,7 @@
 
 import Foundation
 
-/// Mirrors `app/SiloUI/src-tauri/src/backup_controller.rs::BackupState`, with
+/// Mirrors `app/SiloUI/src-tauri/engine/src/backup_controller.rs::BackupState`, with
 /// the API's remembered destination field added for a client-owned folder picker.
 // MARK: - SiloWireBackupState
 struct SiloWireBackupState: Codable, Equatable, Sendable {
@@ -789,12 +792,15 @@ struct SiloWireComputerConfigurationChangeParams: Codable, Equatable, Sendable {
 // MARK: - SiloWireComputerConfigurationChange
 struct SiloWireComputerConfigurationChange: Codable, Equatable, Sendable {
     var configuration: SiloWireComputerConfiguration? = nil
-    var expected: SiloWireComputerConfiguration? = nil
+    var expected: SiloWireConfiguration? = nil
     var kind: SiloWireComputerConfigurationChangeKind
     var computerId: String? = nil
     var expectedOrder: [String]? = nil
     var order: [String]? = nil
     var changes: [SiloWireComputerConfigurationChange]? = nil
+    var cpus: UInt64? = nil
+    var memoryGiB: UInt64? = nil
+    var requestId: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case configuration = "configuration"
@@ -804,6 +810,9 @@ struct SiloWireComputerConfigurationChange: Codable, Equatable, Sendable {
         case expectedOrder = "expectedOrder"
         case order = "order"
         case changes = "changes"
+        case cpus = "cpus"
+        case memoryGiB = "memoryGiB"
+        case requestId = "requestId"
     }
 }
 
@@ -813,7 +822,7 @@ struct SiloWireComputerConfigurationChange: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfiguration`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfiguration`
 /// (lines 304-319), including rejection of unknown fields.
 // MARK: - SiloWireComputerConfiguration
 struct SiloWireComputerConfiguration: Codable, Equatable, Sendable {
@@ -846,7 +855,7 @@ struct SiloWireComputerConfiguration: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/desktop.rs::DesktopConfiguration`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/desktop.rs::DesktopConfiguration`.
 // MARK: - SiloWireDesktopConfiguration
 struct SiloWireDesktopConfiguration: Codable, Equatable, Sendable {
     var builtIn: Bool? = nil
@@ -858,9 +867,47 @@ struct SiloWireDesktopConfiguration: Codable, Equatable, Sendable {
     }
 }
 
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfiguration`
+/// (lines 304-319), including rejection of unknown fields.
+///
+/// Optimistic state check for a stopped macOS computer's resource edit.
+// MARK: - SiloWireConfiguration
+struct SiloWireConfiguration: Codable, Equatable, Sendable {
+    var cpus: UInt64
+    var desktop: SiloWireDesktopConfiguration? = nil
+    var id: String? = nil
+    var maxCPUs: Int? = nil
+    var maxMemoryGiB: Int? = nil
+    var memoryGiB: UInt64
+    var name: String? = nil
+    var runtimeStorageGiB: Int? = nil
+    var workspaceStorageGiB: Int? = nil
+    var diskGiB: UInt64? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case cpus = "cpus"
+        case desktop = "desktop"
+        case id = "id"
+        case maxCPUs = "maxCPUs"
+        case maxMemoryGiB = "maxMemoryGiB"
+        case memoryGiB = "memoryGiB"
+        case name = "name"
+        case runtimeStorageGiB = "runtimeStorageGiB"
+        case workspaceStorageGiB = "workspaceStorageGiB"
+        case diskGiB = "diskGiB"
+    }
+}
+
 enum SiloWireComputerConfigurationChangeKind: String, Codable, Equatable, Sendable {
     case batch = "batch"
     case delete = "delete"
+    case macosResources = "macosResources"
     case reorder = "reorder"
     case upsert = "upsert"
 }
@@ -871,7 +918,7 @@ enum SiloWireComputerConfigurationChangeKind: String, Codable, Equatable, Sendab
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfigurationProgress`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfigurationProgress`
 /// (lines 3343 and 3462-3494), including its explicit `type` field.
 // MARK: - SiloWireComputerConfigurationProgress
 struct SiloWireComputerConfigurationProgress: Codable, Equatable, Sendable {
@@ -922,7 +969,7 @@ struct SiloWireComputerConfigurationProgress: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfigurationRequest`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfigurationRequest`
 /// (lines 297-302).
 // MARK: - SiloWireComputerConfigurationRequest
 struct SiloWireComputerConfigurationRequest: Codable, Equatable, Sendable {
@@ -1026,7 +1073,7 @@ struct SiloWireComputerCreateResult: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/macos_computers.rs::MacosComputer`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers.rs::MacosComputer`
 /// (lines 68-92). `kind` is added by the unified `computers.list` contract;
 /// source `Option` fields remain explicit JSON nulls.
 // MARK: - SiloWireMacosComputer
@@ -1148,7 +1195,7 @@ enum SiloWireCheckpointScope: String, Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/macos_computers/store.rs::State`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers/store.rs::State`.
 enum SiloWireMacosComputerState: String, Codable, Equatable, Sendable {
     case copying = "copying"
     case downloading = "downloading"
@@ -1349,7 +1396,7 @@ struct SiloWireComputersChangedPayload: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ApplicationSource` (lines
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ApplicationSource` (lines
 /// 548-565), retaining its field types and camelCase serialization.
 // MARK: - SiloWireApplicationSource
 struct SiloWireApplicationSource: Codable, Equatable, Sendable {
@@ -1380,7 +1427,7 @@ struct SiloWireApplicationSource: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ApplicationComputer` (lines
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ApplicationComputer` (lines
 /// 591-628). `kind` is the discriminator required by 10 §1.3 and is added by
 /// the canonical API; source fields retain their names and omission behavior.
 // MARK: - SiloWireApplicationComputer
@@ -1440,7 +1487,7 @@ struct SiloWireApplicationComputer: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerAttention`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerAttention`
 /// (lines 638-650).
 // MARK: - SiloWireComputerAttention
 struct SiloWireComputerAttention: Codable, Equatable, Sendable {
@@ -1477,7 +1524,7 @@ enum SiloWireLinuxComputerState: String, Codable, Equatable, Sendable {
 // synthesized for types that have collections (such as arrays or dictionaries).
 
 /// Mirrors the Linux restore journal view in
-/// `app/SiloUI/src-tauri/src/runtime/checkpoints.rs` (lines 2381-2403).
+/// `app/SiloUI/src-tauri/engine/src/runtime/checkpoints.rs` (lines 2381-2403).
 // MARK: - SiloWireUnfinishedRestore
 struct SiloWireUnfinishedRestore: Codable, Equatable, Sendable {
     var checkpointId: String
@@ -1502,7 +1549,7 @@ enum SiloWireRestorePhase: String, Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::DeviceCapacity`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::DeviceCapacity`.
 // MARK: - SiloWireDeviceCapacity
 struct SiloWireDeviceCapacity: Codable, Equatable, Sendable {
     var logicalCpus: Int
@@ -1522,7 +1569,7 @@ struct SiloWireDeviceCapacity: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/macos_computers.rs::MacosComputersState`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers.rs::MacosComputersState`.
 // MARK: - SiloWireMacosComputersState
 struct SiloWireMacosComputersState: Codable, Equatable, Sendable {
     var computers: [SiloWireMacosComputer]
@@ -1546,7 +1593,7 @@ struct SiloWireMacosComputersState: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/macos_computers.rs::TemplateSummary`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers.rs::TemplateSummary`.
 // MARK: - SiloWireTemplateSummary
 struct SiloWireTemplateSummary: Codable, Equatable, Sendable {
     var build: String
@@ -1615,7 +1662,7 @@ struct SiloWireConnectionsSetEnabledParams: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/remote.rs::ConnectionsStatus`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::ConnectionsStatus`.
 // MARK: - SiloWireConnectionsStatus
 struct SiloWireConnectionsStatus: Codable, Equatable, Sendable {
     var address: String
@@ -1791,7 +1838,7 @@ struct SiloWireDesktopConnectResult: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/remote.rs::Device`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::Device`.
 // MARK: - SiloWireDevice
 struct SiloWireDevice: Codable, Equatable, Sendable {
     var address: String
@@ -2362,10 +2409,12 @@ enum SiloWireUploadOrigin: String, Codable, Equatable, Sendable {
 struct SiloWireGetJobParams: Codable, Equatable, Sendable {
     var deviceId: String? = nil
     var jobId: String
+    var offsetBytes: UInt64? = nil
 
     enum CodingKeys: String, CodingKey {
         case deviceId = "deviceId"
         case jobId = "jobId"
+        case offsetBytes = "offsetBytes"
     }
 }
 
@@ -2443,7 +2492,7 @@ struct SiloWireGitHubConfiguration: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Public projection of `app/SiloUI/src-tauri/src/github.rs::public_snapshot`;
+/// Public projection of `app/SiloUI/src-tauri/engine/src/github.rs::public_snapshot`;
 /// `computer` references are replaced with canonical `computerId` identifiers.
 // MARK: - SiloWireGitHubPolicy
 struct SiloWireGitHubPolicy: Codable, Equatable, Sendable {
@@ -2622,10 +2671,12 @@ struct SiloWireGuestExecExitedEvent: Codable, Equatable, Sendable {
 
 // MARK: - SiloWireGuestExecGetParams
 struct SiloWireGuestExecGetParams: Codable, Equatable, Sendable {
+    var deviceId: String? = nil
     var jobId: String
     var sinceSeq: UInt64? = nil
 
     enum CodingKeys: String, CodingKey {
+        case deviceId = "deviceId"
         case jobId = "jobId"
         case sinceSeq = "sinceSeq"
     }
@@ -3246,7 +3297,7 @@ struct SiloWireLaunchPass: Codable, Equatable, Sendable {
 // synthesized for types that have collections (such as arrays or dictionaries).
 
 /// Canonical lifecycle payload at `runtime.rs:3343`; the step values mirror
-/// `app/SiloUI/src-tauri/src/runtime.rs::LifecycleStep` (line 1275).
+/// `app/SiloUI/src-tauri/engine/src/runtime.rs::LifecycleStep` (line 1275).
 // MARK: - SiloWireLifecycleProgress
 struct SiloWireLifecycleProgress: Codable, Equatable, Sendable {
     var action: String
@@ -3523,6 +3574,26 @@ struct SiloWireMacosJobProgress: Codable, Equatable, Sendable {
         case detail = "detail"
         case progress = "progress"
         case state = "state"
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// Optimistic state check for a stopped macOS computer's resource edit.
+// MARK: - SiloWireMacosResourceConfiguration
+struct SiloWireMacosResourceConfiguration: Codable, Equatable, Sendable {
+    var cpus: UInt64
+    var diskGiB: UInt64
+    var memoryGiB: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case cpus = "cpus"
+        case diskGiB = "diskGiB"
+        case memoryGiB = "memoryGiB"
     }
 }
 
@@ -3852,7 +3923,7 @@ struct SiloWireNotificationsClearedPayload: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime/operation_gate.rs::OperationQueue`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime/operation_gate.rs::OperationQueue`
 /// and adds the retained completed-job discovery list required by 95 §3.
 // MARK: - SiloWireOperationQueue
 struct SiloWireOperationQueue: Codable, Equatable, Sendable {
@@ -3873,7 +3944,7 @@ struct SiloWireOperationQueue: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime/operation_gate.rs::OperationEntry`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime/operation_gate.rs::OperationEntry`.
 // MARK: - SiloWireOperationEntry
 struct SiloWireOperationEntry: Codable, Equatable, Sendable {
     var blockedByHidden: Bool? = nil
@@ -3902,7 +3973,7 @@ struct SiloWireOperationEntry: Codable, Equatable, Sendable {
     }
 }
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime/operation_gate.rs::OperationKind`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime/operation_gate.rs::OperationKind`
 /// and its camelCase serde names.
 enum SiloWireOperationKind2: String, Codable, Equatable, Sendable {
     case checkpointCapture = "checkpointCapture"
@@ -3985,7 +4056,7 @@ struct SiloWirePreUpgradeBackup: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/preparation.rs::PreparationStatus`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/preparation.rs::PreparationStatus`.
 // MARK: - SiloWirePreparationStatus
 struct SiloWirePreparationStatus: Codable, Equatable, Sendable {
     var image: SiloWirePreparationTask
@@ -4277,7 +4348,7 @@ enum SiloWireSecretSaveAction: String, Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/settings.rs::Snapshot`, with the
+/// Mirrors `app/SiloUI/src-tauri/engine/src/settings.rs::Snapshot`, with the
 /// engine-owned API draft fixed to JSON null as 60 §2.1 and 95 A-5 require.
 // MARK: - SiloWireSettingsSnapshot
 struct SiloWireSettingsSnapshot: Codable, Equatable, Sendable {
@@ -4572,7 +4643,7 @@ struct SiloWireTerminalCommandParams: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/transfer.rs::Progress`; the serialized
+/// Mirrors `app/SiloUI/src-tauri/engine/src/transfer.rs::Progress`; the serialized
 /// names deliberately retain `id` and `computer`, not the surrounding job's
 /// `jobId` and `computerId`.
 // MARK: - SiloWireTransferProgress
@@ -4638,7 +4709,7 @@ struct SiloWireUnexpectedComputerChange: Codable, Equatable, Sendable {
 // synthesized for types that have collections (such as arrays or dictionaries).
 
 /// The `operations.job.progress` source projection mirrors the current Rust
-/// `updates::Snapshot` at `app/SiloUI/src-tauri/src/updates.rs:41-61` exactly.
+/// `updates::Snapshot` at `app/SiloUI/src-tauri/engine/src/updates.rs:41-61` exactly.
 /// Method and `updates.changed` results use `UpdateSnapshot`, which omits the
 /// obsolete install helper field per 60 §5.1.
 // MARK: - SiloWireUpdateProgressData
@@ -4862,13 +4933,14 @@ struct SiloWireErrorContractSchema: Codable, Equatable, Sendable {
 }
 
 /// Stable snake_case wire error code. Existing values are sourced from
-/// `app/SiloUI/src-tauri/src/bridge_error.rs`; pending values are listed in 95 A-10.
+/// `app/SiloUI/src-tauri/engine/src/bridge_error.rs`; pending values are listed in 95 A-10.
 enum SiloWireErrorCode: String, Codable, Equatable, Sendable {
     case accountNotMigrated = "account_not_migrated"
     case alreadyQueued = "already_queued"
     case busy = "busy"
     case cancelled = "cancelled"
     case changed = "changed"
+    case desktopUpdateRequired = "desktop_update_required"
     case errorCodeInternal = "internal"
     case exists = "exists"
     case includeNotWritable = "include_not_writable"
@@ -4895,16 +4967,57 @@ enum SiloWireErrorCode: String, Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// A method error. The canonical multiplexed envelope carries only a stable
-/// code and message; version diagnostics belong to the handshake contract.
+/// A method error with optional structured version diagnostics for handshake refusal.
 // MARK: - SiloWireErrorObject
 struct SiloWireErrorObject: Codable, Equatable, Sendable {
     var code: SiloWireErrorCode
+    var diagnostics: SiloWireIncompatibleVersionDiagnostics? = nil
     var message: String
 
     enum CodingKeys: String, CodingKey {
         case code = "code"
+        case diagnostics = "diagnostics"
         case message = "message"
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// Engine and client versions reported when handshake protocol negotiation fails.
+// MARK: - SiloWireIncompatibleVersionDiagnostics
+struct SiloWireIncompatibleVersionDiagnostics: Codable, Equatable, Sendable {
+    var clientAppVersion: String? = nil
+    var clientProtocolRange: SiloWireProtocolRange
+    var engineAppVersion: String
+    var engineProtocolRange: SiloWireProtocolRange
+
+    enum CodingKeys: String, CodingKey {
+        case clientAppVersion = "clientAppVersion"
+        case clientProtocolRange = "clientProtocolRange"
+        case engineAppVersion = "engineAppVersion"
+        case engineProtocolRange = "engineProtocolRange"
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// The inclusive protocol range a client supports.
+// MARK: - SiloWireProtocolRange
+struct SiloWireProtocolRange: Codable, Equatable, Sendable {
+    var max: Int
+    var min: Int
+
+    enum CodingKeys: String, CodingKey {
+        case max = "max"
+        case min = "min"
     }
 }
 
@@ -4998,24 +5111,6 @@ struct SiloWireClientMetadata: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case name = "name"
         case version = "version"
-    }
-}
-
-//
-// Hashable or Equatable:
-// The compiler will not be able to synthesize the implementation of Hashable or Equatable
-// for types that require the use of JSONAny, nor will the implementation of Hashable be
-// synthesized for types that have collections (such as arrays or dictionaries).
-
-/// The inclusive protocol range a client supports.
-// MARK: - SiloWireProtocolRange
-struct SiloWireProtocolRange: Codable, Equatable, Sendable {
-    var max: Int
-    var min: Int
-
-    enum CodingKeys: String, CodingKey {
-        case max = "max"
-        case min = "min"
     }
 }
 
@@ -5169,7 +5264,7 @@ struct SiloWireDesktopStatus: Codable, Equatable, Sendable {
 // synthesized for types that have collections (such as arrays or dictionaries).
 
 /// State projection described by 40 §4 and `computer_use::state_object` in
-/// `app/SiloUI/src-tauri/src/computer_use.rs`.
+/// `app/SiloUI/src-tauri/engine/src/computer_use.rs`.
 // MARK: - SiloWireComputerUseState
 struct SiloWireComputerUseState: Codable, Equatable, Sendable {
     var agents: [String]? = nil
@@ -5305,7 +5400,7 @@ struct SiloWireResumingComputer: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Public projection of `app/SiloUI/src-tauri/src/github.rs::public_snapshot`
+/// Public projection of `app/SiloUI/src-tauri/engine/src/github.rs::public_snapshot`
 /// from 50 §2. Token values and other credential material are absent.
 // MARK: - SiloWireGitHubState
 struct SiloWireGitHubState: Codable, Equatable, Sendable {
@@ -5458,7 +5553,7 @@ struct SiloWireGuestExecFinishedResult: Codable, Equatable, Sendable {
 // synthesized for types that have collections (such as arrays or dictionaries).
 
 /// Mirrors the push-operation value recorded by
-/// `app/SiloUI/src-tauri/src/host_push_operations.rs`.
+/// `app/SiloUI/src-tauri/engine/src/host_push_operations.rs`.
 // MARK: - SiloWirePushOperation
 struct SiloWirePushOperation: Codable, Equatable, Sendable {
     var commitCount: UInt64
@@ -5554,7 +5649,7 @@ enum SiloWireReclaimTrigger: String, Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/updates.rs::Snapshot` with camelCase
+/// Mirrors `app/SiloUI/src-tauri/engine/src/updates.rs::Snapshot` with camelCase
 /// fields. `installStatus` is excluded by 60 §5.1 even though the current Rust
 /// source still serializes its obsolete Debian helper value.
 // MARK: - SiloWireUpdateSnapshot
@@ -5672,11 +5767,14 @@ struct SiloWireAcknowledgeJobParams: Codable, Equatable, Sendable {
 struct SiloWireJobFinished: Codable, Equatable, Sendable {
     var error: SiloWireErrorObject? = nil
     var jobId: String
+    /// The complete outcome is retained and available through `operations.job.get` chunks.
+    var outcomeChunked: Bool? = nil
     var result: SiloJSONValue? = nil
 
     enum CodingKeys: String, CodingKey {
         case error = "error"
         case jobId = "jobId"
+        case outcomeChunked = "outcomeChunked"
         case result = "result"
     }
 
@@ -5684,6 +5782,7 @@ struct SiloWireJobFinished: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         error = try container.decodeIfPresent(SiloWireErrorObject.self, forKey: .error)
         jobId = try container.decode(String.self, forKey: .jobId)
+        outcomeChunked = try container.decodeIfPresent(Bool.self, forKey: .outcomeChunked)
         result = container.contains(.result) ? try container.decode(SiloJSONValue.self, forKey: .result) : nil
     }
 }
@@ -5698,11 +5797,15 @@ struct SiloWireJobFinished: Codable, Equatable, Sendable {
 struct SiloWireJobLookupResult: Codable, Equatable, Sendable {
     var jobId: String
     var outcome: SiloWireJobOutcome? = nil
+    /// Present when the retained outcome is too large for one response. `data`
+    /// is an exact UTF-8 slice of the persisted JobOutcome JSON.
+    var outcomeChunk: SiloWireJobOutcomeChunk? = nil
     var state: SiloWireJobState
 
     enum CodingKeys: String, CodingKey {
         case jobId = "jobId"
         case outcome = "outcome"
+        case outcomeChunk = "outcomeChunk"
         case state = "state"
     }
 }
@@ -5727,6 +5830,27 @@ struct SiloWireJobOutcome: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         error = try container.decodeIfPresent(SiloWireErrorObject.self, forKey: .error)
         result = container.contains(.result) ? try container.decode(SiloJSONValue.self, forKey: .result) : nil
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - SiloWireJobOutcomeChunk
+struct SiloWireJobOutcomeChunk: Codable, Equatable, Sendable {
+    var data: String
+    var nextOffsetBytes: UInt64? = nil
+    var offsetBytes: UInt64
+    var totalBytes: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case data = "data"
+        case nextOffsetBytes = "nextOffsetBytes"
+        case offsetBytes = "offsetBytes"
+        case totalBytes = "totalBytes"
     }
 }
 
@@ -5770,23 +5894,23 @@ struct SiloWireJobProgress: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfigurationProgress`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfigurationProgress`
 /// (lines 3343 and 3462-3494), including its explicit `type` field.
 ///
 /// Canonical lifecycle payload at `runtime.rs:3343`; the step values mirror
-/// `app/SiloUI/src-tauri/src/runtime.rs::LifecycleStep` (line 1275).
+/// `app/SiloUI/src-tauri/engine/src/runtime.rs::LifecycleStep` (line 1275).
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/transfer.rs::Progress`; the serialized
+/// Mirrors `app/SiloUI/src-tauri/engine/src/transfer.rs::Progress`; the serialized
 /// names deliberately retain `id` and `computer`, not the surrounding job's
 /// `jobId` and `computerId`.
 ///
 /// Mirrors the push-operation value recorded by
-/// `app/SiloUI/src-tauri/src/host_push_operations.rs`.
+/// `app/SiloUI/src-tauri/engine/src/host_push_operations.rs`.
 ///
 /// The macOS progress projection from 05 §4.2 E (`MacosComputer` row fields).
 ///
 /// The `operations.job.progress` source projection mirrors the current Rust
-/// `updates::Snapshot` at `app/SiloUI/src-tauri/src/updates.rs:41-61` exactly.
+/// `updates::Snapshot` at `app/SiloUI/src-tauri/engine/src/updates.rs:41-61` exactly.
 /// Method and `updates.changed` results use `UpdateSnapshot`, which omits the
 /// obsolete install helper field per 60 §5.1.
 // MARK: - SiloWireDataClass
@@ -5951,7 +6075,7 @@ enum SiloWireProgress: Codable, Equatable, Sendable {
     }
 }
 
-/// Mirrors `app/SiloUI/src-tauri/src/macos_computers/store.rs::State`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/macos_computers/store.rs::State`.
 enum SiloWireDataState: String, Codable, Equatable, Sendable {
     case cancelled = "cancelled"
     case copying = "copying"
@@ -6256,6 +6380,7 @@ struct SiloWireParams: Codable, Equatable, Sendable {
     var widthPx: UInt64? = nil
     var hostPort: Int? = nil
     var scheme: SiloWireNetworkScheme? = nil
+    var offsetBytes: UInt64? = nil
     var repositoryPath: String? = nil
     var refresh: Bool? = nil
     var operationId: String? = nil
@@ -6353,6 +6478,7 @@ struct SiloWireParams: Codable, Equatable, Sendable {
         case widthPx = "widthPx"
         case hostPort = "hostPort"
         case scheme = "scheme"
+        case offsetBytes = "offsetBytes"
         case repositoryPath = "repositoryPath"
         case refresh = "refresh"
         case operationId = "operationId"
@@ -6382,7 +6508,7 @@ enum SiloWireAction: String, Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfiguration`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfiguration`
 /// (lines 304-319), including rejection of unknown fields.
 // MARK: - SiloWireConfigurationClass
 struct SiloWireConfigurationClass: Codable, Equatable, Sendable {
@@ -6595,10 +6721,10 @@ enum SiloWireResultUnion: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfigurationProgress`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfigurationProgress`
 /// (lines 3343 and 3462-3494), including its explicit `type` field.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/remote.rs::Device`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::Device`.
 // MARK: - SiloWireResultElement
 struct SiloWireResultElement: Codable, Equatable, Sendable {
     var computer: SiloWireResultComputer? = nil
@@ -6724,39 +6850,39 @@ enum SiloWireResultComputer: Codable, Equatable, Sendable {
 // synthesized for types that have collections (such as arrays or dictionaries).
 
 /// State projection described by 40 §4 and `computer_use::state_object` in
-/// `app/SiloUI/src-tauri/src/computer_use.rs`.
+/// `app/SiloUI/src-tauri/engine/src/computer_use.rs`.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfigurationRequest`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfigurationRequest`
 /// (lines 297-302).
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ApplicationSource` (lines
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ApplicationSource` (lines
 /// 548-565), retaining its field types and camelCase serialization.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/remote.rs::Device`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::Device`.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/remote.rs::ConnectionsStatus`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::ConnectionsStatus`.
 ///
 /// Result of protocol negotiation. `clientId` is supplied on `engine.sock`
 /// and omitted when the handshake runs through the remote control socket.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/backup_controller.rs::BackupState`, with
+/// Mirrors `app/SiloUI/src-tauri/engine/src/backup_controller.rs::BackupState`, with
 /// the API's remembered destination field added for a client-owned folder picker.
 ///
-/// Public projection of `app/SiloUI/src-tauri/src/github.rs::public_snapshot`
+/// Public projection of `app/SiloUI/src-tauri/engine/src/github.rs::public_snapshot`
 /// from 50 §2. Token values and other credential material are absent.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/runtime/operation_gate.rs::OperationQueue`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime/operation_gate.rs::OperationQueue`
 /// and adds the retained completed-job discovery list required by 95 §3.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/preparation.rs::PreparationStatus`.
+/// Mirrors `app/SiloUI/src-tauri/engine/src/preparation.rs::PreparationStatus`.
 ///
 /// Mirrors the push-operation value recorded by
-/// `app/SiloUI/src-tauri/src/host_push_operations.rs`.
+/// `app/SiloUI/src-tauri/engine/src/host_push_operations.rs`.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/settings.rs::Snapshot`, with the
+/// Mirrors `app/SiloUI/src-tauri/engine/src/settings.rs::Snapshot`, with the
 /// engine-owned API draft fixed to JSON null as 60 §2.1 and 95 A-5 require.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/updates.rs::Snapshot` with camelCase
+/// Mirrors `app/SiloUI/src-tauri/engine/src/updates.rs::Snapshot` with camelCase
 /// fields. `installStatus` is excluded by 60 §5.1 even though the current Rust
 /// source still serializes its obsolete Debian helper value.
 // MARK: - SiloWireJobStartResultClass
@@ -6925,6 +7051,9 @@ struct SiloWireJobStartResultClass: Codable, Equatable, Sendable {
     var stage: String? = nil
     var totalCount: UInt64? = nil
     var outcome: SiloWireJobOutcome? = nil
+    /// Present when the retained outcome is too large for one response. `data`
+    /// is an exact UTF-8 slice of the persisted JobOutcome JSON.
+    var outcomeChunk: SiloWireJobOutcomeChunk? = nil
     var running: [SiloWireOperationEntry]? = nil
     var unacknowledgedJobIds: [String]? = nil
     var waiting: [SiloWireOperationEntry]? = nil
@@ -7125,6 +7254,7 @@ struct SiloWireJobStartResultClass: Codable, Equatable, Sendable {
         case stage = "stage"
         case totalCount = "totalCount"
         case outcome = "outcome"
+        case outcomeChunk = "outcomeChunk"
         case running = "running"
         case unacknowledgedJobIds = "unacknowledgedJobIds"
         case waiting = "waiting"
@@ -7207,14 +7337,14 @@ enum SiloWireJobStartResultComputer: Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ComputerConfiguration`
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ComputerConfiguration`
 /// (lines 304-319), including rejection of unknown fields.
 ///
-/// Mirrors `app/SiloUI/src-tauri/src/runtime.rs::ApplicationComputer` (lines
+/// Mirrors `app/SiloUI/src-tauri/engine/src/runtime.rs::ApplicationComputer` (lines
 /// 591-628). `kind` is the discriminator required by 10 §1.3 and is added by
 /// the canonical API; source fields retain their names and omission behavior.
 ///
-/// Public projection of `app/SiloUI/src-tauri/src/github.rs::public_snapshot`;
+/// Public projection of `app/SiloUI/src-tauri/engine/src/github.rs::public_snapshot`;
 /// `computer` references are replaced with canonical `computerId` identifiers.
 // MARK: - SiloWireComputerElement
 struct SiloWireComputerElement: Codable, Equatable, Sendable {
