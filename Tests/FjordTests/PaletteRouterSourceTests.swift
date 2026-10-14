@@ -263,8 +263,13 @@ import Testing
         #expect(f.hub.selection == "i:" + thing.id)
         let shown = f.store.triageOn && f.store.categories.first { $0.id == entry.categoryID }?.hidden == false
         #expect(f.went.places == (shown ? [.category(entry.categoryID)] : []))
-        // A session without a run has no such action.
-        let other = try #require(PaletteRouterSource.make(f.context).items.first { $0.kind == .session && $0.id != item.id })
+        // A session without a run or a card watching CI has no such action (the demo has some that do).
+        let linked = Set(f.store.actionLedger.runs.values.compactMap(\.sessionID)).union(f.store.router.cards.compactMap {
+            if case .ci? = $0.triage?.watch?.target { return $0.sessionID } else { return nil }
+        })
+        let other = try #require(PaletteRouterSource.make(f.context).items.first {
+            $0.kind == .session && !linked.contains(String($0.id.dropFirst("session:".count)))
+        })
         #expect(!other.actions.contains { $0.id == "thing" })
     }
 
