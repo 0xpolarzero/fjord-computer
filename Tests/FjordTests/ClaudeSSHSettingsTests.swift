@@ -92,4 +92,37 @@ import Testing
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: claude.appendingPathComponent("settings.json").path)
             == actual.path)
     }
+
+    @Test func retriesFollowTheCurrentSettingsSymlinkTarget() throws {
+        let home = TempDir()
+        let claude = home.path(".claude")
+        let first = home.path("dotfiles/first.json")
+        let second = home.path("dotfiles/second.json")
+        let link = claude.appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: first.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let firstBytes = Data("{\"model\":\"opus\"}".utf8)
+        let secondBytes = Data("{\"model\":\"sonnet\",\"theme\":\"dark\"}".utf8)
+        try firstBytes.write(to: first)
+        try secondBytes.write(to: second)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: first)
+        var retargeted = false
+        var writer = ClaudeSSHSettings(home: home.url)
+        writer.beforeReplace = {
+            guard !retargeted else { return }
+            retargeted = true
+            try! FileManager.default.removeItem(at: link)
+            try! FileManager.default.createSymbolicLink(at: link, withDestinationURL: second)
+        }
+
+        try writer.install(record())
+
+        let firstRoot = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: first)) as? [String: Any])
+        let secondRoot = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: second)) as? [String: Any])
+        #expect(firstRoot["sshConfigs"] == nil)
+        #expect(firstRoot["model"] as? String == "opus")
+        #expect(secondRoot["theme"] as? String == "dark")
+        #expect((secondRoot["sshConfigs"] as? [[String: Any]])?.first?["sshHost"] as? String == "ssh-fjord-1")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == second.path)
+    }
 }

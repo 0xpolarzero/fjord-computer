@@ -28,9 +28,11 @@ enum ClaudeSettingsFile {
         defer { lock.unlock() }
 
         let fileManager = FileManager.default
-        let target = settings.resolvingSymlinksInPath()
         for _ in 0..<attempts {
-            let raw = try read(settings)
+            let target = settings.resolvingSymlinksInPath()
+            let raw: Data?
+            do { raw = try read(settings, targeting: target) }
+            catch is TargetChanged { continue }
             var root = try parse(raw, path: settings.path) ?? [:]
             guard try change(&root) else { return }
             var data = try JSONSerialization.data(withJSONObject: root,
@@ -44,7 +46,11 @@ enum ClaudeSettingsFile {
             let temp = try PrivateFile.prepare(data, for: target, mode: mode_t(mode))
             beforeReplace?()
             let unchanged: Bool
-            do { unchanged = try read(settings) == raw }
+            do { unchanged = try read(settings, targeting: target) == raw }
+            catch is TargetChanged {
+                unlink(temp.path)
+                continue
+            }
             catch { unlink(temp.path); throw error }
             guard unchanged else {
                 unlink(temp.path)
@@ -56,13 +62,22 @@ enum ClaudeSettingsFile {
         throw Failure.keptChanging(settings.path)
     }
 
-    private static func read(_ settings: URL) throws -> Data? {
+    private struct TargetChanged: Error {}
+
+    private static func read(_ settings: URL, targeting target: URL? = nil) throws -> Data? {
         var info = stat()
         guard lstat(settings.path, &info) == 0 else {
             if errno == ENOENT { return nil }
             throw Failure.unreadable(settings.path, String(cString: strerror(errno)))
         }
-        do { return try Data(contentsOf: settings.resolvingSymlinksInPath()) }
+        let resolved = settings.resolvingSymlinksInPath()
+        if let target, resolved != target { throw TargetChanged() }
+        do {
+            let data = try Data(contentsOf: target ?? resolved)
+            if let target, settings.resolvingSymlinksInPath() != target { throw TargetChanged() }
+            return data
+        }
+        catch is TargetChanged { throw TargetChanged() }
         catch { throw Failure.unreadable(settings.path, (error as NSError).localizedDescription) }
     }
 
