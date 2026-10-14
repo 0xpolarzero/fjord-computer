@@ -104,5 +104,19 @@ def main():
     print(len(out), "cases →", OUT)
 
 
+CAPS_OUT = OUT.with_name("router-capabilities-parity.json")
+
+
+def capabilities():
+    """The two texts of format capabilities-o, as Fjord words them (the eval ran under the name Lookout)."""
+    from explore import capabilities as C
+    name = lambda t: t.replace("Lookout", "Fjord")
+    CAPS_OUT.write_text(json.dumps({"change_fjord": name(C.CHANGE_FJORD),
+                                    "gate_setting": name(C.GATE_SETTING["instructions"]["question"])},
+                                   ensure_ascii=False, indent=1))
+    print("capability texts →", CAPS_OUT)
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    capabilities() if sys.argv[1:] == ["capabilities"] else main()

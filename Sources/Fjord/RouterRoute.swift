@@ -29,7 +29,7 @@ extension RouterTools {
     /// Fjord's own destinations, each worded by who the message is for: worded as "a question about what is going on",
     /// `question` caught questions you ask a session about its own work, p > 0.95, on 1 real message in 10.
     static let intentCriteria: [(name: String, criteria: String)] = [
-        ("change_fjord", "Change how Fjord itself behaves: its settings, its notifications, or Triage's inbox categories, rules or groups. Not asking a session to build or change code"),
+        ("change_fjord", RouterCapability.changeFjordCriteria),
         ("question", "A question to the Router, the assistant that watches the board, about the board: which sessions are working, done or waiting on the user, or what a session named in the third person is doing. Not a question for a session about its own work or what it said"),
         ("compound", "Requests meant for two or more different places in one message: Fjord itself and a session, or two different sessions. Not one long message with several points for one session"),
         ("unclear", "none of these: small talk, a fragment, or nothing says where it goes"),
@@ -47,7 +47,7 @@ extension RouterTools {
     /// long message with several points for one session from reading as several things; `gate_you` (it speaks to one
     /// agent as "you") vetoes Fjord's intents.
     static let gates: [String: JevClient.Question] = [
-        "gate_setting": .structuredNoul(instructions: ["question": "Does `message` ask to change how Fjord behaves for the user (a setting turned on or off, its notifications, a Triage inbox category, a rule or a group), rather than for code to be written or for a session to do something?"]),
+        "gate_setting": .structuredNoul(instructions: ["question": RouterCapability.settingQuestion]),
         "gate_compound": .structuredNoul(instructions: ["question": "Does `message` ask for two or more different things, meant for different places (sessions or Fjord itself)?"]),
         "gate_question": .structuredNoul(instructions: ["question": "Is `message` a question to the user's assistant about what is going on (a session's progress, what is waiting), rather than a message for a session to read?"]),
         "gate_compound2": .structuredNoul(instructions: ["question": "Does `message` ask for things meant for two or more different places: Fjord itself and a session, or two different sessions it names? A message with several points or steps for one session is no."]),
