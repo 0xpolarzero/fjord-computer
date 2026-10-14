@@ -484,7 +484,11 @@ final class Store {
     var hasTypesafeKey = false
     var iconError: String?
     var claudeLink: ClaudeLink = .off {
-        didSet { if claudeLink == .ok { claudeSessionsRead = true } }
+        didSet {
+            if claudeLink == .ok { claudeSessionsRead = true }
+            // Claude missing or unreadable ends the wait for its first listing.
+            if oldValue != claudeLink { routerDigester.check(self) }
+        }
     }
     /// Claude's sessions have been read since Fjord started reading them: a read failing after that leaves the
     /// last ones known (`claudeSessions`), not nothing known.

@@ -367,7 +367,7 @@ import Testing
         store.router.cards.append(card("b#1", kind: .asks))
         store.routerDigester.suspended = false
         store.routerDigester.baseline(store: store)
-        #expect(store.routerDigester.pending.isEmpty)
+        #expect(store.routerDigester.events.isEmpty)
         await store.routerDigester.flush(store: store)
         #expect(calls == 1)
     }
@@ -426,7 +426,7 @@ import Testing
         }
         store.router.cards.append(card("b#1", kind: .asks))
         await w.flush(store: store)
-        #expect(w.pending.contains(.card(session: "c", card: "c#1")))
+        #expect(w.events.contains(.card(session: "c", card: "c#1")))
         #expect(w.urgentSince != nil && w.timer != nil)
         w.stop()
     }
@@ -450,8 +450,8 @@ import Testing
         }
         store.router.cards[1] = card("n2#2", kind: .asks, folder: "/p/b")
         await w.flush(store: store)
-        // (Checked against what was acknowledged, the mid-write check also names n2, whose change was in flight.)
-        #expect(w.pending.contains { if case .changed(let ids, let projects) = $0 { ids.contains("n1") && projects.contains("/p/a") } else { false } })
+        // (Checked against what the call was built from, only n1 is news: n2's change is in flight.)
+        #expect(w.urgentSince != nil)
         w.runner = { _, context, _ in
             #expect(context.contains("/p/a"))
             return #"{"changed":true,"for_you":"<need s=\"n2\">B</need>","worth_a_look":"","projects":[],"label":"","why":""}"#
@@ -475,7 +475,7 @@ import Testing
         step.narration = "Let me look"
         store.claudeActivity = ["r1": step]
         w.check(store)
-        #expect(w.pending.isEmpty && w.urgentSince == nil && w.progressSince == nil && w.timer == nil)
+        #expect(w.events.isEmpty && w.urgentSince == nil && w.progressSince == nil && w.timer == nil)
     }
 
     @Test func aTodoStepCompletingIsProgressAndIsScheduledOnlyWhileTheBriefIsShown() {
@@ -574,7 +574,7 @@ import Testing
         w.baseline(store: store)
         store.router.cards[0].brief = "A brief"
         w.check(store)
-        #expect(w.urgentSince != nil && w.pending.contains(.changed(["a"], projects: ["/code/lookout"])))
+        #expect(w.urgentSince != nil)
         w.stop()
     }
 
@@ -584,10 +584,11 @@ import Testing
         w.runner = { _, _, _ in Self.firstBrief }
         put(store, session("r1", folder: "/p/a"))
         w.baseline(store: store)
+        let before = Writer.prints(Writer.Board.make(store), store)
         put(store, session("r1", folder: "/p/b"))
         w.check(store)
         #expect(w.urgentSince != nil)
-        #expect(w.pending == [.changed(["r1"], projects: ["/p/a", "/p/b"])])
+        #expect(Writer.differences(before, Writer.prints(Writer.Board.make(store), store)).projects == ["/p/a", "/p/b"])
         w.stop()
     }
 
@@ -602,11 +603,11 @@ import Testing
         w.suspended = false
         w.baseline(store: store)
         w.check(store)
-        #expect(w.pending.isEmpty && w.urgentSince == nil && w.progressSince == nil)
+        #expect(w.events.isEmpty && w.urgentSince == nil && w.progressSince == nil)
         Demo.populate(store, .router)
         w.check(store)
         // (A demo with no brief yet is asked for its first one, which is not news either.)
-        #expect(w.pending.isEmpty && w.progressSince == nil)
+        #expect(w.events.isEmpty && w.progressSince == nil)
         w.stop()
     }
 
@@ -624,7 +625,7 @@ import Testing
         #expect(calls == 1)
         w.check(store)
         w.check(store)
-        #expect(w.pending.isEmpty && w.urgentSince == nil && w.timer == nil)
+        #expect(w.events.isEmpty && w.urgentSince == nil && w.timer == nil)
         await w.flush(store: store)
         #expect(calls == 1)
         w.stop()
@@ -637,6 +638,7 @@ import Testing
         w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
         w.runner = { _, _, _ in Self.firstBrief }
         briefed(store)
+        store.agents.enabled = true
         store.router.enabled = true
         w.baseline(store: store)
         // Claude's sessions aren't listed yet; the Router then finds a question, and the listing brings a running session.
@@ -654,11 +656,12 @@ import Testing
         w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
         w.runner = { _, _, _ in Self.firstBrief }
         briefed(store)
+        store.agents.enabled = true
         store.router.enabled = true
         w.baseline(store: store)
         put(store, session("r1"))
         w.check(store)
-        #expect(w.urgentSince == nil && w.progressSince == nil && w.pending.isEmpty)
+        #expect(w.urgentSince == nil && w.progressSince == nil && w.events.isEmpty)
         w.stop()
     }
 
@@ -692,12 +695,13 @@ import Testing
         w.check(store)
         for wait in [30, 120, 600] {
             await w.flush(store: store)
-            #expect(w.pending.contains(.changed(["a"], projects: ["/code/lookout"])) && w.urgentSince != nil)
+            #expect(w.events.contains(.card(session: "a", card: "a#1")) && w.urgentSince != nil)
             #expect(w.scheduledIn == .seconds(wait))
         }
-        // The fourth failure schedules nothing more.
+        // The fourth failure schedules nothing more, however often it is looked at.
         await w.flush(store: store)
-        #expect(w.timer == nil && !w.pending.isEmpty)
+        w.check(store)
+        #expect(w.timer == nil && w.urgentSince != nil)
         // A change starts it over, and the batch finally lands.
         store.router.cards.append(card("c#1", kind: .asks))
         w.check(store)
@@ -706,7 +710,7 @@ import Testing
             return #"{"changed":true,"for_you":"<need s=\"a\">T a</need> <need s=\"c\">T c</need>","worth_a_look":"","projects":[{"key":"/code/lookout","text":"<need s=\"a\">T a</need> <need s=\"c\">T c</need>"}],"label":"l","why":"w"}"#
         }
         await w.flush(store: store)
-        #expect(w.pending.isEmpty && w.failures == 0 && store.routerDigest?.forYou.contains("s=\"c\"") == true)
+        #expect(w.events.isEmpty && w.failures == 0 && store.routerDigest?.forYou.contains("s=\"c\"") == true)
         w.stop()
     }
 
@@ -751,10 +755,10 @@ import Testing
         w.check(store)
         let before = store.routerDigest
         await w.flush(store: store)
-        #expect(store.routerDigest == before && w.urgentSince == nil && w.pending.isEmpty)
+        #expect(store.routerDigest == before && w.urgentSince == nil && w.events.isEmpty)
         store.router.enabled = true
         w.check(store)
-        #expect(w.urgentSince != nil && w.pending.contains(.changed(["a"], projects: ["/code/lookout"])))
+        #expect(w.urgentSince != nil && w.timer != nil)
         w.stop()
     }
 
@@ -768,13 +772,12 @@ import Testing
         w.check(store)
         await w.flush(store: store)
         #expect(w.failures == 1 && w.scheduledIn == .seconds(30) && w.urgentSince != nil)
-        #expect(w.pending.contains(.changed(["a"], projects: ["/code/lookout"])))
         w.runner = { _, _, _ in #"{"changed":false}"# }
         await w.flush(store: store)
-        #expect(w.failures == 0 && w.retryAt == nil && w.pending.isEmpty && w.urgentSince == nil)
+        #expect(w.failures == 0 && w.retryAt == nil && w.events.isEmpty && w.urgentSince == nil)
         // It is acknowledged: the same state is no news.
         w.check(store)
-        #expect(w.pending.isEmpty && w.urgentSince == nil)
+        #expect(w.events.isEmpty && w.urgentSince == nil && w.timer == nil)
         w.stop()
     }
 
@@ -791,9 +794,9 @@ import Testing
         store.agents.enabled = true
         store.router.enabled = true
         w.baseline(store: store)
-        #expect(w.urgentSince != nil && w.timer == nil)
+        #expect(w.urgentSince == nil && w.timer == nil)
         await w.flush(store: store)
-        #expect(calls == 0 && store.routerDigest == nil && w.urgentSince != nil)
+        #expect(calls == 0 && store.routerDigest == nil && w.timer == nil)
         // The listing arrives: the waiting write is scheduled.
         put(store, session("r1"))
         w.check(store)
@@ -812,6 +815,94 @@ import Testing
         v.baseline(store: other)
         #expect(v.timer != nil)
         v.stop()
+    }
+
+    @Test func claudeBecomingMissingWakesAWaitingFirstWrite() {
+        let store = InboxFixture.store([])
+        let w = store.routerDigester
+        w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        w.runner = { _, _, _ in Self.firstBrief }
+        store.agents.enabled = true
+        store.router.enabled = true
+        w.baseline(store: store)
+        #expect(w.timer == nil)
+        store.claudeLink = .unreadable
+        #expect(w.urgentSince != nil && w.timer != nil)
+        w.stop()
+    }
+
+    @Test func openingTheBriefSchedulesAnUrgentChangeThatWaited() {
+        let store = InboxFixture.store([])
+        let w = store.routerDigester
+        w.clock = { self.t0 }
+        w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        w.runner = { _, _, _ in Self.firstBrief }
+        briefed(store)
+        store.agents.enabled = true
+        store.router.enabled = true
+        w.baseline(store: store)
+        store.router.cards = [card("a#1", kind: .asks)]
+        // The listing is read without a check being asked for.
+        store.claudeSessionsListed = [:]
+        #expect(w.timer == nil)
+        w.setVisible(true, store: store)
+        #expect(w.urgentSince != nil && w.timer != nil)
+        w.stop()
+    }
+
+    @Test func aNewChangeToTheSameSessionAfterTheRetriesAreSpentIsScheduledAgainAfterTheLastWait() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        w.baseline(store: store)
+        struct Boom: Error {}
+        w.runner = { _, _, _ in throw Boom() }
+        store.router.cards = [card("a#1", kind: .asks)]
+        for _ in 0...Writer.retryAfter.count { await w.flush(store: store) }
+        #expect(w.failures == Writer.retryAfter.count + 1 && w.timer == nil)
+        // The same session asks something else now.
+        store.router.cards[0].asks = [RouterAsk(question: "Which?")]
+        w.check(store)
+        #expect(w.failures == 0 && w.timer != nil && w.scheduledIn == .seconds(600))
+        w.stop()
+    }
+
+    @Test func anUnrelatedChangeDuringARewriteCausesNoSecondCall() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        w.baseline(store: store)
+        var calls = 0
+        w.runner = { _, _, _ in
+            calls += 1
+            await MainActor.run {
+                // Something the brief says nothing about, noticed while the call is out.
+                store.router.decisions.append(RouterDecision(trigger: .session(sessionID: "a", event: "x")))
+                store.claudeActivity = ["a": ClaudeActivity(text: "Reading foo.swift", since: self.t0)]
+                w.check(store)
+            }
+            return Self.firstBrief
+        }
+        store.router.cards = [card("a#1", kind: .asks)]
+        await w.flush(store: store)
+        #expect(calls == 1 && w.inFlight == nil)
+        #expect(w.urgentSince == nil && w.progressSince == nil && w.timer == nil)
+        w.stop()
+    }
+
+    @Test func aCheckIsIdempotent() {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
+        briefed(store)
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.check(store)
+        let timer = w.timer, since = w.urgentSince, scheduled = w.scheduledIn
+        #expect(timer != nil)
+        w.check(store)
+        w.check(store)
+        #expect(w.timer == timer && w.urgentSince == since && w.scheduledIn == scheduled)
+        w.stop()
     }
 
     @Test func aWaitingCardsBriefChangingIsUrgent() {

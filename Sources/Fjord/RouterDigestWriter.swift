@@ -18,7 +18,7 @@ import os
 // the answer before it lands: a tag naming a session that isn't there is read as its text, a tag's kind is set to what its
 // session is at now, and an open card the text left out is put back (a card worth a look never leaves on its own: only
 // marking it seen takes it out). The projects keep their place; a new one goes at the end, one with nothing left goes.
-// Changes while a rewrite is made wait for it and are written after. A rewrite that fails leaves the brief as it was; the
+// Changes while a rewrite is made are compared with what it was built from and written after it. A rewrite that fails leaves the brief as it was; the
 // highlights show their sessions' state live.
 
 @MainActor @Observable final class RouterDigestWriter {
@@ -55,26 +55,34 @@ import os
     @ObservationIgnored private(set) var visible = false
     /// Answers in Haiku's place (tests, shots). Without one, a test run or a demo writes nothing.
     @ObservationIgnored var runner: RouterBriefer.Runner?
-    /// What happened since the last rewrite, and what each kind of change has been waiting since.
-    @ObservationIgnored private(set) var pending: [Event] = []
+    /// What each session was at when the brief last caught up (a rewrite landed, the state was loaded, or the first listing
+    /// of Claude's sessions found nothing to say). Every difference from it is news until a rewrite lands, so a change that
+    /// wasn't written (a failed or dropped rewrite, the Router turned off meanwhile) is found again.
+    @ObservationIgnored private(set) var acknowledged: [String: Print]?
+    /// What the rewrite being made was built from. Meanwhile it is compared with instead of `acknowledged`: a change that
+    /// came in during the call is news, and nothing else is.
+    @ObservationIgnored private(set) var inFlight: (prints: [String: Print], events: [Event])?
+    /// What happened that no fingerprint holds: your messages (urgent in themselves), and the cards that came in or were
+    /// handled, kept only to tell the next rewrite how.
+    @ObservationIgnored private(set) var events: [Event] = []
+    /// When what is outstanding, of each kind, was first seen (nil: there is none), and when the urgent part last changed.
     @ObservationIgnored private(set) var urgentSince: Date?
     @ObservationIgnored private(set) var progressSince: Date?
-    /// The one-shot wait before a rewrite, and how long it was set for.
+    @ObservationIgnored private var lastUrgentChangeAt: Date?
+    @ObservationIgnored private var urgentKey: Int?
+    /// Rewrites that failed in a row, what was outstanding at the last one, and the earliest the next try may be. When
+    /// every try is spent, nothing more is tried until what is outstanding changes.
+    @ObservationIgnored private(set) var failures = 0
+    @ObservationIgnored private var failedKey: Int?
+    @ObservationIgnored private(set) var retryAt: Date?
+    /// The one wait before a rewrite, when it ends and how long it was set for.
     @ObservationIgnored private(set) var timer: Task<Void, Never>?
+    @ObservationIgnored private var armedFor: Date?
     @ObservationIgnored private(set) var scheduledIn: Duration?
     /// The one check that is waiting its turn.
     @ObservationIgnored private var checkTask: Task<Void, Never>?
-    /// What each session was at when the brief last caught up (a rewrite landed, the state was loaded, or the first listing
-    /// of Claude's sessions found nothing to say): every check compares with it, so a change that wasn't written (a failed
-    /// or dropped rewrite, the Router turned off meanwhile) is found again.
-    @ObservationIgnored private(set) var acknowledged: [String: Print]?
-    /// Rewrites that failed in a row; the wait before the next try grows with them, and it stops after the last. Only a
-    /// rewrite that lands, or a batch that turns out empty, starts it over: new changes don't.
-    @ObservationIgnored private(set) var failures = 0
-    /// While a rewrite has failed, none is tried before this, whatever else changes.
-    @ObservationIgnored private(set) var retryAt: Date?
     /// Claude's sessions have been listed once and compared from: the first list is the baseline, not news.
-    @ObservationIgnored private var sessionsSeen = false
+    @ObservationIgnored private var listedOnce = false
     /// The time and the waiting (tests give their own).
     @ObservationIgnored var clock: () -> Date = { Date() }
     @ObservationIgnored var sleeper: (Duration) async -> Void = { try? await Task.sleep(for: $0) }
@@ -88,12 +96,15 @@ import os
     /// Changes noted this close together are looked at once.
     static let checkEvery: Duration = .milliseconds(500)
     /// Quiet this long after an urgent change, and it is written; never later than `maxWait` after the first.
-    static let settle: Duration = .seconds(3)
+    static let settleSeconds: TimeInterval = 3
+    static let settle: Duration = .seconds(settleSeconds)
     static let maxWait: TimeInterval = 12
     /// How long after the first change in progress it is written, while the Brief is on screen.
     static let progressEvery: TimeInterval = 60
-    /// How long to wait before trying again after a rewrite failed, once for each failure; then it waits for the next change.
+    /// How long to wait before trying again after a rewrite failed, once for each failure; after the last, it waits for
+    /// something to change.
     static let retryAfter: [Duration] = [.seconds(30), .seconds(120), .seconds(600)]
+    private static let maxFailures = retryAfter.count + 1
     private static let log = Logger(subsystem: InboxLog.subsystem, category: "router")
 
     // MARK: Signals
@@ -135,21 +146,17 @@ import os
     }
 
     /// The Router's state changed. A message of yours is urgent in itself; a card's coming or going is kept to tell the
-    /// rewrite what happened, but whether it is worth one is for the next check to say.
+    /// rewrite what happened, but whether it is worth one is for the check to say.
     func observe(from old: RouterState, to new: RouterState, store: Store) {
         guard new.enabled else {
             if old.enabled { stop() }
             return
         }
-        // Turned on again: what changed while it was off is for the next check to find, against what it last saw.
+        // Turned on again: what changed while it was off is for the check to find, against what it last saw.
         if !old.enabled, acknowledged == nil { acknowledged = Self.prints(Board.make(store), store) }
         guard !suspended else { return }
-        for event in Self.events(from: old, to: new) {
-            if case .you = event { note(event, urgent: true, store: store) } else { note(event, urgent: nil, store: store) }
-        }
-        // None yet (just turned on, or a new install): the first one is written from what there is.
-        if new.digest == nil, canWrite(store) { markUrgent(store: store) }
-        markDirty(store: store)
+        for event in Self.events(from: old, to: new) where !events.contains(event) { events.append(event) }
+        check(store)
     }
 
     /// Something that may change the brief changed: looked at in a moment, with whatever else changes by then.
@@ -168,110 +175,117 @@ import os
     func baseline(store: Store) {
         guard store.router.enabled else { return }
         acknowledged = Self.prints(Board.make(store), store)
-        writeFirstBriefIfNone(store: store)
+        events = []
+        check(store)
     }
 
-    /// A Router that is on with no brief yet gets its first one, whatever else does or doesn't change.
-    private func writeFirstBriefIfNone(store: Store) {
-        guard !suspended, store.router.enabled, store.routerDigest == nil, urgentSince == nil, canWrite(store) else { return }
-        markUrgent(store: store)
+    /// The Brief is on screen (or isn't). Opened with progress waiting, it is written after the usual settle.
+    func setVisible(_ shown: Bool, store: Store) {
+        visible = shown
+        if shown, let since = progressSince {
+            progressSince = min(since, clock().addingTimeInterval(Self.settleSeconds - Self.progressEvery))
+        }
+        check(store)
     }
 
-    /// Compares what each session is at with the last check, and notes what is worth a rewrite.
+    /// What is outstanding between two states, worked out from them alone.
+    private struct Outstanding {
+        var urgent: Set<String>
+        var progress: Set<String>
+        var projects: Set<String>
+        var hasYou: Bool
+        /// The brief has something to say at once: an urgent difference, a message of yours, or a first brief to write.
+        var isUrgent: Bool
+        var isProgress: Bool { !progress.isEmpty }
+        /// A rewrite has something to be about.
+        var worth: Bool { !urgent.isEmpty || !progress.isEmpty || hasYou }
+        /// What the urgent part holds, and all of it: a change in either is a change in what is outstanding.
+        var urgentKey: Int
+        var key: Int
+    }
+
+    private func outstanding(from base: [String: Print], to current: [String: Print], store: Store) -> Outstanding {
+        let d = Self.differences(base, current)
+        let you = events.filter { if case .you = $0 { true } else { false } }
+        var urgent = Hasher()
+        for id in d.urgent.sorted() {
+            urgent.combine(id)
+            urgent.combine(current[id]?.urgent)
+        }
+        urgent.combine(you.count)
+        let urgentKey = urgent.finalize()
+        var all = Hasher()
+        all.combine(urgentKey)
+        for id in d.progress.sorted() {
+            all.combine(id)
+            all.combine(current[id]?.progress)
+        }
+        let first = store.routerDigest == nil && canWrite(store)
+        all.combine(first)
+        return Outstanding(urgent: d.urgent, progress: d.progress, projects: d.projects, hasYou: !you.isEmpty,
+                           isUrgent: !d.urgent.isEmpty || !you.isEmpty || first, urgentKey: urgentKey, key: all.finalize())
+    }
+
+    /// Compares what each session is at with what the brief last caught up with, and sets the one wait accordingly. All it
+    /// reads is the state, so it can be called from anywhere, any number of times: it arms the same wait.
     func check(_ store: Store) {
-        guard store.router.enabled, !suspended else { return }
-        let now = Self.prints(Board.make(store), store)
-        // Until Claude's sessions are listed, what there is is only what the Router remembers. The first listing is a
-        // baseline for what is running, but not for what needs you: a question found at launch is news.
-        var first = false
-        if !sessionsSeen {
-            guard listed(store) else { return }
-            sessionsSeen = true
-            first = true
+        // Until Claude's sessions are listed, what there is is only what the Router remembers: nothing is written then.
+        guard !suspended, store.router.enabled, listed(store) else { return disarm() }
+        let current = Self.prints(Board.make(store), store)
+        if !listedOnce {
+            // The first listing is a baseline for what is running, but not for what needs you: a question found at launch is news.
+            listedOnce = true
+            if acknowledged.map({ Self.differences($0, current).urgent.isEmpty }) ?? true { acknowledged = current }
         }
-        guard let was = acknowledged else { return }
-        var d = Self.differences(was, now)
-        if first {
-            d.progress = []
-            if d.urgent.isEmpty {
-                acknowledged = now
-                // Cards noted since the state was loaded, or a rewrite that was waiting for this, still get theirs.
-                if !pending.isEmpty || urgentSince != nil { markUrgent(store: store) }
-                return
+        let out = outstanding(from: inFlight?.prints ?? acknowledged ?? current, to: current, store: store)
+        let now = clock()
+        if out.isUrgent {
+            if urgentSince == nil {
+                urgentSince = now
+                lastUrgentChangeAt = now
+            } else if out.urgentKey != urgentKey {
+                lastUrgentChangeAt = now
             }
-        }
-        if d.urgent.isEmpty, d.progress.isEmpty {
-            // A card that changed nothing the brief says isn't worth telling a later rewrite about.
-            if urgentSince == nil, progressSince == nil {
-                pending = []
-                forgetFailures()
-            }
-            return
-        }
-        note(.changed(d.urgent.union(d.progress), projects: d.projects), urgent: !d.urgent.isEmpty, store: store)
-    }
-
-    /// An event noted: urgent, progress only (`false`), or only to be told with the next rewrite (`nil`).
-    /// Something already noted (every check finds again what hasn't been written yet) doesn't move the wait.
-    private func note(_ event: Event, urgent: Bool?, store: Store) {
-        let added = append(event)
-        switch urgent {
-        case true? where added || urgentSince == nil: markUrgent(store: store)
-        case false? where added || progressSince == nil: markProgress(store: store)
-        default: break
-        }
-    }
-
-    /// The sessions changed since the last rewrite are one event: a long wait doesn't pile them up. Whether it added anything.
-    @discardableResult private func append(_ event: Event) -> Bool {
-        if case .changed(let ids, let projects) = event,
-           let i = pending.firstIndex(where: { if case .changed = $0 { true } else { false } }),
-           case .changed(let had, let hadProjects) = pending[i] {
-            pending[i] = .changed(had.union(ids), projects: hadProjects.union(projects))
-            return !ids.isSubset(of: had) || !projects.isSubset(of: hadProjects)
-        } else if !pending.contains(event) {
-            pending.append(event)
-            return true
-        }
-        return false
-    }
-
-    private func forgetFailures() {
-        failures = 0
-        retryAt = nil
-    }
-
-    private func markUrgent(store: Store) {
-        if urgentSince == nil { urgentSince = clock() }
-        schedule(store: store)
-    }
-
-    private func markProgress(store: Store) {
-        if progressSince == nil { progressSince = clock() }
-        schedule(store: store)
-    }
-
-    /// The one wait before the next rewrite: urgent changes after `settle` of quiet (not past `maxWait`); progress, only
-    /// while the Brief is shown, `progressEvery` after its first change; hidden progress waits for the next urgent change
-    /// or for the Brief to be opened. After a failure none is earlier than the retry. Nothing is written before Claude's
-    /// sessions have been listed (the brief would leave out what is running). A rewrite in flight schedules what came in
-    /// meanwhile when it ends.
-    private func schedule(store: Store, after fixed: Duration? = nil) {
-        guard !writing, canWrite(store), listed(store) else { return }
-        var delay: Duration
-        if let fixed {
-            delay = fixed
-        } else if let since = urgentSince {
-            delay = min(Self.settle, .seconds(max(0, Self.maxWait - clock().timeIntervalSince(since))))
-        } else if let since = progressSince, visible {
-            // Already waiting: the first change sets the time, later ones don't move it.
-            if timer != nil { return }
-            delay = .seconds(max(0, Self.progressEvery - clock().timeIntervalSince(since)))
+            urgentKey = out.urgentKey
         } else {
-            return
+            urgentSince = nil
+            lastUrgentChangeAt = nil
+            urgentKey = nil
         }
-        if let retryAt { delay = max(delay, .seconds(max(0, retryAt.timeIntervalSince(clock())))) }
+        progressSince = out.isProgress ? progressSince ?? now : nil
+        // Waiting for the rewrite being made: it checks again when it ends.
+        guard inFlight == nil, !writing else { return disarm() }
+        if !out.isUrgent, !out.isProgress {
+            // A card that changed nothing the brief says isn't worth telling a later rewrite about.
+            events = []
+            failures = 0
+            retryAt = nil
+            failedKey = nil
+            return disarm()
+        }
+        if failures >= Self.maxFailures {
+            if out.key == failedKey { return disarm() }
+            // Something else is outstanding now: tried again, but not before the last wait is over.
+            failures = 0
+        }
+        guard canWrite(store) else { return disarm() }
+        // Urgent changes after `settle` of quiet (not past `maxWait`); progress, only while the Brief is shown,
+        // `progressEvery` after its first change; hidden progress waits for an urgent change or for the Brief to be opened.
+        var due: [Date] = []
+        if out.isUrgent, let since = urgentSince, let last = lastUrgentChangeAt {
+            due.append(min(since.addingTimeInterval(Self.maxWait), last.addingTimeInterval(Self.settleSeconds)))
+        }
+        if out.isProgress, visible, let since = progressSince { due.append(since.addingTimeInterval(Self.progressEvery)) }
+        guard let earliest = due.min() else { return disarm() }
+        arm(at: max(earliest, retryAt ?? .distantPast), store: store)
+    }
+
+    /// The one wait, until `deadline`; the same deadline leaves the wait running.
+    private func arm(at deadline: Date, store: Store) {
+        guard deadline != armedFor || timer == nil else { return }
         timer?.cancel()
+        armedFor = deadline
+        let delay = Duration.seconds(max(0, deadline.timeIntervalSince(clock())))
         scheduledIn = delay
         timer = Task { [weak self, weak store] in
             await self?.sleeper(delay)
@@ -280,34 +294,31 @@ import os
         }
     }
 
-    /// The Brief is on screen (or isn't). Opened with progress waiting, it is written after the usual settle.
-    func setVisible(_ shown: Bool, store: Store) {
-        visible = shown
-        if shown {
-            writeFirstBriefIfNone(store: store)
-            if progressSince != nil, urgentSince == nil { schedule(store: store, after: Self.settle) }
-        } else if urgentSince == nil {
-            timer?.cancel()
-            timer = nil
-        }
+    private func disarm() {
+        timer?.cancel()
+        timer = nil
+        armedFor = nil
     }
 
     /// Writes now what is waiting (tests).
     func flush(store: Store) async {
-        timer?.cancel()
-        timer = nil
+        disarm()
         await write(store: store)
     }
 
     func stop() {
-        timer?.cancel()
-        timer = nil
+        disarm()
         checkTask?.cancel()
         checkTask = nil
-        pending = []
+        events = []
+        inFlight = nil
         urgentSince = nil
         progressSince = nil
-        forgetFailures()
+        lastUrgentChangeAt = nil
+        urgentKey = nil
+        failures = 0
+        failedKey = nil
+        retryAt = nil
         generation &+= 1
     }
 
@@ -323,8 +334,8 @@ import os
     // MARK: Fingerprints
 
     /// What a session is at, in two parts: what the brief has to say at once, and how far a working one is.
-    struct Print: Equatable, Sendable {
-        struct Urgent: Equatable, Sendable {
+    struct Print: Hashable, Sendable {
+        struct Urgent: Hashable, Sendable {
             var kind: DigestMarkup.Kind
             var project: String?
             /// Its open card, what kind it is, what it says and what it still asks. A working session has none of these
@@ -335,7 +346,7 @@ import os
             var asks: [String] = []
         }
 
-        struct Progress: Equatable, Sendable {
+        struct Progress: Hashable, Sendable {
             var running: Bool
             var turns: Int
             var todo: [Int]
@@ -389,31 +400,35 @@ import os
     private func write(store: Store) async {
         // The wait that brought us here is over (and not cancelled: the call runs in it).
         timer = nil
-        guard canWrite(store), !writing else {
-            if !canWrite(store) { pending = []; urgentSince = nil; progressSince = nil }
+        armedFor = nil
+        guard canWrite(store), !writing, inFlight == nil, listed(store) else { return }
+        let board = Board.make(store)
+        let prints = Self.prints(board, store)
+        let out = outstanding(from: acknowledged ?? prints, to: prints, store: store)
+        let current = store.routerDigest
+        guard current == nil || out.worth else {
+            check(store)
             return
         }
-        // Waiting for the first listing: it schedules this again.
-        guard listed(store) else { return }
-        // What changed since the last check is in this write, so the wait that check may ask for is not needed.
-        check(store)
-        timer?.cancel()
-        timer = nil
         // The batch is taken, but kept until a rewrite lands: if the call fails it goes back.
-        let events = pending
+        let taken = events
         let hadUrgent = urgentSince, hadProgress = progressSince
-        pending = []
+        events = []
         urgentSince = nil
         progressSince = nil
-        let board = Board.make(store)
-        let current = store.routerDigest
+        lastUrgentChangeAt = nil
+        urgentKey = nil
+        inFlight = (prints, taken)
+        // What happened: what was noted, and the sessions that differ from what the brief last caught up with.
+        var told = taken
+        if !out.urgent.isEmpty || !out.progress.isEmpty { told.append(.changed(out.urgent.union(out.progress), projects: out.projects)) }
         // The projects the events touch (all of them for the first brief), and those whose sessions are gone from it.
         var keys: [String]
         if current == nil {
             keys = board.projects.map(\.key)
         } else {
-            let touched = Set(events.flatMap(\.sessions).compactMap { s in board.projectOf[s] ?? current.flatMap { Self.project(of: s, in: $0) } })
-                .union(events.flatMap(\.projects))
+            let touched = Set(told.flatMap(\.sessions).compactMap { s in board.projectOf[s] ?? current.flatMap { Self.project(of: s, in: $0) } })
+                .union(told.flatMap(\.projects))
             let shown = Set(current?.projects.map(\.folder) ?? [])
             let fresh = Set(board.projects.map(\.key)).subtracting(shown)
             let emptied = shown.subtracting(board.projects.map(\.key))
@@ -421,62 +436,53 @@ import os
                 + emptied.sorted()
             // Something of yours with no session in it: the lead is read again, the projects stay.
         }
-        guard current == nil || !events.isEmpty else {
-            forgetFailures()
-            return
-        }
         writing = true
-        // Changes that came in meanwhile (or while this one was waiting its turn) are written next, and a failed batch is
-        // tried again after its wait. The brief itself is in no fingerprint, so what the answer does to it sets off nothing.
-        var retryIn: Duration?
-        var failed = false
-        defer {
-            writing = false
-            if let retryIn {
-                schedule(store: store, after: retryIn)
-            } else if !failed, urgentSince != nil || progressSince != nil {
-                schedule(store: store)
-            }
-        }
         let generation = generation
-        // What this rewrite is told about is what it will have acknowledged, not what the store is at when it lands.
-        let sent = Self.prints(board, store)
-        let context = DigestPrompt.context(board: board, current: current, rewrite: keys, events: events, store: store,
+        let context = DigestPrompt.context(board: board, current: current, rewrite: keys, events: told, store: store,
                                            since: acknowledged ?? [:])
-        let read: DigestPrompt.Answer?
+        enum Outcome { case landed, failed, dropped }
+        let outcome: Outcome
         do {
             let answer = try await (runner ?? RouterBriefer.haiku(store: store, model: Self.model, timeout: Self.timeout))(
                 RouterStyle.prompt(DigestPrompt.rules, style: store.routerStyle), context, DigestPrompt.schema)
-            read = try DigestPrompt.read(answer)
+            let read = try DigestPrompt.read(answer)
+            if read != nil { await store.motionGate.still() }
+            if generation != self.generation || !store.router.enabled {
+                outcome = .dropped
+            } else if let read {
+                let next = Self.apply(read, to: store.routerDigest, rewriting: keys, board: Board.make(store), events: told, now: Date())
+                if next != store.routerDigest { store.routerDigest = next }
+                outcome = .landed
+            } else {
+                // Nothing to change in a brief that is there; but a first brief that never came is a failure.
+                outcome = current == nil ? .failed : .landed
+            }
         } catch {
             Self.log.notice("The brief wasn't rewritten: \(error.localizedDescription, privacy: .public)")
-            guard generation == self.generation, store.router.enabled else { return }
-            // Back into the queue, with what came in meanwhile. Progress alone isn't retried while the Brief is closed.
-            requeue(events, urgentSince: hadUrgent, progressSince: hadProgress)
-            failed = true
-            let wait = Self.retryAfter[min(failures, Self.retryAfter.count - 1)]
-            retryAt = clock().addingTimeInterval(Double(wait.components.seconds))
-            if failures < Self.retryAfter.count, urgentSince != nil || visible { retryIn = wait }
+            outcome = generation == self.generation && store.router.enabled ? .failed : .dropped
+        }
+        writing = false
+        switch outcome {
+        case .landed:
+            // What this rewrite was told about is what it acknowledges, not what the store is at when it lands.
+            acknowledged = prints
+            failures = 0
+            retryAt = nil
+            failedKey = nil
+        case .failed:
+            // Back into the queue, before what came in meanwhile.
+            events = taken + events.filter { !taken.contains($0) }
+            urgentSince = [hadUrgent, urgentSince].compactMap { $0 }.min()
+            progressSince = [hadProgress, progressSince].compactMap { $0 }.min()
             failures += 1
-            return
+            let wait = Self.retryAfter[min(failures, Self.retryAfter.count) - 1]
+            retryAt = clock().addingTimeInterval(Double(wait.components.seconds))
+            failedKey = out.key
+        case .dropped:
+            break
         }
-        forgetFailures()
-        if read != nil { await store.motionGate.still() }
-        guard generation == self.generation, store.router.enabled else { return }
-        if let read {
-            let next = Self.apply(read, to: store.routerDigest, rewriting: keys, board: Board.make(store), events: events, now: Date())
-            if next != store.routerDigest { store.routerDigest = next }
-        }
-        acknowledged = sent
-    }
-
-    /// A batch that wasn't written goes back before what has come in since.
-    private func requeue(_ events: [Event], urgentSince urgent: Date?, progressSince progress: Date?) {
-        let later = pending
-        pending = []
-        for event in events + later { append(event) }
-        if let urgent { urgentSince = min(urgent, urgentSince ?? urgent) }
-        if let progress { progressSince = min(progress, progressSince ?? progress) }
+        inFlight = nil
+        check(store)
     }
 
     nonisolated private static func project(of session: String, in digest: RouterDigest) -> String? {
