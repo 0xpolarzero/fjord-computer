@@ -320,15 +320,15 @@ struct RouterDecision: Codable, Identifiable, Equatable {
 
 extension RouterState {
     /// Adds an entry, newest last; the oldest go past the cap, but never one linking a change still waiting for your Apply
-    /// or Discard (its only place on the page), nor an action's message still under way (its run follows it).
-    mutating func log(_ decision: RouterDecision) {
+    /// or Discard (its only place on the page), nor an action's message still under way (its run follows it), nor one whose ask-back card is still up (`inUse`).
+    mutating func log(_ decision: RouterDecision, inUse: Set<UUID> = []) {
         decisions.append(decision)
         guard decisions.count > RouterDecision.maxKept else { return }
         let waiting = Set(changes.filter(\.isPending).map(\.id))
         var over = decisions.count - RouterDecision.maxKept
         decisions = decisions.filter { entry in
             guard over > 0, !entry.links.changes.contains(where: waiting.contains),
-                  entry.fromAction == nil || entry.outcome != .pending else { return true }
+                  entry.fromAction == nil || entry.outcome != .pending, !inUse.contains(entry.id) else { return true }
             over -= 1
             return false
         }
@@ -367,7 +367,7 @@ extension Store {
     @discardableResult
     func logDecision(_ decision: RouterDecision) -> UUID {
         var state = router
-        state.log(decision)
+        state.log(decision, inUse: decisionsInUse())
         router = state
         return decision.id
     }

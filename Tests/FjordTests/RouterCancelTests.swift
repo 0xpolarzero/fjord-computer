@@ -294,6 +294,11 @@ import Testing
         try await Task.sleep(for: .milliseconds(100))
         #expect(w.store.router.decisions.count == count, "no new part was split from a part")
         #expect(w.entry(id)?.splitFrom == parent)
+        // Asked again, a part is offered no run of the Router, and a pick of one is refused.
+        let ask = try #require(w.dispatcher.askBacks.first { $0.id == id })
+        #expect(!ask.options.isEmpty && ask.options.allSatisfy { RouterRun.Intent(rawValue: $0.target) == nil })
+        #expect(!w.dispatcher.pick(id, target: "compound") && !w.dispatcher.pick(id, target: "change_fjord"))
+        #expect(w.dispatcher.askBacks.contains { $0.id == id })
     }
 
     @Test func anActionsMessageSentElsewhereIsStillAnActionsMessage() async throws {

@@ -2077,6 +2077,35 @@ import Testing
         #expect(s.router.decisions.filter { $0.splitFrom != nil }.count == 1)
     }
 
+    @Test func aPickWhoseDecisionIsGoneRemovesTheCardAndSendsNothing() async {
+        let (s, d, f) = setup()
+        f.ranked = [.init(target: "session:local_b", p: 0.5), .init(target: "session:local_a", p: 0.4)]
+        let id = d.submit("fix the redirect")
+        await finish(d, f, id)
+        guard let ask = d.askBacks.first(where: { $0.id == id }) else {
+            Issue.record("no ask")
+            return
+        }
+        s.router.decisions.removeAll { $0.id == ask.id }
+        #expect(!d.pick(ask.id, target: "session:local_a"))
+        #expect(!d.askBacks.contains { $0.id == ask.id })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(f.sent.isEmpty && f.prepared.isEmpty && f.started.isEmpty)
+    }
+
+    @Test func aPartIsNeverPickedIntoARunOfTheRouter() async {
+        let (s, d, f) = setup()
+        compound(f, ["tell CI to rerun the flaky job"])
+        let id = d.submit("update the category and tell CI to rerun the flaky job")
+        await finish(d, f, id)
+        guard let ask = await partAsk(s, d, f, of: id) else {
+            Issue.record("no ask")
+            return
+        }
+        #expect(!d.pick(ask.id, target: "compound") && !d.pick(ask.id, target: "change_fjord"))
+        #expect(d.askBacks.contains { $0.id == ask.id } && f.runs.count == 1)
+    }
+
     // MARK: Forms and plans read by Jev, and the parts of a compound message
 
     private func formB() -> PendingForm {

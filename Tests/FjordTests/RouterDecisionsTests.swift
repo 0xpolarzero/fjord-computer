@@ -79,6 +79,15 @@ import Testing
         #expect(state.decisions.first?.trigger == .you("m5"))
     }
 
+    @Test func anEntryWhoseAskBackCardIsStillUpOutlivesTheCap() {
+        var state = RouterState()
+        let asking = RouterDecision(trigger: .you("which one?"))
+        state.log(asking, inUse: [asking.id])
+        for i in 0..<(RouterDecision.maxKept + 5) { state.log(RouterDecision(trigger: .you("m\(i)")), inUse: [asking.id]) }
+        #expect(state.decisions.count == RouterDecision.maxKept)
+        #expect(state.decisions.first?.id == asking.id)
+    }
+
     @Test func theEntryOfAChangeWaitingForYourApplyOutlivesTheCap() {
         var state = RouterState()
         var change = FjordChange(title: "waiting", patch: .setting(key: "snooze", before: .date(nil), after: .date(nil)))

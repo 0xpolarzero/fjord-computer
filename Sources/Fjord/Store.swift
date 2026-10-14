@@ -613,6 +613,8 @@ final class Store {
         dispatcher.claudePath = { [weak self] in self?.routerStatus.claudeCode?.path }
         return dispatcher
     }()
+    /// The entries of the ask-back cards still up: kept when the history is pruned.
+    @ObservationIgnored var decisionsInUse: () -> Set<UUID> = { [] }
     /// Where the Router's files go, in a test (see `routerFiles`).
     @ObservationIgnored var routerPaths: RouterPaths?
     /// The executable the hook runs; this one unless a test says otherwise.

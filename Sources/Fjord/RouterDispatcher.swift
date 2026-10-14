@@ -268,6 +268,8 @@ struct RouterAskBack: Identifiable, Equatable {
         self.store = store
         effects = Effects.unavailable
         effects = Effects.live(self)
+        // An entry whose ask-back card is still up is not pruned from the history (its pick needs the record).
+        store.decisionsInUse = { [weak self] in Set(self?.askBacks.map(\.id) ?? []) }
     }
 
     private struct Job {
@@ -376,6 +378,9 @@ struct RouterAskBack: Identifiable, Equatable {
     @discardableResult
     func pick(_ id: UUID, target: String) -> Bool {
         guard let store, store.routerOn, let ask = askBacks.first(where: { $0.id == id }) else { return false }
+        guard live(ask, store: store) else { return false }
+        // A part the Router's run wrote is never sent to the Router's own runs.
+        if ask.context.splitFrom != nil, RouterRun.Intent(rawValue: target) != nil { return false }
         // "Choose folder…" picks with the folder you chose (`pick(_:folder:)`).
         guard target != RouterAskBack.chooseFolder else { return false }
         // An action's message goes only to a session, and only while Triage and the Router are both on.
@@ -391,10 +396,17 @@ struct RouterAskBack: Identifiable, Equatable {
     @discardableResult
     func pick(_ id: UUID, folder: String) -> Bool {
         guard let store, store.routerOn, !folder.isEmpty, let ask = askBacks.first(where: { $0.id == id }),
-              ask.options.contains(where: { $0.target == RouterAskBack.chooseFolder }) else { return false }
+              ask.options.contains(where: { $0.target == RouterAskBack.chooseFolder }), live(ask, store: store) else { return false }
         if ask.context.action != nil, !store.toolsLinked { return false }
         answer(ask, target: "new:\(folder)", store: store, folder: folder)
         return true
+    }
+
+    /// Whether the ask's decision still exists; a card whose entry is gone is removed, and nothing is sent without a record.
+    private func live(_ ask: RouterAskBack, store: Store) -> Bool {
+        if store.router.decisions.contains(where: { $0.id == ask.id }) { return true }
+        askBacks.removeAll { $0.id == ask.id }
+        return false
     }
 
     /// Sends an ask's message where you picked, logged as your pick (or your correction of Jev's suggestion).
@@ -1142,7 +1154,8 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.note = done.isEmpty ? nil : done
         }
         // What the run left for sessions is never sent on its own: each part is a card asking where it should go.
-        guard intent == .compound else { return }
+        // A part the Router's run wrote is never split again.
+        guard intent == .compound, job.context.splitFrom == nil else { return }
         let parts = Self.distinct(effects.leftovers(answer))
         func askPart(_ text: String) {
             var context = RouterContext(projects: job.context.projects, notTo: job.context.notTo, splitFrom: job.id, asksFirst: true)
@@ -1404,9 +1417,15 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// `suggestion`: what a pick corrects, when it isn't Jev's top (a wrong send asked again); `path` for the trace likewise.
     /// `note`: why it asks, when it isn't Jev's doubt; `chooseFolder`: "Choose folder…" is offered last.
-    private func askBack(_ job: Job, _ found: Classification, suggestion: String? = nil, path: String? = nil, note: String? = nil,
+    private func askBack(_ job: Job, _ ranked: Classification, suggestion: String? = nil, path: String? = nil, note: String? = nil,
                          chooseFolder: Bool = false) {
         guard let store else { return }
+        // A part the Router's run wrote is never offered the Router's own runs, whichever path asks for it.
+        var found = ranked
+        if job.context.splitFrom != nil {
+            found.ranked = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) == nil }
+            found.card = found.card?.filter { RouterRun.Intent(rawValue: $0) == nil }
+        }
         var options: [RouterAskBack.Option] = []
         var seen = Set<String>()
         // Four: on real moments the fourth holds the answer 3–10% more often (evals/router/explore/selective.py).
