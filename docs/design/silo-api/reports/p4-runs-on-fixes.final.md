@@ -1,0 +1,7 @@
+Implemented all 13 review fixes, connected the generated Silo guest client, and closed the production gaps that do not require a live engine. The commit-by-commit findings and regression tests are in [p4-runs-on-fixes.md](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/p4-runs-on-fixes.md); the placement capture is [p4-runs-on-placement-popover.png](/Users/polarzero/code/projects/lookout/docs/design/silo-api/reports/p4-runs-on-placement-popover.png).
+
+`swift build` passed, with a warning about six unhandled fixture files. The single `scripts/test.sh` run recorded 1,628 passing cases across 160 completed suites, but two suites did not complete and the required summary was absent. I stopped the still-running helper after about six minutes; the script exited 1, so there is no clean full-suite result. Live Silo guest validation also remains outstanding.
+
+I also need to disclose that the script overwrote the pre-existing untracked `test.log`; I did not preserve its previous contents. I staged only my named paths. Other unrelated worktree changes remain unstaged.
+
+Commits are on `main`, including `61849cd2` (production gaps), `72c99db4` (fixes report and screenshot), and `115f9721` (verification outcome).
