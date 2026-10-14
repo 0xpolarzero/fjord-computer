@@ -324,7 +324,7 @@ struct DigestPage: View {
                                                       name: store.routerProjectGroupName, color: { _ in nil }, showsAll: true,
                                                       projectKey: { store.routerProjectGroupKey(sessionID: $0, folder: $1) },
                                                       projectSource: store.routerProjectGroupSource))
-        Scrolling {
+        ScrollView {
             Group {
                 if let digest = store.routerDigest {
                     let fresh = digest.changedSinceSeen
@@ -608,7 +608,7 @@ private struct DigestHistory: View {
             }
             .padding(.horizontal, 12).frame(height: 34)
             Rectangle().fill(CDS.border).frame(height: CDS.hairline)
-            Scrolling {
+            ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(digest.history) { revision in entry(revision) }
                 }
@@ -1020,20 +1020,5 @@ struct DigestFlow: Layout {
             lines[lines.count - 1] = line
         }
         return lines
-    }
-}
-
-/// A scroll view, or in a shot run the content flat from the top: the shots' capture doesn't draw a scroll view's content
-/// on the Router's page.
-struct Scrolling<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        if ShotRun.active {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        } else {
-            ScrollView { content }
-        }
     }
 }

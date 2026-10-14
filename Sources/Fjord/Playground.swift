@@ -520,9 +520,6 @@ enum PlaygroundShots {
 
     private static func capture(_ window: NSWindow, to path: String) {
         guard let view = window.contentView else { return }
-        view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        ShotCapture.write(view, to: path)
     }
 }

@@ -30,20 +30,63 @@ final class ShotWindow: NSWindow {
     override var canBecomeMain: Bool { false }
 }
 
+/// Writes a shot's window content to a PNG.
+///
+/// `cacheDisplay` walks the views' `draw(_:)`, which skips what SwiftUI keeps in layers of its own: the content of every
+/// `ScrollView` (the Router's list and history, the Brief) came out empty. The window server composites those layers,
+/// and may be asked for a window of this process without any screen-recording permission, even when the window sits
+/// off every screen, so the shot is the window's own picture, cropped to its content view (a full-size-content window's
+/// traffic lights and rounded corners are in it).
+@MainActor
+enum ShotCapture {
+    static func write(_ view: NSView, to path: String) {
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        let png = windowPicture(of: view) ?? cachedDisplay(of: view)
+        try? png?.write(to: URL(fileURLWithPath: path))
+    }
+
+    /// Writes the window server's picture of the view; false when there is none (nothing is written).
+    static func writeWindowPicture(_ view: NSView, to path: String) -> Bool {
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        guard let png = windowPicture(of: view) else { return false }
+        return (try? png.write(to: URL(fileURLWithPath: path))) != nil
+    }
+
+    private static func windowPicture(of view: NSView) -> Data? {
+        guard let window = view.window, window.windowNumber > 0 else { return nil }
+        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+                                                  [.boundsIgnoreFraming]), image.width > 0 else { return nil }
+        let scale = CGFloat(image.width) / window.frame.width
+        let rect = view.convert(view.bounds, to: nil)
+        let crop = CGRect(x: rect.minX * scale, y: (window.frame.height - rect.maxY) * scale,
+                          width: rect.width * scale, height: rect.height * scale).integral
+        guard let content = image.cropping(to: crop) else { return nil }
+        return NSBitmapImageRep(cgImage: content).representation(using: .png, properties: [:])
+    }
+
+    private static func cachedDisplay(of view: NSView) -> Data? {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep.representation(using: .png, properties: [:])
+    }
+}
+
 /// The shot runs (`--window-shots`, `--playground-shots`) never activate the app.
 @MainActor
 enum ShotRun {
     /// Before any shot window is made: an accessory app (no Dock icon, no menu bar) that nothing activates.
-    /// Shots are being taken: views whose scroll view the capture can't draw lay out flat instead.
-    static var active = false
-
     static func prepare() {
-        active = true
         NSApp.setActivationPolicy(.accessory)
     }
 
     /// Shows a shot's window offscreen: ordered front without activating the app or making the window key.
     static func show(_ window: NSWindow) {
+        // The shot loop closes the window while ARC owns it, and its close animation over-released it (a crash that
+        // cut a run with several shots after the first).
+        window.isReleasedWhenClosed = false
+        window.animationBehavior = .none
         window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
         window.orderFrontRegardless()
     }
@@ -855,6 +898,9 @@ enum AppWindowShots {
     private static func capture(_ window: NSWindow, to path: String) {
         let captureWindow = window.attachedSheet ?? window
         guard let view = captureWindow.contentView else { return }
+        // The window server's picture first (it has every scroll view's content as shown); without one, the window drawn
+        // here.
+        if ShotCapture.writeWindowPicture(view, to: path) { return }
         view.layoutSubtreeIfNeeded()
         guard let base = snapshot(view, view.bounds) else { return }
         // Composited in a bitmap context of our own, top to bottom: the window pass, then each scroll view's content, then
