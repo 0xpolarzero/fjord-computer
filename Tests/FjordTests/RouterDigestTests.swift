@@ -386,6 +386,11 @@ import Testing
         return w
     }
 
+    /// A Router that already has a brief: otherwise its first one is what every baseline asks for.
+    private func briefed(_ store: Store) {
+        store.router.digest = RouterDigest(forYou: "", worthALook: "", projects: [], at: t0)
+    }
+
     private func session(_ id: String, folder: String = "/code/lookout", turns: Int = 1, running: Bool = true) -> ClaudeSession {
         ClaudeSession(id: id, title: "Session \(id)", folder: folder, completedTurns: turns, lastActivity: Date(), running: running)
     }
@@ -474,6 +479,7 @@ import Testing
     @Test func aTodoStepCompletingIsProgressAndIsScheduledOnlyWhileTheBriefIsShown() {
         let store = InboxFixture.store([])
         let w = quiet(store)
+        briefed(store)
         w.runner = { _, _, _ in Self.firstBrief }
         put(store, session("r1"))
         store.claudeActivity = ["r1": todo(1)]
@@ -586,6 +592,7 @@ import Testing
     @Test func aLoadOrADemoPopulateIsNeverNews() {
         let store = InboxFixture.store([])
         let w = quiet(store)
+        briefed(store)
         w.runner = { _, _, _ in Self.firstBrief }
         w.suspended = true
         put(store, session("r1"))
@@ -596,7 +603,8 @@ import Testing
         #expect(w.pending.isEmpty && w.urgentSince == nil && w.progressSince == nil)
         Demo.populate(store, .router)
         w.check(store)
-        #expect(w.pending.isEmpty && w.urgentSince == nil && w.progressSince == nil)
+        // (A demo with no brief yet is asked for its first one, which is not news either.)
+        #expect(w.pending.isEmpty && w.progressSince == nil)
         w.stop()
     }
 
@@ -617,6 +625,118 @@ import Testing
         #expect(w.pending.isEmpty && w.urgentSince == nil && w.timer == nil)
         await w.flush(store: store)
         #expect(calls == 1)
+        w.stop()
+    }
+
+    @Test func aQuestionFoundAtLaunchIsNotAbsorbedByTheFirstListingBaseline() {
+        let store = InboxFixture.store([])
+        let w = store.routerDigester
+        w.clock = { self.t0 }
+        w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        w.runner = { _, _, _ in Self.firstBrief }
+        briefed(store)
+        store.router.enabled = true
+        w.baseline(store: store)
+        // Claude's sessions aren't listed yet; the Router then finds a question, and the listing brings a running session.
+        store.router.cards = [card("a#1", kind: .asks)]
+        #expect(w.urgentSince == nil)
+        put(store, session("r1"))
+        w.check(store)
+        #expect(w.urgentSince != nil && w.timer != nil)
+        w.stop()
+    }
+
+    @Test func theFirstListingStillAbsorbsSessionsAppearingAsRunning() {
+        let store = InboxFixture.store([])
+        let w = store.routerDigester
+        w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        w.runner = { _, _, _ in Self.firstBrief }
+        briefed(store)
+        store.router.enabled = true
+        w.baseline(store: store)
+        put(store, session("r1"))
+        w.check(store)
+        #expect(w.urgentSince == nil && w.progressSince == nil && w.pending.isEmpty)
+        w.stop()
+    }
+
+    @Test func anEnabledRouterWithoutABriefGetsItsFirstOneAfterALoadAndWhenTheBriefOpens() {
+        let store = InboxFixture.store([])
+        let w = store.routerDigester
+        w.sleeper = { _ in try? await Task.sleep(for: .seconds(3600)) }
+        w.runner = { _, _, _ in Self.firstBrief }
+        store.router.enabled = true
+        w.baseline(store: store)
+        #expect(w.urgentSince != nil && w.timer != nil)
+        w.stop()
+        w.setVisible(true, store: store)
+        #expect(w.urgentSince != nil && w.timer != nil)
+        w.stop()
+        // With a brief there is nothing to write.
+        briefed(store)
+        w.baseline(store: store)
+        #expect(w.urgentSince == nil && w.timer == nil)
+        w.stop()
+    }
+
+    @Test func aFailedRewriteKeepsItsBatchAndIsTriedAgainAfterAGrowingWaitThenStops() async throws {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        briefed(store)
+        w.baseline(store: store)
+        struct Boom: Error {}
+        w.runner = { _, _, _ in throw Boom() }
+        store.router.cards = [card("a#1", kind: .asks)]
+        w.check(store)
+        for wait in [30, 120, 600] {
+            await w.flush(store: store)
+            #expect(w.pending.contains(.changed(["a"], projects: ["/code/lookout"])) && w.urgentSince != nil)
+            #expect(w.scheduledIn == .seconds(wait))
+        }
+        // The fourth failure schedules nothing more.
+        await w.flush(store: store)
+        #expect(w.timer == nil && !w.pending.isEmpty)
+        // A change starts it over, and the batch finally lands.
+        store.router.cards.append(card("c#1", kind: .asks))
+        w.check(store)
+        w.runner = { _, context, _ in
+            #expect(context.contains("id=a") && context.contains("id=c"))
+            return #"{"changed":true,"for_you":"<need s=\"a\">T a</need> <need s=\"c\">T c</need>","worth_a_look":"","projects":[{"key":"/code/lookout","text":"<need s=\"a\">T a</need> <need s=\"c\">T c</need>"}],"label":"l","why":"w"}"#
+        }
+        await w.flush(store: store)
+        #expect(w.pending.isEmpty && w.failures == 0 && store.routerDigest?.forYou.contains("s=\"c\"") == true)
+        w.stop()
+    }
+
+    @Test func aWaitingCardsBriefChangingIsUrgent() {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        w.runner = { _, _, _ in Self.firstBrief }
+        var c = card("a#1")
+        c.triage = RouterTriage(state: .waiting)
+        store.router.cards = [c]
+        w.baseline(store: store)
+        let waiting = w.snapshot?["a"]
+        #expect(waiting?.urgent.card == "a#1")
+        store.router.cards[0].brief = "Waiting on CI"
+        w.check(store)
+        #expect(w.urgentSince != nil)
+        w.stop()
+    }
+
+    @Test func theContextHasEachSessionsProgressAndAProgressChangeBeforeToAfter() {
+        let store = InboxFixture.store([])
+        let w = quiet(store)
+        put(store, session("r1", turns: 12))
+        store.claudeActivity = ["r1": todo(1, 7)]
+        store.claudeTasks = ["r1": [ClaudeTask(id: "t", kind: .command, title: "build", since: t0)]]
+        let before = Writer.prints(Writer.Board.make(store), store)
+        store.claudeActivity = ["r1": todo(3, 7)]
+        put(store, session("r1", turns: 13))
+        let context = DigestPrompt.context(board: Writer.Board.make(store), current: nil, rewrite: [],
+                                           events: [.changed(["r1"], projects: ["/code/lookout"])], store: store, since: before)
+        #expect(context.contains("progress: 3/7 steps, 1 background task, turn 13"))
+        #expect(context.contains("steps 1/7 -> 3/7") && context.contains("turn 12 -> 13"))
         w.stop()
     }
 
