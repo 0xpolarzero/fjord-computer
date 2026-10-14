@@ -132,7 +132,8 @@ import os
         if old.decisions != new.decisions {
             let before = Dictionary(old.decisions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             for decision in new.decisions {
-                guard case .you(let text) = decision.trigger else { continue }
+                // A generated part of a message is not something you said.
+                guard case .you(let text) = decision.trigger, decision.generated != true else { continue }
                 // New, or routed since: the sessions it went to are known only once the Router has done it.
                 if let was = before[decision.id] {
                     if was.links.sessions != decision.links.sessions, !decision.links.sessions.isEmpty {

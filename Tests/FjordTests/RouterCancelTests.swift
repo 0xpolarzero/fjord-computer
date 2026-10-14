@@ -278,6 +278,24 @@ import Testing
         #expect(lines.contains { $0.kind == .corrected && $0.from == "session:local_b" && $0.target == "session:local_a" })
     }
 
+    @Test func aSplitHalfSentElsewhereStaysAHalfAndIsNotSplitAgain() async throws {
+        let w = World()
+        w.fakes.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "session:local_a", p: 0.04)]
+        let id = try #require(w.dispatcher.submit("fix the login redirect"))
+        await w.finish(id)
+        let parent = UUID()
+        w.store.updateDecision(id) { $0.splitFrom = parent; $0.generated = true; $0.inherited = .init(projects: ["/code/docs"], mentions: []) }
+        w.fakes.finished = []
+        w.fakes.ranked = [.init(target: "compound", p: 0.95), .init(target: "session:local_a", p: 0.04)]
+        w.fakes.answer.leftover = ["and also tell CI"]
+        let count = w.store.router.decisions.count
+        w.dispatcher.sendElsewhere(id)
+        await w.finish(id)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(w.store.router.decisions.count == count, "no new part was split from a part")
+        #expect(w.entry(id)?.splitFrom == parent && w.entry(id)?.generated == true)
+    }
+
     @Test func anActionsMessageSentElsewhereIsStillAnActionsMessage() async throws {
         let w = World()
         w.store.codeFolders.scan = { _ in .init(repos: ["/code/lookout": ["o/lookout"], "/code/lookout-2": ["o/lookout"]]) }

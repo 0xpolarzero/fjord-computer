@@ -139,7 +139,7 @@ import Testing
         s.routerDispatcher.effects = RouterDispatcher.Effects(
             rank: { _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _, _ in throw no },
             send: { _, delivery in sent.append(delivery.body); return nil },
-            answer: { _, _, _ in throw no }, run: { _, _, _ in throw no },
+            answer: { _, _, _, _ in throw no }, run: { _, _, _ in throw no },
             fork: { _, request in
                 forked.append(request)
                 return RouterDispatcher.Delivery(to: "Fork of Fix the login bug", text: "⟦signed⟧\n" + request.message,
@@ -196,7 +196,7 @@ import Testing
         s.routerDispatcher.onFinish = { done.append($0) }
         s.routerDispatcher.effects = RouterDispatcher.Effects(
             rank: { _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _, _ in throw no },
-            send: { _, _ in nil }, answer: { _, _, _ in throw no }, run: { _, _, _ in throw no },
+            send: { _, _ in nil }, answer: { _, _, _, _ in throw no }, run: { _, _, _ in throw no },
             fork: { tools, request in
                 forked.append((request.message, tools.tagged))
                 return RouterDispatcher.Delivery(to: "Fork of Fix the login bug", text: request.message, body: request.message,

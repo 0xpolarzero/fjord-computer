@@ -42,11 +42,20 @@ struct RouterContext: Equatable {
     var flies = false
     /// The decision this message was split from: the session half of a compound message (`RouterDispatcher.think`).
     var splitFrom: UUID?
+    /// Written by the Router's run, not typed by you (the split halves of a compound message): routed with the original's
+    /// constraints (projects, tagged sessions, `notTo`), but never by the exemptions meant for words you typed (a session or
+    /// project they name, a fork or a new session they ask for, an address that lets them reach a session waiting on a
+    /// permission).
+    var generated = false
+    /// With `generated`: the leftover parts past what is routed on their own, sent together and always asked about.
+    var overflow = false
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
          predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = [],
-         splitFrom: UUID? = nil) {
+         splitFrom: UUID? = nil, generated: Bool = false, overflow: Bool = false) {
         self.splitFrom = splitFrom
+        self.generated = generated
+        self.overflow = overflow
         self.replyTo = replyTo
         self.projects = projects
         self.target = target
@@ -189,7 +198,8 @@ struct RouterAskBack: Identifiable, Equatable {
         /// The signed send, through the gate: the plugin's ack when it went through the inbox.
         var send: @MainActor (RouterTools, Delivery) async throws -> String?
         /// A form answered for a card: what was answered.
-        var answer: @MainActor (RouterTools, _ card: String, _ answers: [String: String]) async throws -> String
+        /// Only while the card still holds the form it was judged on (`FormSnapshot`).
+        var answer: @MainActor (RouterTools, _ card: String, _ answers: [String: String], FormSnapshot) async throws -> String
         /// A Haiku run for an intent, given the context it starts from.
         var run: @MainActor (RouterTools, RouterRun.Intent, _ input: String) async throws -> RouterRun.Answer
         /// Whether the plugin of the session (by Claude Code's id) takes back a delivery (`abort-v1`).
@@ -207,7 +217,8 @@ struct RouterAskBack: Identifiable, Equatable {
             throw RouterTools.Failure("The Router isn't ready")
         }
         /// A plan decided for a card (approved, or sent back with the message): what was done.
-        var answerPlan: @MainActor (RouterTools, _ card: String, PendingForm.PlanDecision) async throws -> String = { _, _, _ in
+        /// Only while the card still holds the plan it was judged on (`FormSnapshot`).
+        var answerPlan: @MainActor (RouterTools, _ card: String, PendingForm.PlanDecision, FormSnapshot) async throws -> String = { _, _, _, _ in
             throw RouterTools.Failure("The Router isn't ready")
         }
         /// The parts of a compound message a run left for sessions (`RouterRun.Answer.leftover`).
@@ -302,15 +313,23 @@ struct RouterAskBack: Identifiable, Equatable {
         let projects = context.projects.filter { seen.insert($0).inserted }
         var context = context
         context.projects = projects
+        // Generated words are a split half of a message (`think`), nothing else.
+        context.generated = context.generated && context.splitFrom != nil
+        context.overflow = context.overflow && context.generated
         // A pill is an "@name" where it was said; anything else given as one isn't.
         let chars = Array(text)
         context.pills = context.pills.filter { $0.lowerBound >= 0 && $0.upperBound <= chars.count && !$0.isEmpty && chars[$0.lowerBound] == "@" }
-        context.mentions = Self.mentions(context.mentions, in: text)
+        // A generated part inherits its original's pointers, which stand where they did in that message, not in these words.
+        if !context.generated { context.mentions = Self.mentions(context.mentions, in: text) } else { context.pills = [] }
         var entry = RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
                                    links: .init(cards: context.replyTo.map { [$0] } ?? []))
-        entry.mentions = context.mentions.isEmpty ? nil : context.mentions
+        entry.mentions = context.generated || context.mentions.isEmpty ? nil : context.mentions
         entry.fromAction = context.action?.origin
         entry.splitFrom = context.splitFrom
+        if context.generated, context.splitFrom != nil {
+            entry.generated = true
+            entry.inherited = .init(projects: context.projects, mentions: context.mentions)
+        }
         entry.actionStart = context.action.map { .init(title: $0.title, model: $0.model, effort: $0.effort) }
         let id = store.logDecision(entry)
         if context.flies, context.action == nil { flying.append(id) }
@@ -640,9 +659,12 @@ struct RouterAskBack: Identifiable, Equatable {
         // Wholly for the Router ("@router what needs me?"): asked of it, whatever reply is armed or target pinned (a session
         // would get nothing of it). An aside in a message for a session goes with that message, taken out.
         if !unattended, forRouter(text, pills: context.pills) { return .classify }
+        // A part the Router's run wrote is classified like any message, in its original's scope: what only words you typed
+        // may ask for (a fork, a new session) is not taken from it, and a leftover past the bound is always asked about.
+        if context.generated, context.overflow { return .classify }
         // "fork <session>…": of the session named, else of the one pinned ("fork this session"). Never while a card's reply
         // is armed: words for it are its answer ("branch" to "Should I create a branch or commit to main?").
-        if !unattended, context.replyTo == nil,
+        if !unattended, !context.generated, context.replyTo == nil,
            let fork = SessionFork.request(RouterTools.pastLeadingTags(text, pills: context.pills),
                                           pinned: context.target.flatMap { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil },
                                           store: store) {
@@ -656,12 +678,12 @@ struct RouterAskBack: Identifiable, Equatable {
         let tagged = context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true }
         if tagged.count == 1 { return .route("session:\(tagged[0])") }
         if context.projects.count == 1, let folder = context.projects.first {
-            if wantsNewSession(text, pills: context.pills) { return .start(folder: folder) }
+            if !context.generated, wantsNewSession(text, pills: context.pills) { return .start(folder: folder) }
             let other = store.openRouterCards.contains { store.routerCardMatchesProject($0, folder: folder) }
                 || store.claudeSessions.values.contains {
                     !$0.isArchived && store.routerSessionMatchesProject($0.id, folder: folder)
                 }
-            if !other { return .start(folder: folder) }
+            if !other, !context.generated { return .start(folder: folder) }
         }
         return .classify
     }
@@ -749,28 +771,37 @@ struct RouterAskBack: Identifiable, Equatable {
         let held = card.map { id in store.router.cards.filter { $0.id == id } }
             ?? store.routerShownOpenCards.filter { $0.sessionID == session && store.pendingForm(for: $0) != nil }
         if held.count == 1, let c = held.first, let form = store.pendingForm(for: c) {
+            // What Jev reads is the form as it is now: an answer is given only while the card still holds that very form
+            // (it may have moved on to another while he read), and at the write itself once more.
+            let snapshot = FormSnapshot(card: c, form: form, store: store)
             if form.isPlan {
                 // A plan is approved or sent back, never sent as text it stays pending under.
                 stage(job, "reading your decision")
                 let decision = await Self.planDecision(form, message: said, ask: jev(job.tools))
+                try Task.checkCancellation()
                 try linked(job.context)
-                stage(job, decision.approve ? "approving" : "sending it back")
-                _ = try await effects.answerPlan(job.tools, c.id, decision)
-                note(job, .answered(card: c.title), session: session, card: c.id)
-                return
+                if snapshot.holds(store) {
+                    stage(job, decision.approve ? "approving" : "sending it back")
+                    _ = try await effects.answerPlan(job.tools, c.id, decision, snapshot)
+                    note(job, .answered(card: c.title), session: session, card: c.id)
+                    return
+                }
+            } else {
+                var answers = Self.formAnswers(form, message: said)
+                if answers == nil {
+                    stage(job, "reading your answer")
+                    answers = await Self.askFormAnswers(form, message: said, ask: jev(job.tools))
+                    try Task.checkCancellation()
+                    try linked(job.context)
+                }
+                if let answers, snapshot.holds(store) {
+                    stage(job, "answering")
+                    _ = try await effects.answer(job.tools, c.id, answers, snapshot)
+                    note(job, .answered(card: c.title), session: session, card: c.id)
+                    return
+                }
             }
-            var answers = Self.formAnswers(form, message: said)
-            if answers == nil {
-                stage(job, "reading your answer")
-                answers = await Self.askFormAnswers(form, message: said, ask: jev(job.tools))
-                try linked(job.context)
-            }
-            if let answers {
-                stage(job, "answering")
-                _ = try await effects.answer(job.tools, c.id, answers)
-                note(job, .answered(card: c.title), session: session, card: c.id)
-                return
-            }
+            // The form moved on while it was read: nothing is answered on a read of another one, and the words go on as text.
         }
         stage(job, "preparing")
         try linked(job.context)
@@ -885,10 +916,16 @@ struct RouterAskBack: Identifiable, Equatable {
               let sent = entry.delivered else { return }
         let wrong = entry.decision.targetID ?? "session:\(sent.session)"
         var context = RouterContext(notTo: wrong)
+        // A split half stays one: it keeps what it was split from and what it inherited, so it can't be split again.
+        if let from = entry.splitFrom {
+            context.splitFrom = from
+            context.generated = true
+            context.projects = entry.inherited?.projects ?? []
+        }
         // What it tagged goes with it again; where it goes is asked anew, not taken from its pills. An action's message is
         // still one: only to a session, a new one called after its thing and on its model and effort, while Triage and the
         // Router are both on.
-        context.mentions = entry.mentions ?? []
+        context.mentions = entry.splitFrom != nil ? entry.inherited?.mentions ?? [] : entry.mentions ?? []
         context.action = entry.actionSource
         if context.action != nil, !store.toolsLinked { return }
         forgetLive()
@@ -1101,7 +1138,11 @@ struct RouterAskBack: Identifiable, Equatable {
         stage(job, "working")
         let input = store.routerRunContext(message: job.text, projects: job.context.projects, tagged: job.tools.tagged,
                                            excluding: job.id).text()
+        let ticket = job.tools.ticket()
         let answer = try await effects.run(job.tools, intent, input)
+        // Stopped while the run's output was drained: no reply is recorded and nothing is routed on from it.
+        try Task.checkCancellation()
+        try job.tools.live(ticket)
         let reply = answer.reply.trimmingCharacters(in: .whitespacesAndNewlines)
         let done = answer.done.trimmingCharacters(in: .whitespacesAndNewlines)
         store.updateDecision(job.id) {
@@ -1109,13 +1150,32 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.note = done.isEmpty ? nil : done
         }
         // What the run left for sessions is routed as messages of its own (not again from one of those: no chain).
-        guard intent == .compound, job.context.splitFrom == nil else { return }
-        for text in effects.leftovers(answer).map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }).filter({ !$0.isEmpty }).prefix(Self.maxSplit) {
-            submit(text, context: RouterContext(splitFrom: job.id))
+        // Not one that was split itself, by this message's context or by what the log says of it.
+        guard intent == .compound, job.context.splitFrom == nil, job.context.generated == false,
+              store.router.decisions.first(where: { $0.id == job.id })?.splitFrom == nil else { return }
+        let parts = Self.distinct(effects.leftovers(answer))
+        // The parts are the original's, generated: routed under its constraints, never by the exemptions of words you typed.
+        func submitPart(_ text: String, overflow: Bool = false) {
+            var context = RouterContext(projects: job.context.projects, notTo: job.context.notTo, splitFrom: job.id,
+                                        generated: true, overflow: overflow)
+            context.mentions = job.context.mentions
+            submit(text, context: context)
+        }
+        for text in parts.prefix(Self.maxSplit) { submitPart(text) }
+        // None is dropped: the rest go together as one message that is always asked about, with the parts as its words.
+        if parts.count > Self.maxSplit { submitPart(parts.dropFirst(Self.maxSplit).joined(separator: "\n"), overflow: true) }
+    }
+    /// Session halves routed on their own from one compound message, at most; the others are asked about together.
+    static let maxSplit = 3
+
+    /// The parts trimmed, their whitespace collapsed, without the empty and the repeated ones (case aside), in order.
+    static func distinct(_ parts: [String]) -> [String] {
+        var seen = Set<String>()
+        return parts.compactMap { part in
+            let text = part.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            return !text.isEmpty && seen.insert(text.lowercased()).inserted ? text : nil
         }
     }
-    /// Session halves routed from one compound message, at most.
-    static let maxSplit = 3
 
     /// Acts on a target: a card or session gets the message, a project a new session, an intent a run.
     private func route(_ job: Job, to target: String) async throws {
@@ -1167,6 +1227,8 @@ struct RouterAskBack: Identifiable, Equatable {
             liveCache[Self.liveKey(job.text, narrowed)] = nil
         }
         Self.keep(&found, world: world, unattended: unattended, store: store)
+        // The leftovers past the bound are never sent on a guess: you pick.
+        if job.context.overflow { found.sure = false }
         // Where your own words send it ("start a session in lookout …", "tell CI to …"), resolved here and not by Jev, is
         // where it goes: his pick of another doesn't send it elsewhere ("tell CI to update the docs" isn't for Docs). Not
         // where you waved it off, nor when it is gone.
@@ -1188,7 +1250,8 @@ struct RouterAskBack: Identifiable, Equatable {
         let unbounded = unattended && world == nil && job.context.projects.isEmpty && scope.isEmpty
         if unbounded { found.sure = false }
         let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
-        let named = unbounded || (!unattended && Self.forRouter(job.text, pills: job.context.pills))
+        // What the Router's run wrote names no destination of its own: the exemptions for your typed words don't apply to it.
+        let named = unbounded || job.context.generated || (!unattended && Self.forRouter(job.text, pills: job.context.pills))
             ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
         if let named, named != found.top?.target, named != job.context.notTo, inScope(named), inWorld(named),
            eligible(named, store: store) {
@@ -1214,7 +1277,7 @@ struct RouterAskBack: Identifiable, Equatable {
         // button. Its card could be what made it the pick ("May I delete the production data?" for a "yes"). An ask of its
         // own ("SQLite or Postgres?") takes an answer on the evidence above, as any session does.
         if found.sure, !found.live, let top = found.top, let session = Self.session(of: top.target, store: store),
-           Self.asksYou(session, store: store), !Self.addressed(job.text, to: session, store: store) {
+           Self.asksYou(session, store: store), job.context.generated || !Self.addressed(job.text, to: session, store: store) {
             found.sure = false
         }
         // Hidden, addressed or gone while Jev was asked: you pick among what is there now.
@@ -1424,7 +1487,7 @@ extension RouterDispatcher.Effects {
     static var unavailable: Self {
         let no = RouterTools.Failure("The Router isn't ready")
         return Self(rank: { _, _, _ in throw no }, prepare: { _, _ in throw no }, start: { _, _, _, _ in throw no },
-                    send: { _, _ in throw no }, answer: { _, _, _ in throw no }, run: { _, _, _ in throw no })
+                    send: { _, _ in throw no }, answer: { _, _, _, _ in throw no }, run: { _, _, _ in throw no })
     }
 
     @MainActor
@@ -1532,8 +1595,9 @@ extension RouterDispatcher.Effects {
                     inbox: guest ? nil : await store.relayInbox(forSigned: delivery.text), decisionID: tools.decision,
                     hostSessionID: delivery.session, body: delivery.body)
             },
-            answer: { [weak dispatcher] tools, card, answers in
+            answer: { [weak dispatcher] tools, card, answers, snapshot in
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
+                guard snapshot.holds(try store(dispatcher)) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
                 return try await tools.answerForm(try store(dispatcher), ["card": card, "answers": answers], ticket: tools.ticket())
             },
             run: { [weak dispatcher] tools, intent, input in
@@ -1566,10 +1630,11 @@ extension RouterDispatcher.Effects {
                 let project = store.claudeSessions[request.session].map { store.folderName($0.folderKey) } ?? ""
                 return try started(answer, tools, project: project, settings: nil)
             },
-            answerPlan: { [weak dispatcher] tools, card, decision in
+            answerPlan: { [weak dispatcher] tools, card, decision, snapshot in
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
                 let store = try store(dispatcher)
                 try tools.live(tools.ticket())
+                guard snapshot.holds(store) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
                 guard let c = store.router.cards.first(where: { $0.id == card }), c.isOpen,
                       let form = store.guestPendingForm(for: c)?.form ?? store.pendingForm(for: c), form.isPlan else {
                     throw RouterTools.Failure("That plan isn't waiting anymore")

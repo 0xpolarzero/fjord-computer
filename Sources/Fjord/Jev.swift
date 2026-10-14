@@ -100,7 +100,7 @@ struct JevClient {
         for (id, question) in questions {
             switch question {
             case .choice(let options, let hints, let instructions):
-                let map = Dictionary(uniqueKeysWithValues: options.map { (Self.key(for: $0), $0) })
+                guard let map = Self.keyMap(options) else { throw Failure.refused("Two options share a wire key") }
                 keys[id] = map
                 body[id] = ["type": "choice", "instructions": instructions,
                             "criteria": map.mapValues { option -> Any in hints[option] ?? NSNull() }]
@@ -112,7 +112,7 @@ struct JevClient {
             case .score(let levels, let instructions):
                 body[id] = ["type": "score", "instructions": instructions, "criteria": levels]
             case .structuredChoice(let options, let criteria, let instructions):
-                let map = Dictionary(uniqueKeysWithValues: options.map { (Self.key(for: $0), $0) })
+                guard let map = Self.keyMap(options) else { throw Failure.refused("Two options share a wire key") }
                 keys[id] = map
                 let placeholder = "\u{1}ordered-criteria-\(ordered.count)\u{1}"
                 ordered[placeholder] = try Self.orderedObject(options.map { (Self.key(for: $0), criteria[$0] ?? NSNull()) })
@@ -221,6 +221,14 @@ struct JevClient {
 
     static func key(for option: String) -> String {
         option.replacingOccurrences(of: ".", with: "_")
+    }
+
+    /// Each option by its wire key; nil when two share one ("a.b" and "a_b", or the same option twice): a request that
+    /// could not tell them apart is never sent, rather than trapping or answering for the wrong one.
+    static func keyMap(_ options: [String]) -> [String: String]? {
+        var map: [String: String] = [:]
+        for option in options where map.updateValue(option, forKey: key(for: option)) != nil { return nil }
+        return map
     }
 
     /// A score brought to 0…count-1: a number (never a boolean) on the levels its legend numbers (from 0 or from 1, one

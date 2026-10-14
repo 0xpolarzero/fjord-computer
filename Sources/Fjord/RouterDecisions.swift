@@ -153,6 +153,18 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     var actionStart: ActionStart?
     /// The decision whose compound message this one is the session half of (`RouterDispatcher.think`). Nil for anything else.
     var splitFrom: UUID?
+    /// Set with `splitFrom`: the words were written by the Router's run, not typed by you (so they are the original
+    /// message's generated part, never a new message of yours: no address or permission exemption of your own words applies,
+    /// and the digest doesn't count them as something you said). Nil for anything else.
+    var generated: Bool?
+    /// What a generated part inherits from the message it was split from, to route it with the same constraints (and again
+    /// when it is sent elsewhere): the projects and pointers of the original.
+    var inherited: Inherited?
+
+    struct Inherited: Codable, Equatable {
+        var projects: [String]
+        var mentions: [RouterMention]
+    }
 
     struct ActionStart: Codable, Equatable {
         var title: String

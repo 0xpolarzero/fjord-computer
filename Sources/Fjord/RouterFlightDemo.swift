@@ -53,7 +53,7 @@ import SwiftUI
                 try await Task.sleep(for: .milliseconds(650))
                 return nil
             },
-            answer: { _, _, _ in "" },
+            answer: { _, _, _, _ in "" },
             run: { _, _, _ in throw RouterTools.Failure("not in the flight demo") })
     }
 

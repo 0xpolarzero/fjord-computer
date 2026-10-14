@@ -29,7 +29,7 @@ import Testing
                     if let failSend { throw RouterTools.Failure(failSend) }
                     return nil
                 },
-                answer: { _, _, _ in "" },
+                answer: { _, _, _, _ in "" },
                 run: { _, _, _ in RouterRun.Answer(reply: "", done: "") })
         }
     }
