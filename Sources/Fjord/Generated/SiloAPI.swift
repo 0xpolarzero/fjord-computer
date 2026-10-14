@@ -1044,7 +1044,7 @@ struct SiloWireMacosComputer: Codable, Equatable, Sendable {
     var name: String
     var needsPersonalizing: Bool
     var osVersion: String? = nil
-    var pendingRestore: SiloWireSiloAP? = nil
+    var pendingRestore: SiloWirePendingRestore? = nil
     var progress: Double? = nil
     var setupComplete: Bool
     var state: SiloWireMacosComputerState
@@ -1147,21 +1147,6 @@ enum SiloWireCheckpointScope: String, Codable, Equatable, Sendable {
 // The compiler will not be able to synthesize the implementation of Hashable or Equatable
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
-
-// MARK: - SiloWireSiloAP
-struct SiloWireSiloAP: Codable, Equatable, Sendable {
-    var checkpointId: String
-    var sourceComputer: String? = nil
-    var state: SiloWireCheckpointScope? = nil
-    var memory: Bool? = nil
-
-    enum CodingKeys: String, CodingKey {
-        case checkpointId = "checkpointId"
-        case sourceComputer = "sourceComputer"
-        case state = "state"
-        case memory = "memory"
-    }
-}
 
 /// Mirrors `app/SiloUI/src-tauri/src/macos_computers/store.rs::State`.
 enum SiloWireMacosComputerState: String, Codable, Equatable, Sendable {
@@ -1412,7 +1397,7 @@ struct SiloWireApplicationComputer: Codable, Equatable, Sendable {
     var lifecycleFailure: String? = nil
     var lifecycleFailureDiagnostic: String? = nil
     var logs: [SiloJSONValue]
-    var pendingCheckpointRestore: SiloWireSiloAP? = nil
+    var pendingCheckpointRestore: SiloWirePendingRestore? = nil
     var pendingSecretRevocations: [String]? = nil
     var ports: [SiloJSONValue]
     var purpose: String
@@ -7241,7 +7226,7 @@ struct SiloWireComputerElement: Codable, Equatable, Sendable {
     var lifecycleFailure: String? = nil
     var lifecycleFailureDiagnostic: String? = nil
     var logs: [SiloJSONValue]? = nil
-    var pendingCheckpointRestore: SiloWireSiloAP? = nil
+    var pendingCheckpointRestore: SiloWirePendingRestore? = nil
     var pendingSecretRevocations: [String]? = nil
     var ports: [SiloJSONValue]? = nil
     var purpose: String? = nil

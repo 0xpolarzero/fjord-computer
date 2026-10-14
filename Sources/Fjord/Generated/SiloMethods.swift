@@ -16,7 +16,7 @@ struct SiloGeneratedMethodDescriptor: Equatable, Sendable {
     let resultType: String
 }
 
-struct SiloGeneratedMethodCall<Params: Encodable, Result: Decodable> {
+struct SiloGeneratedMethodCall<Params: Encodable & Sendable, Result: Decodable & Sendable>: Sendable {
     let name: String
     let kind: SiloGeneratedMethodKind
     let params: Params

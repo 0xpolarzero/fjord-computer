@@ -120,10 +120,22 @@ const result = await quicktype({
 // quicktype emits Codable properties but no memberwise initializer. Giving schema-optional
 // fields a nil default keeps the generated models usable as mutable client projections
 // without changing their JSON decoding or omission behavior.
-const swiftTypes = `${result.lines.join("\n")}\n`.replace(
+let swiftTypes = `${result.lines.join("\n")}\n`.replace(
   /^(\s+var [A-Za-z_]\w*: .+\?)$/gm,
   "$1 = nil",
 );
+// quicktype emits this duplicate shape name for the schema's untagged PendingRestore
+// anyOf. Route references through the actual named definition and remove the duplicate.
+swiftTypes = swiftTypes.replaceAll("SiloWireSiloAP?", "SiloWirePendingRestore?");
+const duplicatePendingRestore = swiftTypes.indexOf("// MARK: - SiloWireSiloAP\n");
+if (duplicatePendingRestore >= 0) {
+  const nextDefinition = swiftTypes.indexOf(
+    "/// Mirrors `app/SiloUI/src-tauri/src/macos_computers/store.rs::State`.",
+    duplicatePendingRestore,
+  );
+  if (nextDefinition < 0) throw new Error("quicktype's duplicate PendingRestore shape was not followed by MacosComputerState.");
+  swiftTypes = swiftTypes.slice(0, duplicatePendingRestore) + swiftTypes.slice(nextDefinition);
+}
 await writeFile(outputPath, swiftTypes);
 
 const kinds = [...new Set(methods.map((method) => method.kind))].sort();
@@ -141,5 +153,5 @@ const methodFunctions = methods.map((method) => {
 const methodCatalog = methods.map((method) =>
   `        SiloGeneratedMethodDescriptor(name: "${method.name}", kind: .${method.kind}, paramsType: "${method.paramsType}", resultType: "${method.resultType}")`,
 );
-const methodsSource = `// This file is generated from JSON Schema metadata using quicktype-core, do not modify it directly.\nimport Foundation\n\nenum SiloGeneratedMethodKind: String, Codable, Sendable {\n${kinds.map((kind) => `    case ${kind}`).join("\n")}\n}\n\nstruct SiloGeneratedMethodDescriptor: Equatable, Sendable {\n    let name: String\n    let kind: SiloGeneratedMethodKind\n    let paramsType: String\n    let resultType: String\n}\n\nstruct SiloGeneratedMethodCall<Params: Encodable, Result: Decodable> {\n    let name: String\n    let kind: SiloGeneratedMethodKind\n    let params: Params\n}\n\nenum SiloGeneratedMethods {\n    static let all: [SiloGeneratedMethodDescriptor] = [\n${methodCatalog.join(",\n")}\n    ]\n\n${methodFunctions.join("\n\n")}\n}\n`;
+const methodsSource = `// This file is generated from JSON Schema metadata using quicktype-core, do not modify it directly.\nimport Foundation\n\nenum SiloGeneratedMethodKind: String, Codable, Sendable {\n${kinds.map((kind) => `    case ${kind}`).join("\n")}\n}\n\nstruct SiloGeneratedMethodDescriptor: Equatable, Sendable {\n    let name: String\n    let kind: SiloGeneratedMethodKind\n    let paramsType: String\n    let resultType: String\n}\n\nstruct SiloGeneratedMethodCall<Params: Encodable & Sendable, Result: Decodable & Sendable>: Sendable {\n    let name: String\n    let kind: SiloGeneratedMethodKind\n    let params: Params\n}\n\nenum SiloGeneratedMethods {\n    static let all: [SiloGeneratedMethodDescriptor] = [\n${methodCatalog.join(",\n")}\n    ]\n\n${methodFunctions.join("\n\n")}\n}\n`;
 await writeFile(methodsPath, methodsSource);
