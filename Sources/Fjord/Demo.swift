@@ -27,7 +27,7 @@ enum Demo {
         store.routerDigester.suspended = true
         defer {
             store.routerDigester.suspended = false
-            store.routerDigester.rebaseline(store: store)
+            store.routerDigester.baseline(store: store)
         }
         // Both tools, picked: the demo shows everything.
         store.settings.triage = true

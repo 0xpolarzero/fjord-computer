@@ -2,16 +2,24 @@ import Foundation
 import Observation
 import os
 
-// Keeps the Brief (RouterDigest.swift) up to date. What sets it off comes from the Router's state changing
-// (`Store.router`): a card coming in or changing (a turn ended, a question or plan waiting, a session stuck, a wait over),
-// a card handled (answered, archived, marked seen), or a message of yours. Events a few seconds apart make one rewrite.
-// A rewrite is one Haiku call over the brief as it is, what the projects the events touch hold now and what happened; it
+// Keeps the Brief (RouterDigest.swift) up to date. Anything in the store that may change it (the Router's cards and
+// decisions, Claude's sessions, their tasks and activity, what decides a session's project) marks the writer dirty; a check
+// a moment later (never more than one per `checkEvery`) works out what each session is at, a fingerprint, and compares it
+// with the last one. That comparison is what decides whether the brief is worth a rewrite (and a message of yours, which
+// is urgent in itself):
+// - urgent: what the brief has to say at once changed (a session needs you or is worth a look, or stopped, its card, its
+//   brief or questions changed, it went to another project): written after `settle` of quiet, never later than `maxWait`
+//   after the first;
+// - progress: how far a working session is (running, turns, its task list, background tasks, what it waits on): written
+//   `progressEvery` after the first, only while the Brief is on screen, else carried into the next rewrite or written when
+//   it is opened. What a session is doing step by step is in no fingerprint: those steps change nothing.
+// A rewrite is one Haiku call over the brief as it is, what the projects the changes touch hold now and what happened; it
 // rewrites those projects' paragraphs and the lead, and says what changed and why, in a few words each. The app checks
 // the answer before it lands: a tag naming a session that isn't there is read as its text, a tag's kind is set to what its
 // session is at now, and an open card the text left out is put back (a card worth a look never leaves on its own: only
 // marking it seen takes it out). The projects keep their place; a new one goes at the end, one with nothing left goes.
-// Running sessions change all the time: they are told about only when a turn ends, or every few minutes at most when which
-// sessions run changes. A rewrite that fails leaves the brief as it was; the highlights show their sessions' state live.
+// Changes while a rewrite is made wait for it and are written after. A rewrite that fails leaves the brief as it was; the
+// highlights show their sessions' state live.
 
 @MainActor @Observable final class RouterDigestWriter {
     /// Something that may change the brief.
@@ -22,44 +30,47 @@ import os
         case handled(session: String, card: String, by: String)
         /// You said something to the Router or a session (the sessions it went to, once the Router has routed it).
         case you(String, sessions: [String])
-        /// Which sessions run changed.
-        case running(Set<String>, projects: Set<String> = [])
-        /// Sessions whose state changed without a card doing it (background tasks ended, a session matched to another
-        /// project, or the board moved while a rewrite was being made), and the projects they were in and are in now (a
-        /// session that stopped is on no board, so its project can't be found from it).
-        case refresh(Set<String>, projects: Set<String>)
+        /// Sessions whose fingerprint changed, and the projects they were in and are in now (a session that stopped is on
+        /// no board, so its project can't be found from it).
+        case changed(Set<String>, projects: Set<String>)
 
         /// The sessions it is about, whose projects it touches.
         var sessions: [String] {
             switch self {
             case .card(let s, _), .handled(let s, _, _): [s]
             case .you(_, let sessions): sessions
-            case .running(let ids, _), .refresh(let ids, _): ids.sorted()
+            case .changed(let ids, _): ids.sorted()
             }
         }
 
         /// The projects it names itself, besides those of its sessions.
         var projects: Set<String> {
-            switch self {
-            case .refresh(_, let projects), .running(_, let projects): projects
-            default: []
-            }
+            if case .changed(_, let projects) = self { projects } else { [] }
         }
     }
 
     /// A rewrite is being made.
     private(set) var writing = false
+    /// The Brief is on screen: working sessions are kept current while it is.
+    @ObservationIgnored private(set) var visible = false
     /// Answers in Haiku's place (tests, shots). Without one, a test run or a demo writes nothing.
     @ObservationIgnored var runner: RouterBriefer.Runner?
+    /// What happened since the last rewrite, and what each kind of change has been waiting since.
     @ObservationIgnored private(set) var pending: [Event] = []
-    @ObservationIgnored private var firstPending: Date?
+    @ObservationIgnored private(set) var urgentSince: Date?
+    @ObservationIgnored private(set) var progressSince: Date?
+    /// The one-shot wait before a rewrite, and how long it was set for.
     @ObservationIgnored private(set) var timer: Task<Void, Never>?
-    @ObservationIgnored private var watch: Task<Void, Never>?
-    @ObservationIgnored private var watched: [String: Board.Mark]?
-    /// Where the board and the time come from (tests give their own).
-    @ObservationIgnored var boardOf: @MainActor (Store) -> Board = { Board.make($0) }
+    @ObservationIgnored private(set) var scheduledIn: Duration?
+    /// The one check that is waiting its turn.
+    @ObservationIgnored private var checkTask: Task<Void, Never>?
+    /// What each session was at at the last check.
+    @ObservationIgnored private(set) var snapshot: [String: Print]?
+    /// Claude's sessions have been listed once and compared from: the first list is the baseline, not news.
+    @ObservationIgnored private var sessionsSeen = false
+    /// The time and the waiting (tests give their own).
     @ObservationIgnored var clock: () -> Date = { Date() }
-    @ObservationIgnored private var runningTold = Date.distantPast
+    @ObservationIgnored var sleeper: (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// Set while the Store loads its saved state or a demo is set up: what changes then isn't something that happened.
     @ObservationIgnored var suspended = false
     /// Bumped when the Router is turned off: a rewrite begun before it is dropped.
@@ -67,15 +78,16 @@ import os
 
     static let model = "claude-haiku-5-5"
     static let timeout: TimeInterval = 45
-    /// Quiet this long after an event, and it is written; never later than `maxWait` after the first.
+    /// Changes noted this close together are looked at once.
+    static let checkEvery: Duration = .milliseconds(500)
+    /// Quiet this long after an urgent change, and it is written; never later than `maxWait` after the first.
     static let settle: Duration = .seconds(3)
     static let maxWait: TimeInterval = 12
-    /// How often which sessions run is looked at, and how long at least between rewrites for it alone.
-    static let runningCheck: Duration = .seconds(60)
-    static let runningEvery: TimeInterval = 300
+    /// How long after the first change in progress it is written, while the Brief is on screen.
+    static let progressEvery: TimeInterval = 60
     private static let log = Logger(subsystem: InboxLog.subsystem, category: "router")
 
-    // MARK: Events
+    // MARK: Signals
 
     /// What changed between two states of the Router, as events.
     nonisolated static func events(from old: RouterState, to new: RouterState) -> [Event] {
@@ -113,32 +125,122 @@ import os
         return out
     }
 
-    /// The Router's state changed: what it means for the brief is noted, and the watch on running sessions started.
+    /// The Router's state changed. A message of yours is urgent in itself; a card's coming or going is kept to tell the
+    /// rewrite what happened, but whether it is worth one is for the next check to say.
     func observe(from old: RouterState, to new: RouterState, store: Store) {
         guard new.enabled else {
             if old.enabled { stop() }
             return
         }
-        startWatch(store: store)
-        let events = suspended ? [] : Self.events(from: old, to: new)
-        if !events.isEmpty { note(events, store: store) }
+        if !old.enabled { snapshot = Self.prints(Board.make(store), store) }
+        guard !suspended else { return }
+        for event in Self.events(from: old, to: new) {
+            if case .you = event { note(event, urgent: true, store: store) } else { note(event, urgent: nil, store: store) }
+        }
         // None yet (just turned on, or a new install): the first one is written from what there is.
-        else if new.digest == nil, !pending.isEmpty || timer == nil, canWrite(store) { schedule(store: store) }
+        if new.digest == nil, canWrite(store) { markUrgent(store: store) }
+        markDirty(store: store)
     }
 
-    func note(_ events: [Event], store: Store) {
-        pending += events.filter { !pending.contains($0) }
-        if firstPending == nil { firstPending = Date() }
+    /// Something that may change the brief changed: looked at in a moment, with whatever else changes by then.
+    func markDirty(store: Store) {
+        guard !suspended, checkTask == nil, store.router.enabled else { return }
+        checkTask = Task { [weak self, weak store] in
+            await self?.sleeper(Self.checkEvery)
+            guard !Task.isCancelled, let self, let store else { return }
+            self.checkTask = nil
+            self.check(store)
+        }
+    }
+
+    /// The store has loaded what it was saved with or a demo is set up: that is what is compared with from now on, so a load
+    /// is never news.
+    func baseline(store: Store) {
+        guard store.router.enabled else { return }
+        snapshot = Self.prints(Board.make(store), store)
+    }
+
+    /// Compares what each session is at with the last check, and notes what is worth a rewrite.
+    func check(_ store: Store) {
+        guard store.router.enabled, !suspended else { return }
+        let now = Self.prints(Board.make(store), store)
+        defer { snapshot = now }
+        if !sessionsSeen {
+            // Until Claude's sessions are listed, what there is is only what the Router remembers.
+            if store.claudeSessionsListed != nil { sessionsSeen = true }
+            return
+        }
+        guard let was = snapshot else { return }
+        let d = Self.differences(was, now)
+        if d.urgent.isEmpty, d.progress.isEmpty {
+            // A card that changed nothing the brief says isn't worth telling a later rewrite about.
+            if urgentSince == nil, progressSince == nil { pending = [] }
+            return
+        }
+        note(.changed(d.urgent.union(d.progress), projects: d.projects), urgent: !d.urgent.isEmpty, store: store)
+    }
+
+    /// An event noted: urgent, progress only (`false`), or only to be told with the next rewrite (`nil`).
+    private func note(_ event: Event, urgent: Bool?, store: Store) {
+        // The sessions changed since the last rewrite are one event: a long wait doesn't pile them up.
+        if case .changed(let ids, let projects) = event,
+           let i = pending.firstIndex(where: { if case .changed = $0 { true } else { false } }),
+           case .changed(let had, let hadProjects) = pending[i] {
+            pending[i] = .changed(had.union(ids), projects: hadProjects.union(projects))
+        } else if !pending.contains(event) {
+            pending.append(event)
+        }
+        switch urgent {
+        case true?: markUrgent(store: store)
+        case false?: markProgress(store: store)
+        case nil: break
+        }
+    }
+
+    private func markUrgent(store: Store) {
+        if urgentSince == nil { urgentSince = clock() }
         schedule(store: store)
     }
 
-    private func schedule(store: Store) {
+    private func markProgress(store: Store) {
+        if progressSince == nil { progressSince = clock() }
+        schedule(store: store)
+    }
+
+    /// The one wait before the next rewrite: urgent changes after `settle` of quiet (not past `maxWait`); progress, only
+    /// while the Brief is shown, `progressEvery` after its first change; hidden progress waits for the next urgent change
+    /// or for the Brief to be opened. A rewrite in flight schedules what came in meanwhile when it ends.
+    private func schedule(store: Store, after fixed: Duration? = nil) {
+        guard !writing, canWrite(store) else { return }
+        let delay: Duration
+        if let fixed {
+            delay = fixed
+        } else if let since = urgentSince {
+            delay = min(Self.settle, .seconds(max(0, Self.maxWait - clock().timeIntervalSince(since))))
+        } else if let since = progressSince, visible {
+            // Already waiting: the first change sets the time, later ones don't move it.
+            if timer != nil { return }
+            delay = .seconds(max(0, Self.progressEvery - clock().timeIntervalSince(since)))
+        } else {
+            return
+        }
         timer?.cancel()
-        let late = firstPending.map { Date().timeIntervalSince($0) >= Self.maxWait } ?? false
+        scheduledIn = delay
         timer = Task { [weak self, weak store] in
-            if !late { try? await Task.sleep(for: Self.settle) }
+            await self?.sleeper(delay)
             guard !Task.isCancelled, let self, let store else { return }
             await self.write(store: store)
+        }
+    }
+
+    /// The Brief is on screen (or isn't). Opened with progress waiting, it is written after the usual settle.
+    func setVisible(_ shown: Bool, store: Store) {
+        visible = shown
+        if shown {
+            if progressSince != nil, urgentSince == nil { schedule(store: store, after: Self.settle) }
+        } else if urgentSince == nil {
+            timer?.cancel()
+            timer = nil
         }
     }
 
@@ -152,93 +254,101 @@ import os
     func stop() {
         timer?.cancel()
         timer = nil
-        watch?.cancel()
-        watch = nil
+        checkTask?.cancel()
+        checkTask = nil
         pending = []
-        firstPending = nil
+        urgentSince = nil
+        progressSince = nil
+        snapshot = nil
         generation &+= 1
-    }
-
-    private func startWatch(store: Store) {
-        guard watch == nil, !UnderTest.isRunning else { return }
-        // What there is now is what the first tick is compared with: a change in the first minute is not lost.
-        watched = boardOf(store).marks
-        watch = Task { [weak self, weak store] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: Self.runningCheck)
-                guard let self, let store else { return }
-                self.look(store)
-            }
-        }
-    }
-
-    /// The store has loaded what it was saved with or its sessions have come in: that is the state to compare with, not the
-    /// half-loaded one the watch started on.
-    func rebaseline(store: Store) {
-        if watched != nil { watched = boardOf(store).marks }
-    }
-
-    /// Compares what each session is at (and which project it is in) with the last look. A session that started or stopped
-    /// needing you or being worth a look (background tasks ended, a note come out of hiding), or went to another project,
-    /// is noted at once; running ones coming and going wait for `runningEvery`, and stay unseen by the baseline until then.
-    func look(_ store: Store) {
-        let current = boardOf(store).marks
-        guard let was = watched else { watched = current; return }
-        let (urgent, runOnly) = Self.differences(was, current)
-        if !urgent.isEmpty {
-            advance(urgent, to: current)
-            note([.refresh(urgent, projects: Self.projects(of: urgent, was, current))], store: store)
-        }
-        if !runOnly.isEmpty, clock().timeIntervalSince(runningTold) >= Self.runningEvery {
-            advance(runOnly, to: current)
-            runningTold = clock()
-            note([.running(runOnly, projects: Self.projects(of: runOnly, was, current))], store: store)
-        }
-    }
-
-    /// The sessions that differ between two looks: those that matter at once (one needing you or worth a look on either
-    /// side, or one that changed project), and those only running or not.
-    nonisolated static func differences(_ old: [String: Board.Mark], _ new: [String: Board.Mark]) -> (urgent: Set<String>, runOnly: Set<String>) {
-        var urgent = Set<String>(), runOnly = Set<String>()
-        for id in Set(old.keys).union(new.keys) where old[id] != new[id] {
-            let moved = old[id] != nil && new[id] != nil && old[id]?.project != new[id]?.project
-            if moved || [old[id], new[id]].contains(where: { $0 != nil && $0?.kind != .run }) {
-                urgent.insert(id)
-            } else {
-                runOnly.insert(id)
-            }
-        }
-        return (urgent, runOnly)
-    }
-
-    /// The projects those sessions were in and are in now.
-    nonisolated static func projects(of ids: Set<String>, _ old: [String: Board.Mark], _ new: [String: Board.Mark]) -> Set<String> {
-        Set(ids.flatMap { [old[$0]?.project, new[$0]?.project] }.compactMap { $0 })
-    }
-
-    /// The baseline moved forward for those sessions only: the rest stays pending until it is let through.
-    private func advance(_ ids: Set<String>, to current: [String: Board.Mark]) {
-        guard var marks = watched else { return }
-        for id in ids { marks[id] = current[id] }
-        watched = marks
     }
 
     private func canWrite(_ store: Store) -> Bool {
         store.router.enabled && (runner != nil || (!UnderTest.isRunning && !store.routerIsPretend))
     }
 
+    // MARK: Fingerprints
+
+    /// What a session is at, in two parts: what the brief has to say at once, and how far a working one is.
+    struct Print: Equatable, Sendable {
+        struct Urgent: Equatable, Sendable {
+            var kind: DigestMarkup.Kind
+            var project: String?
+            /// Its open card, what kind it is, what it says and what it still asks. A running session has none of these:
+            /// what it is doing right now is not news.
+            var card: String? = nil
+            var state = ""
+            var text = ""
+            var asks: [String] = []
+        }
+
+        struct Progress: Equatable, Sendable {
+            var running: Bool
+            var turns: Int
+            var todo: [Int]
+            var tasks: Int
+            var waitingOn: String
+        }
+
+        var urgent: Urgent
+        var progress: Progress
+    }
+
+    @MainActor static func prints(_ board: Board, _ store: Store) -> [String: Print] {
+        var out: [String: Print] = [:]
+        for project in board.projects {
+            for s in project.sessions {
+                let urgent: Print.Urgent = s.kind == .run
+                    ? .init(kind: .run, project: project.key)
+                    : .init(kind: s.kind, project: project.key, card: s.card, state: s.state, text: s.text, asks: s.asks)
+                let todo = store.claudeActivity[s.id]?.todo
+                out[s.id] = Print(urgent: urgent, progress: .init(
+                    running: store.claudeSessions[s.id]?.running ?? false, turns: store.claudeSessions[s.id]?.completedTurns ?? 0,
+                    todo: todo.map { [$0.done, $0.total] } ?? [], tasks: store.claudeTasks[s.id]?.count ?? 0, waitingOn: s.waitingOn))
+            }
+        }
+        return out
+    }
+
+    /// The sessions that differ between two checks: those that matter at once (one needing you or worth a look on either
+    /// side that changed, or one that changed project), those only further along, and the projects they were in and are in.
+    nonisolated static func differences(_ old: [String: Print], _ new: [String: Print])
+        -> (urgent: Set<String>, progress: Set<String>, projects: Set<String>) {
+        var urgent = Set<String>(), progress = Set<String>(), projects = Set<String>()
+        for id in Set(old.keys).union(new.keys) where old[id] != new[id] {
+            let o = old[id], n = new[id]
+            let matters = [o, n].contains { $0 != nil && $0?.urgent.kind != .run }
+            let moved = o != nil && n != nil && o?.urgent.project != n?.urgent.project
+            if matters ? o?.urgent != n?.urgent : moved {
+                urgent.insert(id)
+            } else if o?.progress != n?.progress {
+                progress.insert(id)
+            } else {
+                continue
+            }
+            projects.formUnion([o?.urgent.project, n?.urgent.project].compactMap { $0 })
+        }
+        return (urgent, progress, projects)
+    }
+
     // MARK: Writing
 
     private func write(store: Store) async {
+        // The wait that brought us here is over (and not cancelled: the call runs in it).
         timer = nil
         guard canWrite(store), !writing else {
-            if !canWrite(store) { pending = []; firstPending = nil }
+            if !canWrite(store) { pending = []; urgentSince = nil; progressSince = nil }
             return
         }
+        // What changed since the last check is in this write, so the wait that check may ask for is not needed.
+        check(store)
+        timer?.cancel()
+        timer = nil
         let events = pending
         pending = []
-        firstPending = nil
-        let board = boardOf(store)
+        urgentSince = nil
+        progressSince = nil
+        let board = Board.make(store)
         let current = store.routerDigest
         // The projects the events touch (all of them for the first brief), and those whose sessions are gone from it.
         var keys: [String]
@@ -256,10 +366,11 @@ import os
         }
         guard current == nil || !events.isEmpty else { return }
         writing = true
-        // Events that came in meanwhile (or while this one was waiting its turn) are written next.
+        // Changes that came in meanwhile (or while this one was waiting its turn) are written next. The brief itself is in
+        // no fingerprint, so what the answer does to it sets off nothing.
         defer {
             writing = false
-            if !pending.isEmpty { schedule(store: store) }
+            if urgentSince != nil || progressSince != nil { schedule(store: store) }
         }
         let generation = generation
         let context = DigestPrompt.context(board: board, current: current, rewrite: keys, events: events, store: store)
@@ -275,17 +386,8 @@ import os
         await store.motionGate.still()
         guard generation == self.generation, store.router.enabled else { return }
         let now = Date()
-        let latest = boardOf(store)
-        let next = Self.apply(read, to: store.routerDigest, rewriting: keys, board: latest, events: events, now: now)
+        let next = Self.apply(read, to: store.routerDigest, rewriting: keys, board: Board.make(store), events: events, now: now)
         if next != store.routerDigest { store.routerDigest = next }
-        // The board moved while the answer was being made: the prose is corrected by another rewrite. Only what matters at
-        // once (a card, a project); running sessions coming and going are left to the watch and its `runningEvery`, or a
-        // board that changes under every call would keep the writer calling.
-        let (urgent, _) = Self.differences(board.marks, latest.marks)
-        if !urgent.isEmpty {
-            advance(urgent, to: latest.marks)
-            note([.refresh(urgent, projects: Self.projects(of: urgent, board.marks, latest.marks))], store: store)
-        }
     }
 
     nonisolated private static func project(of session: String, in digest: RouterDigest) -> String? {
@@ -347,13 +449,12 @@ import os
             let trigger: RouterDigest.Revision.Trigger? = switch event {
             case .you(let text, _): .you(text)
             case .card(let s, _), .handled(let s, _, _): .session(s)
-            case .running, .refresh: nil
+            case .changed: nil
             }
             if let trigger, !out.contains(trigger) { out.append(trigger) }
-            // A message of yours to a session names it too.
-            if case .you(_, let sessions) = event {
-                for s in sessions where !out.contains(.session(s)) { out.append(.session(s)) }
-            }
+            // A message of yours to a session names it too, and so do the sessions whose state changed.
+            if case .you = event {} else if case .changed = event {} else { continue }
+            for s in event.sessions where !out.contains(.session(s)) { out.append(.session(s)) }
         }
         // What you said first: it is what you'll remember the change by.
         return out.filter { if case .you = $0 { true } else { false } } + out.filter { if case .session = $0 { true } else { false } }
@@ -426,6 +527,8 @@ import os
             let asks: [String]
             /// What a waiting session waits on: it can hold another session's title, so it is fenced and bounded.
             var waitingOn: String = ""
+            /// The open card it is shown by, if it has one.
+            var card: String? = nil
         }
 
         struct Project: Equatable, Sendable {
@@ -440,16 +543,6 @@ import os
         var projectOf: [String: String] = [:]
         var kinds: [String: DigestMarkup.Kind] = [:]
         var titles: [String: String] = [:]
-        /// What a session is at and where, as the watch compares it.
-        struct Mark: Equatable, Sendable {
-            let kind: DigestMarkup.Kind
-            let project: String?
-        }
-
-        var marks: [String: Mark] {
-            Dictionary(uniqueKeysWithValues: kinds.map { ($0.key, Mark(kind: $0.value, project: projectOf[$0.key])) })
-        }
-
         /// Every session that needs you, and every one worth a look, across the projects.
         var needs: [String] = []
         var looks: [String] = []
@@ -487,14 +580,14 @@ import os
             }
             switch item {
             case .need(let c):
-                return Session(id: c.sessionID, title: c.title, kind: .need, state: c.kind.label, text: c.brief ?? c.text, asks: asks(c))
+                return Session(id: c.sessionID, title: c.title, kind: .need, state: c.kind.label, text: c.brief ?? c.text, asks: asks(c), card: c.id)
             case .ready(let c):
-                return Session(id: c.sessionID, title: c.title, kind: .need, state: "Ready to go on", text: c.brief ?? c.text, asks: [])
+                return Session(id: c.sessionID, title: c.title, kind: .need, state: "Ready to go on", text: c.brief ?? c.text, asks: [], card: c.id)
             case .note(let c):
-                return Session(id: c.sessionID, title: c.title, kind: .look, state: "Worth a look", text: c.brief ?? c.text, asks: asks(c))
+                return Session(id: c.sessionID, title: c.title, kind: .look, state: "Worth a look", text: c.brief ?? c.text, asks: asks(c), card: c.id)
             case .waiting(let c):
                 let on = c.triage?.watch?.label ?? "something"
-                return Session(id: c.sessionID, title: c.title, kind: .run, state: "Waiting", text: c.brief ?? c.text, asks: [], waitingOn: on)
+                return Session(id: c.sessionID, title: c.title, kind: .run, state: "Waiting", text: c.brief ?? c.text, asks: [], waitingOn: on, card: c.id)
             case .working(let row):
                 let doing = row.activity?.text ?? page.summaries[row.id]?.text ?? ""
                 return Session(id: row.id, title: row.session.title, kind: .run, state: "Working", text: doing, asks: [])
@@ -627,9 +720,7 @@ enum DigestPrompt {
         case .you(let text, let sessions):
             let to = sessions.isEmpty ? "" : " (to " + sessions.map { "id=\($0) \(title($0))" }.joined(separator: ", ") + ")"
             return "the user said" + to + ": " + clip(text, 300)
-        case .running(let ids, _):
-            return "sessions started or stopped running: " + ids.sorted().map { "id=\($0) \(title($0))" }.joined(separator: ", ")
-        case .refresh(let ids, _):
+        case .changed(let ids, _):
             return "sessions whose state changed: " + ids.sorted().map { "id=\($0) \(title($0))" }.joined(separator: ", ")
         }
     }

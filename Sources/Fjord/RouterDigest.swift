@@ -360,8 +360,12 @@ struct DigestPage: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        // Left: what changes from now on is new when you come back.
-        .onDisappear { Self.markSeen(store) }
+        // Working sessions are kept current while it is on screen; left, what changes from now on is new when you come back.
+        .onAppear { store.routerDigester.setVisible(true, store: store) }
+        .onDisappear {
+            store.routerDigester.setVisible(false, store: store)
+            Self.markSeen(store)
+        }
     }
 
     /// What was new has been seen: what changes after now is marked new.

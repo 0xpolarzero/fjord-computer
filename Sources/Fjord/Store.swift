@@ -337,6 +337,7 @@ final class Store {
             if !ingesting { claudeStamp.revision += 1 }
             refreshFolderNames()
             refreshSessionRows(sessionRowsChanged(from: oldValue))
+            routerDigester.markDirty(store: self)
         }
     }
     /// The Router (see Router.swift): its cards, its decision log and the changes it made.
@@ -350,6 +351,9 @@ final class Store {
             if oldValue.cards != router.cards || oldValue.decisions != router.decisions || oldValue.enabled != router.enabled
                 || (router.digest == nil && router.enabled) {
                 routerDigester.observe(from: oldValue, to: router, store: self)
+            } else if oldValue.pendingDesktopStarts != router.pendingDesktopStarts || oldValue.runsOnProjects != router.runsOnProjects {
+                // What decides a session's project.
+                routerDigester.markDirty(store: self)
             }
             // Worked out again only if what it is made of changed: a session's stamps or an open card changing leave it (and
             // what draws it) alone.
@@ -426,6 +430,7 @@ final class Store {
             refreshSessionRows(sessionRowsChanged(oldValue, claudeSessions))
             pruneSessionRows()
             updateRouterTasks()
+            routerDigester.markDirty(store: self)
         }
     }
     /// Guest execution observations keyed by the Desktop session that owns the SSH mirror. Local reads can refresh
@@ -446,6 +451,7 @@ final class Store {
             shownRevision &+= 1
             agentCache = nil
             refreshSessionRows(sessionRowsChanged(oldValue, claudeActivity))
+            routerDigester.markDirty(store: self)
         }
     }
     /// Bumped when a recent session ages out of the list (see `Store.recentWindow`).
@@ -463,6 +469,7 @@ final class Store {
             agentCache = nil
             refreshSessionRows(sessionRowsChanged(oldValue, claudeTasks))
             updateRouterTasks()
+            routerDigester.markDirty(store: self)
         }
     }
     /// `routerTasks` as last worked out (`updateRouterTasks`, as the tasks or the sessions change), and a revision bumped
@@ -574,8 +581,6 @@ final class Store {
     @ObservationIgnored let routerBriefer = RouterBriefer()
     /// Keeps the Brief up to date (RouterDigestWriter.swift).
     @ObservationIgnored let routerDigester = RouterDigestWriter()
-    /// Claude's sessions have been read once (even none): later reads are news for the Brief's watch, the first isn't.
-    @ObservationIgnored var briefSessionsBaselined = false
     /// The Brief, kept with the Router's state.
     var routerDigest: RouterDigest? {
         get { router.digest }
@@ -1035,8 +1040,8 @@ final class Store {
         // Once the login, marks and actions' records are in: carried during the load, a cached rating or Done was lost.
         loading = false
         carryAssignmentStamps(seenBefore: things)
-        // The Brief's watch compares with the state as loaded, not as the Store was before it.
-        routerDigester.rebaseline(store: self)
+        // The Brief compares with the state as loaded, not as the Store was before it.
+        routerDigester.baseline(store: self)
     }
 
     /// The saved state as decoded from what the file held; nil when it doesn't decode.
