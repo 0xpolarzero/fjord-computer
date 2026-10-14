@@ -210,6 +210,24 @@ enum ComputerRunFailure: LocalizedError, Equatable {
     }
 }
 
+enum ComputerRunGit {
+    enum CheckoutBase {
+        case freshClone
+        case afterFetch
+
+        var revision: String {
+            switch self {
+            case .freshClone: "HEAD"
+            case .afterFetch: "FETCH_HEAD"
+            }
+        }
+    }
+
+    static func createRunBranchArguments(path: String, branch: String, from base: CheckoutBase) -> [String] {
+        ["-C", path, "switch", "-c", branch, base.revision]
+    }
+}
+
 enum ComputerRunCheckpointLabel {
     static let suffix = ", deleted automatically"
 
@@ -733,6 +751,7 @@ final class ComputerRunCoordinator {
         guard mkdir.succeeded else { throw ComputerRunFailure.workspace("Couldn't prepare the workspace folder: \(Self.output(mkdir.stderr))") }
         let probe = try await guest.exec(GuestExecRequest(computer: computer,
             argv: ["git", "-C", path, "rev-parse", "--is-inside-work-tree"], cwd: root, timeoutSeconds: 20))
+        let checkoutBase: ComputerRunGit.CheckoutBase
         if probe.succeeded {
             let remote = try await guest.exec(GuestExecRequest(computer: computer,
                 argv: ["git", "-C", path, "remote", "get-url", "origin"], cwd: root, timeoutSeconds: 20))
@@ -743,14 +762,17 @@ final class ComputerRunCoordinator {
             let fetch = try await guest.exec(GuestExecRequest(computer: computer,
                 argv: ["git", "-C", path, "fetch", "--depth=1", "origin", "HEAD"], cwd: root, timeoutSeconds: 180))
             guard fetch.succeeded else { throw ComputerRunFailure.workspace("Git fetch failed: \(Self.output(fetch.stderr))") }
+            checkoutBase = .afterFetch
         } else {
             let clone = try await guest.exec(GuestExecRequest(computer: computer,
                 argv: ["git", "clone", "--depth=1", "https://github.com/\(repo).git", path], cwd: root,
                 timeoutSeconds: 300))
             guard clone.succeeded else { throw ComputerRunFailure.workspace("Git clone failed: \(Self.output(clone.stderr))") }
+            checkoutBase = .freshClone
         }
         let checkout = try await guest.exec(GuestExecRequest(computer: computer,
-            argv: ["git", "-C", path, "switch", "-c", branch, "FETCH_HEAD"], cwd: root, timeoutSeconds: 30))
+            argv: ["git"] + ComputerRunGit.createRunBranchArguments(path: path, branch: branch, from: checkoutBase),
+            cwd: root, timeoutSeconds: 30))
         guard checkout.succeeded else { throw ComputerRunFailure.workspace("Couldn't create the run branch: \(Self.output(checkout.stderr))") }
     }
 
