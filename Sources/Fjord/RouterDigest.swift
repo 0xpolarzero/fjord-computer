@@ -53,14 +53,24 @@ struct RouterDigest: Equatable {
     }
 }
 
-/// A word-by-word diff of two paragraphs' text, tags read out: the words kept, taken out and put in, in reading order.
+/// A unified diff of two paragraphs, tags read out, as a code review shows one: the text cut into sentences (a paragraph's
+/// lines), sentences taken out and put in as − and + lines, the words that changed inside a sentence rewritten marked on
+/// it, and the sentences kept shown only next to a change, the rest folded to ⋯.
 enum DigestDiff {
-    enum Word: Equatable {
-        case same(String), removed(String), added(String)
+    enum Line: Equatable {
+        /// A sentence kept, shown as context.
+        case same(String)
+        /// Kept sentences folded away.
+        case fold
+        /// A sentence taken out, the ranges of its words that went (none: all of it).
+        case removed(String, changed: [Range<String.Index>])
+        /// A sentence put in, the ranges of its words that came.
+        case added(String, changed: [Range<String.Index>])
     }
 
-    static func words(_ before: String, _ after: String) -> [Word] {
-        let a = plain(before), b = plain(after)
+    static func lines(_ before: String, _ after: String) -> [Line] {
+        let a = sentences(before), b = sentences(after)
+        var ops: [(kind: Int, text: String)] = []  // 0 same, -1 removed, 1 added
         let diff = b.difference(from: a)
         var removed = Set<Int>(), inserted = Set<Int>()
         for change in diff {
@@ -69,56 +79,122 @@ enum DigestDiff {
             case .insert(let offset, _, _): inserted.insert(offset)
             }
         }
-        // Walk both: what left a, where it stood, then what came into b.
-        var out: [Word] = []
         var i = 0, j = 0
         while i < a.count || j < b.count {
-            if i < a.count, removed.contains(i) { out.append(.removed(a[i])); i += 1; continue }
-            if j < b.count, inserted.contains(j) { out.append(.added(b[j])); j += 1; continue }
-            if i < a.count, j < b.count { out.append(.same(b[j])); i += 1; j += 1; continue }
-            if i < a.count { out.append(.removed(a[i])); i += 1 } else { out.append(.added(b[j])); j += 1 }
+            if i < a.count, removed.contains(i) { ops.append((-1, a[i])); i += 1; continue }
+            if j < b.count, inserted.contains(j) { ops.append((1, b[j])); j += 1; continue }
+            if i < a.count, j < b.count { ops.append((0, b[j])); i += 1; j += 1; continue }
+            if i < a.count { ops.append((-1, a[i])); i += 1 } else { ops.append((1, b[j])); j += 1 }
         }
-        return trimmed(out)
+        // A run of − lines then + lines is a rewrite: pair them, line by line, to mark the words that changed.
+        var out: [Line] = []
+        var k = 0
+        while k < ops.count {
+            if ops[k].kind == 0 { out.append(.same(ops[k].text)); k += 1; continue }
+            var minus: [String] = [], plus: [String] = []
+            while k < ops.count, ops[k].kind == -1 { minus.append(ops[k].text); k += 1 }
+            while k < ops.count, ops[k].kind == 1 { plus.append(ops[k].text); k += 1 }
+            var plusMarks: [[Range<String.Index>]] = plus.map { _ in [] }
+            for (n, old) in minus.enumerated() {
+                if n < plus.count {
+                    let (gone, came) = changedWords(old, plus[n])
+                    out.append(.removed(old, changed: gone))
+                    plusMarks[n] = came
+                } else {
+                    out.append(.removed(old, changed: []))
+                }
+            }
+            for (n, new) in plus.enumerated() { out.append(.added(new, changed: plusMarks[n])) }
+        }
+        return folded(out)
     }
 
-    /// The words kept, cut to a few on each side of a change, as a diff's context: a long run between two changes keeps
-    /// its ends with "…" between, one before the first change or after the last keeps only the end next to it.
-    static func trimmed(_ words: [Word], context: Int = 4) -> [Word] {
-        var out: [Word] = []
-        var run: [Word] = []
-        func flush(atEnd: Bool) {
-            let first = out.isEmpty
-            if run.count <= context * 2 + 1 || (first && atEnd) {
-                out += run
-            } else if first {
-                out += [.same("…")] + run.suffix(context)
-            } else if atEnd {
-                out += run.prefix(context) + [.same("…")]
-            } else {
-                out += run.prefix(context) + [.same("…")] + run.suffix(context)
+    /// Kept sentences more than one away from a change folded to ⋯.
+    static func folded(_ lines: [Line]) -> [Line] {
+        let near: (Int) -> Bool = { index in
+            [index - 1, index + 1].contains { n in
+                guard lines.indices.contains(n) else { return false }
+                if case .same = lines[n] { return false }
+                return true
             }
-            run = []
         }
-        for word in words {
-            if case .same = word { run.append(word); continue }
-            if !run.isEmpty { flush(atEnd: false) }
-            out.append(word)
+        var out: [Line] = []
+        for (index, line) in lines.enumerated() {
+            if case .same = line, !near(index) {
+                if out.last != .fold { out.append(.fold) }
+            } else {
+                out.append(line)
+            }
         }
-        if !run.isEmpty { flush(atEnd: true) }
         return out
     }
 
-    /// The paragraph's words, its tags dropped (their text kept).
-    static func plain(_ markup: String) -> [String] {
-        DigestMarkup.parse(markup).map { piece -> String in
+    /// The words of `old` that went and of `new` that came, as ranges in each.
+    static func changedWords(_ old: String, _ new: String) -> ([Range<String.Index>], [Range<String.Index>]) {
+        let a = wordRanges(old), b = wordRanges(new)
+        let diff = b.map { new[$0] }.difference(from: a.map { old[$0] })
+        var gone: [Int] = [], came: [Int] = []
+        for change in diff {
+            switch change {
+            case .remove(let offset, _, _): gone.append(offset)
+            case .insert(let offset, _, _): came.append(offset)
+            }
+        }
+        return (runs(gone.sorted(), a), runs(came.sorted(), b))
+    }
+
+    /// Words next to each other marked as one run, the space between them with them.
+    private static func runs(_ offsets: [Int], _ words: [Range<String.Index>]) -> [Range<String.Index>] {
+        var out: [Range<String.Index>] = []
+        var start: Int?, last = -2
+        for offset in offsets {
+            if offset != last + 1, let s = start { out.append(words[s].lowerBound..<words[last].upperBound); start = nil }
+            if start == nil { start = offset }
+            last = offset
+        }
+        if let s = start { out.append(words[s].lowerBound..<words[last].upperBound) }
+        return out
+    }
+
+    private static func wordRanges(_ text: String) -> [Range<String.Index>] {
+        var out: [Range<String.Index>] = []
+        var start: String.Index?
+        for index in text.indices {
+            if text[index].isWhitespace {
+                if let s = start { out.append(s..<index); start = nil }
+            } else if start == nil {
+                start = index
+            }
+        }
+        if let s = start { out.append(s..<text.endIndex) }
+        return out
+    }
+
+    /// The paragraph's sentences, its tags dropped (their text kept): cut after . ? ! or ; and the space after it.
+    static func sentences(_ markup: String) -> [String] {
+        let text = DigestMarkup.parse(markup).map { piece -> String in
             switch piece {
             case .text(let text): text
             case .span(_, _, let text): text
             }
         }
         .joined()
-        .split(whereSeparator: \.isWhitespace)
-        .map(String.init)
+        var out: [String] = []
+        var current = ""
+        var previous: Character?
+        for char in text {
+            if char.isWhitespace, let p = previous, ".?!;".contains(p) {
+                let sentence = current.trimmingCharacters(in: .whitespaces)
+                if !sentence.isEmpty { out.append(sentence) }
+                current = ""
+            } else {
+                current.append(char)
+            }
+            previous = char
+        }
+        let last = current.trimmingCharacters(in: .whitespaces)
+        if !last.isEmpty { out.append(last) }
+        return out
     }
 }
 
@@ -364,33 +440,30 @@ private struct DigestParagraph<Title: View>: View {
 
 // MARK: - History
 
-/// The brief's history: each rewrite, newest first, as a line saying what changed, set off by what (a session, with its
-/// icon, or you) and when. Opened, it says why and shows each paragraph it changed, word by word: what went struck through,
-/// what came in on green.
+/// The brief's history: each rewrite, newest first, in a line: who set it off (a session's icon, or you), what changed, and
+/// when. Opened, why, then each paragraph it changed as a unified diff.
 private struct DigestHistory: View {
     let store: Store
     let model: RouterModel
     let digest: RouterDigest
     let folders: [CanvasFolder]
 
-    static let width: CGFloat = 400
+    static let width: CGFloat = 380
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Brief history").font(CDS.sans(13, .semibold)).foregroundStyle(CDS.Text.primary)
+                Text("History").font(CDS.sans(12, .semibold)).foregroundStyle(CDS.Text.primary)
                 Spacer()
                 Text("\(digest.history.count) rewrites").font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
             }
-            .padding(.horizontal, 16).frame(height: 44)
+            .padding(.horizontal, 12).frame(height: 34)
             Rectangle().fill(CDS.border).frame(height: CDS.hairline)
             Scrolling {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(digest.history) { revision in
-                        entry(revision)
-                        Rectangle().fill(CDS.border.opacity(0.6)).frame(height: CDS.hairline).padding(.leading, 44)
-                    }
+                    ForEach(digest.history) { revision in entry(revision) }
                 }
+                .padding(.vertical, 4)
                 .padding(.bottom, LaneMetrics.bottom)
             }
         }
@@ -400,80 +473,111 @@ private struct DigestHistory: View {
 
     private func entry(_ revision: RouterDigest.Revision) -> some View {
         let open = model.digest.expanded.contains(revision.id)
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(Motion.spatial.resolved(reduce: false)) {
                     if open { model.digest.expanded.remove(revision.id) } else { model.digest.expanded.insert(revision.id) }
                 }
             } label: {
-                HStack(alignment: .top, spacing: 10) {
-                    trigger(revision.trigger)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(revision.label).font(CDS.sans(13, .medium)).foregroundStyle(CDS.Text.primary)
-                            .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                        Text(source(revision.trigger) + " · " + shortAgo(revision.at))
-                            .font(CDS.sans(11.5)).foregroundStyle(CDS.Text.muted).lineLimit(1)
-                    }
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(CDS.Text.muted).rotationEffect(.degrees(open ? 90 : 0)).frame(width: 8)
+                    trigger(revision.trigger).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                    Text(revision.label).font(CDS.sans(12.5, .medium)).foregroundStyle(CDS.Text.primary)
+                        .lineLimit(open ? nil : 1)
                     Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(CDS.Text.muted).rotationEffect(.degrees(open ? 90 : 0)).padding(.top, 4)
+                    Text(shortAgo(revision.at)).font(CDS.sans(11)).foregroundStyle(CDS.Text.muted).monospacedDigit()
                 }
+                .padding(.horizontal, 6).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(open ? CDS.alpha(0.05) : .clear))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if open {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(revision.why).font(CDS.sans(12.5)).foregroundStyle(CDS.Text.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(source(revision.trigger) + ". " + revision.why)
+                        .font(CDS.sans(11.5)).foregroundStyle(CDS.Text.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(Array(revision.changes.enumerated()), id: \.offset) { _, change in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(title(change.key)).font(CDS.sans(11, .semibold)).foregroundStyle(CDS.Text.muted)
-                            DigestFlow(spacing: 3.5, lineSpacing: 3) {
-                                ForEach(Array(DigestDiff.words(change.before, change.after).enumerated()), id: \.offset) { _, word in
-                                    diffWord(word)
-                                }
-                            }
-                        }
-                        .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(CDS.alpha(0.035)))
+                        diff(change)
                     }
                 }
-                .padding(.leading, 34)
+                .padding(.leading, 21).padding(.trailing, 6).padding(.bottom, 6)
                 .transition(.opacity)
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, 6)
     }
 
-    @ViewBuilder private func diffWord(_ word: DigestDiff.Word) -> some View {
-        switch word {
-        case .same(let w):
-            Text(w).font(CDS.sans(12.5)).foregroundStyle(CDS.Text.secondary)
-        case .removed(let w):
-            Text(w).font(CDS.sans(12.5)).strikethrough(color: Theme.red.opacity(0.8)).foregroundStyle(Theme.red.opacity(0.85))
-                .padding(.horizontal, 1).background(RoundedRectangle(cornerRadius: 3).fill(Theme.red.opacity(0.10)))
-        case .added(let w):
-            Text(w).font(CDS.sans(12.5, .medium)).foregroundStyle(Theme.green)
-                .padding(.horizontal, 1).background(RoundedRectangle(cornerRadius: 3).fill(Theme.green.opacity(0.14)))
+    /// A paragraph's change as a code review shows a file's: its name on a bar, then its lines.
+    private func diff(_ change: RouterDigest.Revision.Change) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(title(change.key)).font(CDS.mono(10.5, .medium)).foregroundStyle(CDS.Text.muted)
+                .padding(.horizontal, 8).frame(height: 22).frame(maxWidth: .infinity, alignment: .leading)
+                .background(CDS.alpha(0.04))
+            Rectangle().fill(CDS.border).frame(height: CDS.hairline)
+            ForEach(Array(DigestDiff.lines(change.before, change.after).enumerated()), id: \.offset) { _, line in
+                row(line)
+            }
         }
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(CDS.border, lineWidth: 1))
+    }
+
+    @ViewBuilder private func row(_ line: DigestDiff.Line) -> some View {
+        switch line {
+        case .fold:
+            Text("⋯").font(CDS.mono(10.5)).foregroundStyle(CDS.Text.muted)
+                .padding(.horizontal, 8).frame(height: 16).frame(maxWidth: .infinity, alignment: .leading)
+                .background(CDS.alpha(0.02))
+        case .same(let text):
+            diffLine("", text, AttributedString(text), ink: CDS.Text.muted, ground: .clear)
+        case .removed(let text, let changed):
+            diffLine("−", text, marked(text, changed, Theme.red), ink: CDS.Text.secondary, ground: Theme.red.opacity(0.09))
+        case .added(let text, let changed):
+            diffLine("+", text, marked(text, changed, Theme.green), ink: CDS.Text.primary, ground: Theme.green.opacity(0.10))
+        }
+    }
+
+    private func diffLine(_ sign: String, _ text: String, _ styled: AttributedString, ink: Color, ground: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(sign).font(CDS.mono(11, .medium)).foregroundStyle(ink.opacity(0.7)).frame(width: 8)
+            Text(styled).font(CDS.sans(11.5)).foregroundStyle(ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 2.5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ground)
+    }
+
+    /// The sentence with the words that changed in it on a stronger ground of the line's colour.
+    private func marked(_ text: String, _ ranges: [Range<String.Index>], _ tint: Color) -> AttributedString {
+        var out = AttributedString(text)
+        for range in ranges {
+            guard let lower = AttributedString.Index(range.lowerBound, within: out),
+                  let upper = AttributedString.Index(range.upperBound, within: out) else { continue }
+            out[lower..<upper].backgroundColor = tint.opacity(0.28)
+        }
+        return out
     }
 
     /// Who set it off: the session's own icon, or you.
     @ViewBuilder private func trigger(_ trigger: RouterDigest.Revision.Trigger) -> some View {
         switch trigger {
         case .session(let id):
-            SessionMark(store: store, session: id, size: 22)
+            SessionMark(store: store, session: id, size: 15)
         case .you:
-            Image(systemName: "person.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(CDS.Text.accent)
-                .frame(width: 23, height: 23)
+            Image(systemName: "person.fill").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(CDS.Text.accent)
+                .frame(width: 16, height: 16)
                 .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(CDS.Text.accent.opacity(0.14)))
         }
     }
 
     private func source(_ trigger: RouterDigest.Revision.Trigger) -> String {
         switch trigger {
-        case .session(let id): store.claudeSessions[id]?.title ?? "A session"
-        case .you(let said): "You: “\(said)”"
+        case .session(let id): "From “\(store.claudeSessions[id]?.title ?? "a session")”"
+        case .you(let said): "You said “\(said)”"
         }
     }
 
