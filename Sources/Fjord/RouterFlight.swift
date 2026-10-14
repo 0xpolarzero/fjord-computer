@@ -115,7 +115,10 @@ struct FlightFramesKey: PreferenceKey {
             } else if !running, !asking, entry.outcome != .pending {
                 if let why = Self.failure(entry) {
                     let stopped = why.hasPrefix("Stopped")
-                    set(pill.id, .failed(stopped ? "Stopped · nothing was sent" : why, retry: !stopped))
+                    let relay = store.router.guestRelayDeliveries.last { $0.decisionID == pill.id }
+                    let canRetry = relay.map { ($0.state == .inFlight || $0.state == .unconfirmed) && $0.signedPayload != nil
+                        && $0.hostSessionID != nil } ?? true
+                    set(pill.id, .failed(stopped ? "Stopped · nothing was sent" : why, retry: !stopped && canRetry))
                     if stopped { Task { try? await Task.sleep(for: .seconds(2.4)); self.leave(pill.id, store: store) } }
                 } else {
                     // Dismissed, or nothing to show for it.
@@ -139,6 +142,13 @@ struct FlightFramesKey: PreferenceKey {
     /// Sends a failed pill's words again, as a new message of yours.
     func retry(_ id: UUID, store: Store) {
         guard let pill = pills.first(where: { $0.id == id }) else { return }
+        if let relay = store.router.guestRelayDeliveries.last(where: { $0.decisionID == id }) {
+            guard (relay.state == .inFlight || relay.state == .unconfirmed), relay.signedPayload != nil,
+                  relay.hostSessionID != nil else { return }
+            set(id, .pending)
+            store.routerDispatcher.retryGuestDelivery(relay)
+            return
+        }
         var context = RouterContext()
         context.flies = true
         drop(id, store: store)

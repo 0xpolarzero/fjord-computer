@@ -8,15 +8,25 @@ struct GuestRelayRecord: Codable, Equatable, Identifiable, Sendable {
     var nonce: String
     var createdAt: Date
     var state: State
+    /// The one signed payload admitted, reused verbatim for retries so a retry cannot become a new task.
+    var signedPayload: String?
+    var body: String?
+    var decisionID: UUID?
+    var hostSessionID: String?
 
     init(id: UUID = UUID(), location: SessionLocation, sessionID: String, nonce: String,
-         createdAt: Date = Date(), state: State = .inFlight) {
+         createdAt: Date = Date(), state: State = .inFlight, signedPayload: String? = nil, body: String? = nil,
+         decisionID: UUID? = nil, hostSessionID: String? = nil) {
         self.id = id
         self.location = location
         self.sessionID = sessionID
         self.nonce = nonce
         self.createdAt = createdAt
         self.state = state
+        self.signedPayload = signedPayload
+        self.body = body
+        self.decisionID = decisionID
+        self.hostSessionID = hostSessionID
     }
 }
 
@@ -44,7 +54,8 @@ struct GuestRelayInbox: Sendable {
     var onState: @MainActor @Sendable (GuestRelayRecord) async -> Void = { _ in }
 
     func deliver(_ signedText: String, to sessionID: String, computer: GuestReference,
-                 now: Date = Date(), gate: (@MainActor @Sendable () -> String?)? = nil) async throws -> String {
+                 now: Date = Date(), decisionID: UUID? = nil, hostSessionID: String? = nil,
+                 body: String? = nil, gate: (@MainActor @Sendable () -> String?)? = nil) async throws -> String {
         guard let header = RelayInbox.header(of: signedText), header.target == sessionID,
               Self.safeSegment(sessionID), Self.safeSegment(header.nonce) else { throw Failure.invalidMessage }
         let account = try await client.account(for: computer)
@@ -53,32 +64,55 @@ struct GuestRelayInbox: Sendable {
         let messagePath = GuestRouterPaths.join(sessionFolder, "\(header.nonce).msg")
         let ackPath = GuestRouterPaths.join(sessionFolder, "\(header.nonce).ack")
         let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
-        var receipt = GuestRelayRecord(location: location, sessionID: sessionID, nonce: header.nonce, createdAt: now)
+        var receipt = GuestRelayRecord(location: location, sessionID: sessionID, nonce: header.nonce, createdAt: now,
+            signedPayload: signedText, body: body, decisionID: decisionID, hostSessionID: hostSessionID)
         await onState(receipt)
 
         let watch = try await client.filesWatch(computer: computer, paths: [sessionFolder])
-        if let gate, let refusal = await MainActor.run(body: gate) { throw Failure.refused(refusal) }
-        let message = GuestFileWriteRequest(computer: computer, path: messagePath, data: Data(signedText.utf8), mode: 0o600,
-                                            createParents: true, replace: .never)
-        do { _ = try await client.filesWrite(message) }
-        catch GuestClientFailure.exists { receipt.state = .unconfirmed; await onState(receipt); throw Failure.duplicateNonce(header.nonce) }
-
-        if let ack = try await readAck(ackPath, computer: computer) {
-            return try await finish(ack, computer: computer, messagePath: messagePath, ackPath: ackPath, receipt: receipt)
-        }
         do {
+            if let gate, let refusal = await MainActor.run(body: gate) {
+                receipt.state = .refused
+                await onState(receipt)
+                throw Failure.refused(refusal)
+            }
+            if let ack = try await readAck(ackPath, computer: computer) {
+                return try await finish(ack, computer: computer, messagePath: messagePath, ackPath: ackPath, receipt: receipt)
+            }
+            if try await messageExists(messagePath, payload: signedText, computer: computer) == false {
+                let message = GuestFileWriteRequest(computer: computer, path: messagePath, data: Data(signedText.utf8), mode: 0o600,
+                                                    createParents: true, replace: .never)
+                do { _ = try await client.filesWrite(message) }
+                catch GuestClientFailure.exists(_) {
+                    guard try await messageExists(messagePath, payload: signedText, computer: computer) else {
+                        throw Failure.duplicateNonce(header.nonce)
+                    }
+                }
+            }
+            if let ack = try await readAck(ackPath, computer: computer) {
+                return try await finish(ack, computer: computer, messagePath: messagePath, ackPath: ackPath, receipt: receipt)
+            }
             let ack = try await waitForAck(watch: watch, path: ackPath, computer: computer)
             return try await finish(ack, computer: computer, messagePath: messagePath, ackPath: ackPath, receipt: receipt)
         } catch is CancellationError {
-            _ = try? await client.filesRemove(computer: computer, paths: [messagePath])
             receipt.state = .unconfirmed
             await onState(receipt)
             throw CancellationError()
         } catch is GuestRelayTimeout {
-            _ = try? await client.filesRemove(computer: computer, paths: [messagePath])
-            if let late = try await readAck(ackPath, computer: computer) {
+            if let late = try? await readAck(ackPath, computer: computer) {
                 return try await finish(late, computer: computer, messagePath: messagePath, ackPath: ackPath, receipt: receipt)
             }
+            receipt.state = .unconfirmed
+            await onState(receipt)
+            throw Failure.deliveryUnconfirmed(header.nonce)
+        } catch let failure as Failure {
+            if case .refused = failure {
+                if receipt.state != .refused { receipt.state = .refused; await onState(receipt) }
+                throw failure
+            }
+            receipt.state = .unconfirmed
+            await onState(receipt)
+            throw failure
+        } catch {
             receipt.state = .unconfirmed
             await onState(receipt)
             throw Failure.deliveryUnconfirmed(header.nonce)
@@ -124,6 +158,16 @@ struct GuestRelayInbox: Sendable {
         catch GuestClientFailure.notFound(_) { return nil }
         guard let value = String(data: read.data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value
+    }
+
+    private func messageExists(_ path: String, payload: String, computer: GuestReference) async throws -> Bool {
+        let read: GuestFileReadResult
+        do { read = try await client.filesRead(computer: computer, path: path, offset: nil, length: nil) }
+        catch GuestClientFailure.notFound(_) { return false }
+        guard read.data == Data(payload.utf8) else {
+            throw Failure.duplicateNonce(RelayInbox.header(of: payload)?.nonce ?? "unknown")
+        }
+        return true
     }
 
     private func finish(_ ack: String, computer: GuestReference, messagePath: String, ackPath: String,

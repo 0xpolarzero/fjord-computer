@@ -136,13 +136,35 @@ import Foundation
     }
 
     func deliver(_ signedText: String, to cliSessionID: String, computer: GuestReference,
+                 decisionID: UUID? = nil, hostSessionID: String? = nil, body: String? = nil,
                  gate: (@MainActor @Sendable () -> String?)? = nil) async throws -> String {
         guard let store, let client = clients[computer.key] else { throw GuestClientFailure.notRunning(computer.key) }
         let callback: @MainActor @Sendable (GuestRelayRecord) async -> Void = { [weak store] record in
             store?.saveGuestRelayState(record)
         }
         return try await GuestRelayInbox(client: client, onState: callback)
-            .deliver(signedText, to: cliSessionID, computer: computer, gate: gate)
+            .deliver(signedText, to: cliSessionID, computer: computer, decisionID: decisionID,
+                     hostSessionID: hostSessionID, body: body, gate: gate)
+    }
+
+    /// Reconciles the exact signed payload saved before its first guest inbox write.
+    func retry(_ record: GuestRelayRecord) async throws -> String {
+        guard record.state == .inFlight || record.state == .unconfirmed,
+              let signedPayload = record.signedPayload,
+              case .computer(let deviceId, let computerId) = record.location,
+              let store, let client = clients[GuestReference(deviceId: deviceId, computerId: computerId).key] else {
+            throw GuestClientFailure.unavailable("This guest delivery has no retryable payload or connected client")
+        }
+        let computer = GuestReference(deviceId: deviceId, computerId: computerId)
+        let callback: @MainActor @Sendable (GuestRelayRecord) async -> Void = { [weak store] updated in
+            store?.saveGuestRelayState(updated)
+        }
+        let gate: @MainActor @Sendable () -> String? = { [weak store] in
+            store?.routerOn == true ? nil : "The Router is off"
+        }
+        return try await GuestRelayInbox(client: client, onState: callback)
+            .deliver(signedPayload, to: record.sessionID, computer: computer, now: record.createdAt,
+                     decisionID: record.decisionID, hostSessionID: record.hostSessionID, body: record.body, gate: gate)
     }
 
     func location(for desktopSessionID: String) -> SessionLocation? {

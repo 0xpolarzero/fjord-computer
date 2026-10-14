@@ -149,6 +149,8 @@ actor MockGuestClient: GuestClient {
     private var recordedExecs: [GuestExecRequest] = []
     private var operationLog: [String] = []
     private var execResults: [String: GuestExecResult] = [:]
+    private var readFailures: [String: [GuestClientFailure]] = [:]
+    private var postAdmissionWriteFailures: [String: GuestClientFailure] = [:]
     var execResult = GuestExecResult(exitCode: 0, stdout: Data("v20.11.0\n".utf8), stderr: Data())
 
     init(accounts: [GuestReference: GuestAccount] = [:]) {
@@ -168,6 +170,11 @@ actor MockGuestClient: GuestClient {
         let path = try Self.absolute(path)
         operationLog.append("read:\(path)")
         let key = Self.fileKey(computer, path)
+        if var failures = readFailures[key], !failures.isEmpty {
+            let failure = failures.removeFirst()
+            readFailures[key] = failures
+            throw failure
+        }
         guard let file = files[key] else { throw GuestClientFailure.notFound(path) }
         let start = max(0, min(Int64(file.data.count), offset ?? 0))
         let end = min(Int64(file.data.count), start + Int64(max(0, length ?? file.data.count)))
@@ -214,6 +221,7 @@ actor MockGuestClient: GuestClient {
         if existing == nil { nextInode += 1 }
         files[key] = File(data: request.data, mode: request.mode, mtimeMs: nextTime, inode: inode)
         publish(computer: request.computer, path: path)
+        if let failure = postAdmissionWriteFailures.removeValue(forKey: key) { throw failure }
         return GuestFileWriteResult(size: Int64(request.data.count), mtimeMs: nextTime, inode: inode)
     }
 
@@ -262,6 +270,14 @@ actor MockGuestClient: GuestClient {
 
     func setExecResult(_ result: GuestExecResult, argv: [String]) {
         execResults[argv.joined(separator: "\u{1f}")] = result
+    }
+
+    func failNextRead(computer: GuestReference, path: String, with failure: GuestClientFailure) {
+        readFailures[Self.fileKey(computer, path), default: []].append(failure)
+    }
+
+    func failNextWriteAfterAdmission(computer: GuestReference, path: String, with failure: GuestClientFailure) {
+        postAdmissionWriteFailures[Self.fileKey(computer, path)] = failure
     }
 
     func writeRecords() -> [GuestFileWriteRequest] { recordedWrites }

@@ -267,7 +267,8 @@ enum RouterSender {
     /// Returns the plugin's ack when it went through the inbox (what it applied of the message's settings), else nil.
     @MainActor @discardableResult
     static func send(binary: String, cwd: URL, to: String, text: String, tools: RouterTools, timeout: TimeInterval = 45,
-                     inbox: RelayInbox? = nil) async throws -> String? {
+                     inbox: RelayInbox? = nil, decisionID: UUID? = nil, hostSessionID: String? = nil,
+                     body: String? = nil) async throws -> String? {
         if let ready = tools.prepared[to], let location = ready.guestLocation {
             guard case .computer(let deviceId, let computerId) = location,
                   let target = RelayInbox.header(of: text)?.target else {
@@ -285,7 +286,8 @@ enum RouterSender {
             }
             do {
                 return try await GuestRouterRuntime.shared.deliver(text, to: target,
-                    computer: GuestReference(deviceId: deviceId, computerId: computerId), gate: gate)
+                    computer: GuestReference(deviceId: deviceId, computerId: computerId), decisionID: decisionID,
+                    hostSessionID: hostSessionID, body: body ?? ready.body ?? ready.text, gate: gate)
             } catch is CancellationError {
                 tools.prepared[to] = ready
                 throw CancellationError()

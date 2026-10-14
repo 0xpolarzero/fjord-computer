@@ -7,7 +7,7 @@ private actor GuestRelayStateRecorder {
     func append(_ value: GuestRelayRecord) { values.append(value) }
 }
 
-@Suite struct GuestRouterTests {
+@Suite(.serialized) struct GuestRouterTests {
     private let computer = GuestReference(deviceId: "owner-1", computerId: "computer-1")
     private var localComputer: GuestReference { GuestReference(deviceId: nil, computerId: computer.computerId) }
     private var account: GuestAccount {
@@ -439,6 +439,132 @@ private actor GuestRelayStateRecorder {
         #expect(saved.first?.state == .inFlight)
         #expect(saved.last?.state == .delivered)
         #expect(saved.allSatisfy { $0.nonce == nonceText })
+    }
+
+    @Test func guestRelayRetryReconcilesTheOriginalNonceAfterAdmissionReplyIsLost() async throws {
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let cli = "cli-retry-1"
+        let nonce = UUID(uuidString: "89abcdef-0123-4567-89ab-cdef01234567")!
+        let nonceText = nonce.uuidString.lowercased()
+        let folder = GuestRouterPaths.join(paths.inbox, cli)
+        let messagePath = GuestRouterPaths.join(folder, "\(nonceText).msg")
+        let ackPath = GuestRouterPaths.join(folder, "\(nonceText).ack")
+        let key = String(repeating: "ef", count: 32)
+        let decisionID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let signed = RelaySigner.sign(body: "Run the checks", target: cli, key: key, nonce: nonce,
+                                     now: createdAt)
+        let states = GuestRelayStateRecorder()
+        await guest.failNextWriteAfterAdmission(computer: computer, path: messagePath,
+                                                with: .unavailable("reply lost after admission"))
+
+        do {
+            _ = try await GuestRelayInbox(client: guest, onState: { await states.append($0) })
+                .deliver(signed, to: cli, computer: computer, now: createdAt, decisionID: decisionID,
+                         hostSessionID: "local_desktop-1", body: "Run the checks")
+            Issue.record("a lost admission reply was reported as a confirmed delivery")
+        } catch {
+            #expect(error as? GuestRelayInbox.Failure == .deliveryUnconfirmed(nonceText))
+        }
+        #expect(await guest.filesSnapshot(for: computer)[messagePath] == Data(signed.utf8))
+        #expect(await states.values.last?.state == .unconfirmed)
+        #expect(await states.values.last?.signedPayload == signed)
+        #expect(await states.values.last?.decisionID == decisionID)
+        #expect(await states.values.last?.hostSessionID == "local_desktop-1")
+        #expect(await states.values.last?.body == "Run the checks")
+
+        try await guest.filesWrite(.init(computer: computer, path: ackPath, data: Data("ok".utf8), mode: 0o600))
+        do {
+            let acknowledgement = try await GuestRelayInbox(client: guest, onState: { await states.append($0) })
+                .deliver(signed, to: cli, computer: computer, now: createdAt, decisionID: decisionID,
+                         hostSessionID: "local_desktop-1", body: "Run the checks")
+            #expect(acknowledgement == "ok")
+        } catch {
+            Issue.record("retry didn't reconcile the original nonce: \(error.localizedDescription)")
+        }
+
+        #expect(await guest.writeRecords().filter { $0.path == messagePath }.count == 1)
+        #expect(await states.values.last?.nonce == nonceText)
+        #expect(await states.values.last?.state == .delivered)
+    }
+
+    @Test func guestRelayAckReadFailureRetainsTheAdmittedPayloadForRetry() async throws {
+        let guest = client()
+        let paths = try GuestRouterPaths(home: account.home)
+        let cli = "cli-ack-read"
+        let nonce = UUID(uuidString: "fedcba98-7654-3210-fedc-ba9876543210")!
+        let nonceText = nonce.uuidString.lowercased()
+        let folder = GuestRouterPaths.join(paths.inbox, cli)
+        let messagePath = GuestRouterPaths.join(folder, "\(nonceText).msg")
+        let ackPath = GuestRouterPaths.join(folder, "\(nonceText).ack")
+        let signed = RelaySigner.sign(body: "Run once", target: cli, key: String(repeating: "12", count: 32), nonce: nonce,
+                                      now: Date(timeIntervalSince1970: 1_800_000_000))
+        let states = GuestRelayStateRecorder()
+        await guest.failNextRead(computer: computer, path: ackPath, with: .notFound(ackPath))
+        await guest.failNextRead(computer: computer, path: ackPath, with: .unavailable("ack read reply lost"))
+
+        do {
+            _ = try await GuestRelayInbox(client: guest, onState: { await states.append($0) })
+                .deliver(signed, to: cli, computer: computer)
+            Issue.record("an acknowledgement read failure was reported as a confirmed delivery")
+        } catch {
+            #expect(error as? GuestRelayInbox.Failure == .deliveryUnconfirmed(nonceText))
+        }
+
+        #expect(await states.values.last?.state == .unconfirmed)
+        #expect(await states.values.last?.signedPayload == signed)
+        #expect(await guest.filesSnapshot(for: computer)[messagePath] == Data(signed.utf8))
+        try await guest.filesWrite(.init(computer: computer, path: ackPath, data: Data("ok".utf8), mode: 0o600))
+        #expect(try await GuestRelayInbox(client: guest).deliver(signed, to: cli, computer: computer) == "ok")
+        #expect(await guest.writeRecords().filter { $0.path == messagePath }.count == 1)
+    }
+
+    @MainActor @Test func dispatcherGuestRetryCompletesTheOriginalDecisionWithoutASecondWrite() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        store.router.enabled = true
+        store.agents.enabled = true
+        let guest = client()
+        try await GuestRouterRuntime.shared.startWatching(store: store, client: guest, computer: computer)
+
+        let paths = try GuestRouterPaths(home: account.home)
+        let cli = "cli-retry-dispatch"
+        let nonce = "0123456789abcdef0123456789abcdef"
+        let folder = GuestRouterPaths.join(paths.inbox, cli)
+        let messagePath = GuestRouterPaths.join(folder, "\(nonce).msg")
+        let ackPath = GuestRouterPaths.join(folder, "\(nonce).ack")
+        let signed = "⟦fjord v1 \(cli) \(nonce) 1800000000000 \(String(repeating: "a", count: 64))⟧\nRun the checks"
+        try await guest.filesWrite(.init(computer: computer, path: messagePath, data: Data(signed.utf8), mode: 0o600))
+        try await guest.filesWrite(.init(computer: computer, path: ackPath, data: Data("ok".utf8), mode: 0o600))
+
+        let decisionID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_800_000_000)
+        var entry = RouterDecision(id: decisionID, at: createdAt, trigger: .you("Run the checks"))
+        entry.add(.failed("delivery is unconfirmed"))
+        entry.outcome = .done
+        store.router.decisions = [entry]
+        let receipt = GuestRelayRecord(location: .computer(deviceId: computer.deviceId, computerId: computer.computerId),
+            sessionID: cli, nonce: nonce, createdAt: createdAt, state: .unconfirmed, signedPayload: signed,
+            body: "Run the checks", decisionID: decisionID, hostSessionID: "local_desktop-1")
+        store.saveGuestRelayState(receipt)
+        let countBeforeRetry = store.router.decisions.count
+
+        store.routerDispatcher.retryGuestDelivery(receipt)
+        await waitUntil {
+            store.router.decisions.first(where: { $0.id == decisionID })?.done.contains {
+                if case .sent = $0 { true } else { false }
+            } == true
+        }
+
+        let recovered = try #require(store.router.decisions.first(where: { $0.id == decisionID }))
+        let savedReceipt = try #require(store.router.guestRelayDeliveries.first)
+        #expect(store.router.decisions.count == countBeforeRetry)
+        #expect(recovered.doneLines == ["sent to local_desktop-1: Run the checks"])
+        #expect(recovered.delivered?.nonce == nonce)
+        #expect(savedReceipt.state == .delivered)
+        #expect(await guest.writeRecords().filter { $0.path == messagePath }.count == 1)
     }
 
     @Test func RouterStatePersistsGuestFormsAndRelayReceipts() throws {
