@@ -308,6 +308,21 @@ final class ComputersModel {
         }
     }
 
+    func cancelJob(_ jobId: String) async {
+        actionError = nil
+        do {
+            try await client.operationsCancel(jobId: jobId, deviceId: nil)
+            let revision = stateRevision
+            let latest = try await client.operationsList(deviceId: nil)
+            if stateRevision == revision {
+                operationQueue = latest
+                stateRevision &+= 1
+            }
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
     private func receive(_ delivery: EngineEventDelivery, stream: UUID) {
         guard wantsConnection, eventStreamID == stream else { return }
         switch delivery {
@@ -362,6 +377,10 @@ final class ComputersModel {
     private func recordFinished(_ result: OperationJobFinished) {
         finishedJobs[result.jobId] = result
         if activeJob?.jobId == result.jobId { activeJob = nil }
+        if result.error?.code == "cancelled" {
+            jobAwaitingAcknowledgement = result.jobId
+            return
+        }
         if let action = jobActions[result.jobId] {
             presentJobOutcome(result, action: action)
         } else if let failure = result.error {

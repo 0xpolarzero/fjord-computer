@@ -704,6 +704,7 @@ protocol EngineClient {
     func displayShow(_ reference: ComputerReference) async throws
     func operationsList(deviceId: String?) async throws -> OperationsList
     func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot
+    func operationsCancel(jobId: String, deviceId: String?) async throws
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String
     func eventsUnsubscribe(subscription: String) async
     func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws
@@ -730,6 +731,7 @@ final class UnavailableEngineClient: EngineClient {
     func displayShow(_ reference: ComputerReference) async throws { try unavailable() }
     func operationsList(deviceId: String?) async throws -> OperationsList { try unavailable() }
     func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot { try unavailable() }
+    func operationsCancel(jobId: String, deviceId: String?) async throws { try unavailable() }
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String { try unavailable() }
     func eventsUnsubscribe(subscription: String) async {}
     func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws { try unavailable() }
@@ -806,6 +808,7 @@ final class MockEngineClient: EngineClient {
     private(set) var computersListCallCount = 0
     private(set) var operationsListCallCount = 0
     private(set) var jobGetCallCount = 0
+    private(set) var cancelRequests: [String] = []
     var suspendNextSubscription = false
     private var subscriptionContinuation: CheckedContinuation<Void, Never>?
     private var subscriptionWaiters: [CheckedContinuation<Void, Never>] = []
@@ -1108,6 +1111,24 @@ final class MockEngineClient: EngineClient {
         return OperationJobSnapshot(jobId: jobId, state: waiting ? .waiting : .running)
     }
 
+    func operationsCancel(jobId: String, deviceId: String? = nil) async throws {
+        cancelRequests.append(jobId)
+        if let index = operationQueue.waiting.firstIndex(where: { $0.jobId == jobId }) {
+            operationQueue.waiting.remove(at: index)
+        } else if let index = operationQueue.running.firstIndex(where: { $0.jobId == jobId }) {
+            guard operationQueue.running[index].cancellable else {
+                throw EngineClientError.invalidAction("This operation can't be cancelled.")
+            }
+            operationQueue.running.remove(at: index)
+        } else {
+            throw EngineClientError.notFound("This operation is no longer queued.")
+        }
+        let result = OperationJobFinished(jobId: jobId, error: OperationJobError(code: "cancelled", message: "Cancelled."))
+        finished[jobId] = result
+        publish(.operationsQueueChanged(operationQueue))
+        publish(.jobFinished(result))
+    }
+
     func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String {
         subscribeCallCount += 1
         if suspendNextSubscription {
@@ -1152,6 +1173,11 @@ final class MockEngineClient: EngineClient {
         if !operationQueue.unacknowledgedJobIds.contains(outcome.jobId) {
             operationQueue.unacknowledgedJobIds.append(outcome.jobId)
         }
+    }
+
+    func publishOperationQueueChange(_ queue: OperationsList) {
+        operationQueue = queue
+        publish(.operationsQueueChanged(queue))
     }
 
     func waitForSuspendedComputersList() async {

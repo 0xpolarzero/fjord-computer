@@ -69,6 +69,14 @@ enum AppWindowShots {
         Shot(name: "computers", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
         }),
+        Shot(name: "computer-queue", destination: { _ in .computers }, prepare: { store in
+            store.setTool(.computers, on: true)
+            let entry = OperationQueueEntry(id: 42, jobId: "job:queued-macos", label: "Create macOS computer",
+                                            kind: "computerConfiguration", computerId: MockEngineClient.devID,
+                                            computerName: "dev", sinceMs: 1, cancellable: true, blockedByHidden: false)
+            (store.engineClient as? MockEngineClient)?.operationQueue = OperationsList(running: [], waiting: [entry],
+                                                                                       unacknowledgedJobIds: [])
+        }),
         Shot(name: "computer-detail", destination: { _ in .computerDetail(MockEngineClient.devID) }, prepare: { store in
             store.setTool(.computers, on: true)
         }),

@@ -160,6 +160,27 @@ import Testing
         #expect(model.jobAwaitingAcknowledgement != nil)
     }
 
+    @Test func waitingQueueEntryRendersWithoutProgressAndCanBeCancelled() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+        let entry = OperationQueueEntry(id: 42, jobId: "job:queued-macos", label: "Create macOS computer",
+                                        kind: "computerConfiguration", computerId: MockEngineClient.devID,
+                                        computerName: "dev", sinceMs: 1, cancellable: true, blockedByHidden: false)
+        let queue = OperationsList(running: [], waiting: [entry], unacknowledgedJobIds: [])
+
+        client.publishOperationQueueChange(queue)
+
+        #expect(model.operationQueue.waiting == [entry])
+        #expect(model.activeJob?.jobId != entry.jobId)
+        await model.cancelJob("job:queued-macos")
+
+        #expect(client.cancelRequests == ["job:queued-macos"])
+        #expect(model.operationQueue.waiting.isEmpty)
+        #expect(model.actionError == nil)
+        #expect(model.finishedJobs["job:queued-macos"]?.error?.code == "cancelled")
+    }
+
     @Test func completedCheckpointJobsApplyDelayedCheckpointEvents() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)

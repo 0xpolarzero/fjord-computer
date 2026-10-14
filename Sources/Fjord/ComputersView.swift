@@ -31,6 +31,7 @@ struct ComputersView: View {
                         ComputerNotice(text: error, tone: .danger)
                     }
                     if let error = model.actionError { ComputerNotice(text: error, tone: .danger) }
+                    ComputerOperationQueue(model: model)
                     if let job = model.activeJob { ComputerJobCard(job: job, inventory: model.inventory) }
                     if model.isLoading && model.inventory == nil {
                         ProgressView().frame(maxWidth: .infinity).padding(.vertical, 44)
@@ -87,6 +88,7 @@ struct ComputerDetailView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     if let row {
                         ComputerOverview(row: row, model: model)
+                        ComputerOperationQueue(model: model, computerId: row.id)
                         if let job = model.activeJob, job.computerId == row.id {
                             ComputerJobCard(job: job, inventory: model.inventory)
                         }
@@ -296,6 +298,66 @@ private struct ComputerJobCard: View {
                 Text(subject).font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
             }
         }
+    }
+}
+
+private struct ComputerOperationQueue: View {
+    let model: ComputersModel
+    var computerId: String? = nil
+
+    private var running: [OperationQueueEntry] {
+        entries(model.operationQueue.running)
+    }
+
+    private var waiting: [OperationQueueEntry] {
+        entries(model.operationQueue.waiting)
+    }
+
+    var body: some View {
+        if !running.isEmpty || !waiting.isEmpty {
+            ComputerPanel(title: "Operation queue") {
+                VStack(spacing: 0) {
+                    ForEach(running) { entry in
+                        ComputerOperationQueueRow(entry: entry, status: "Running", model: model)
+                        if entry.id != running.last?.id || !waiting.isEmpty { SettingsDivider() }
+                    }
+                    ForEach(waiting) { entry in
+                        ComputerOperationQueueRow(entry: entry, status: "Waiting…", model: model)
+                        if entry.id != waiting.last?.id { SettingsDivider() }
+                    }
+                }
+            }
+        }
+    }
+
+    private func entries(_ entries: [OperationQueueEntry]) -> [OperationQueueEntry] {
+        guard let computerId else { return entries }
+        return entries.filter { $0.computerId == nil || $0.computerId == computerId }
+    }
+}
+
+private struct ComputerOperationQueueRow: View {
+    let entry: OperationQueueEntry
+    let status: String
+    let model: ComputersModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.label).font(CDS.sans(12, .medium)).foregroundStyle(CDS.Text.primary)
+                Text(entry.computerName ?? entry.computerId ?? entry.kind)
+                    .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
+            }
+            Spacer(minLength: 8)
+            Text(status).font(CDS.sans(11)).foregroundStyle(status == "Waiting…" ? CDS.Text.warning : CDS.Text.muted)
+            if entry.cancellable, let jobId = entry.jobId {
+                Button("Cancel") { Task { await model.cancelJob(jobId) } }
+                    .buttonStyle(.plain)
+                    .font(CDS.sans(11, .medium))
+                    .foregroundStyle(CDS.Text.accent)
+            }
+        }
+        .padding(.vertical, 10)
     }
 }
 
