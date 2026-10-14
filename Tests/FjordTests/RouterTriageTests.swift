@@ -134,7 +134,9 @@ import Testing
         #expect(balanced(CardJudge.content(card, form: nil)))
         let subject = RouterSummaryContext.Subject(id: "a", name: "p", title: "T", label: hostile, narration: nil, running: [], quiet: 0)
         let context = RouterSummaryContext.build(subject, previous: nil, steps: [], cards: [], decisions: [], now: Date())
-        #expect(context.lowercased().components(separatedBy: "</session-content").count == 2 && context.contains("Done."))
+        // The title and the project are fenced too: three blocks (the title, the project, the live line), each closed once.
+        #expect(context.lowercased().components(separatedBy: "</session-content").count == 4
+                && context.lowercased().components(separatedBy: "<session-content").count == 4 && context.contains("Done."))
     }
 
     @Test func theKindFollowsTheTriageButABlockedSummaryIsNeverMadeCalmer() {

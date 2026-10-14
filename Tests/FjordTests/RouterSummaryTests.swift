@@ -52,7 +52,7 @@ import Testing
         let context = RouterSummaryContext.build(subject(), previous: previous, steps: [.init(at: nil, text: "You: fix it"),
                                                                                           .init(at: nil, text: "Step: Running swift test")],
                                                  cards: cards, decisions: decisions, now: now)
-        #expect(context.contains("Notifications (project lookout)"))
+        #expect(context.contains("The session: <session-content untrusted=\"true\">Notifications</session-content> (project <session-content untrusted=\"true\">lookout</session-content>)"))
         #expect(context.contains("It was calm."))
         #expect(context.contains("On now: <session-content untrusted=\"true\">3/7 · tests</session-content>"))
         #expect(context.contains("Wiring the badge.") && context.contains("Review the changes"))
@@ -224,7 +224,7 @@ import Testing
         let row = try #require(store.routerWorkingRows.first)
         let summarizer = RouterSummarizer()
         summarizer.runner = { context in
-            #expect(context.contains("The session: \(row.session.title)"))
+            #expect(context.contains("The session: " + SessionFence.open + row.session.title))
             return "Calm. All quiet."
         }
         summarizer.request(row.id, store: store)

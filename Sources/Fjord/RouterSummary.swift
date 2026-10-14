@@ -136,9 +136,11 @@ enum RouterSummaryContext {
         let since = previous.map { $0.covers ?? $0.at } ?? now.addingTimeInterval(-firstWindow)
         var out: [String] = []
         out.append("Now: \(clock(now)).")
-        out.append("The session: \(subject.title) (project \(subject.name)).")
+        // The title and the project name come from the session (a title is its first words), and the previous summary was made
+        // from session text: all fenced as data like the rest.
+        out.append("The session: \(fence(subject.title, 120)) (project \(fence(subject.name, 120))).")
         if let previous {
-            out.append("Its previous summary (\(clock(previous.at)), \(agoPhrase(previous.at, now: now))): \(previous.text)")
+            out.append("Its previous summary (\(clock(previous.at)), \(agoPhrase(previous.at, now: now))): \(fence(previous.text, 600))")
         } else {
             out.append("There is no previous summary; describe the last hour.")
         }

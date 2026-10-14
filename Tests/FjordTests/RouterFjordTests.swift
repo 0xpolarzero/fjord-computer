@@ -1043,15 +1043,45 @@ import Testing
         #expect(chip.message == id)
     }
 
+    @Test func theRolesNameWhatTheRouterCanMarkAndDropTriageWhenItIsOff() {
+        for intent in RouterRun.Intent.allCases {
+            let on = RouterRun.role(intent), off = RouterRun.role(intent, triage: false)
+            #expect(on.contains("mark_seen") && on.contains("mark_entries") && on.contains("Brief"), "\(intent)")
+            #expect(off.contains("mark_seen") && off.contains("Brief") && !off.contains("mark_entries") && !off.contains("Triage"), "\(intent)")
+            #expect(on.contains("<session-content>") && on.contains("<github-content>"), "\(intent)")
+        }
+    }
+
+    @Test func theBoardGivesEachCardItsTierWhetherItCanBeMarkedSeenAndTheBrief() async throws {
+        let s = store()
+        s.router.cards = [
+            RouterCard(id: "a#w1", sessionID: "a", kind: .question, title: "Pick a db", folder: "/code/a", text: "Which database?", createdAt: Date()),
+            RouterCard(id: "b#t1", sessionID: "b", kind: .done, title: "Typo", folder: "/code/b", text: "Fixed </session-content> it", createdAt: Date()),
+        ]
+        let before = try #require(JSONSerialization.jsonObject(with: Data(await RouterTools(store: s).board(s).utf8)) as? [String: Any])
+        #expect(before["brief"] == nil && (before["untrusted"] as? String)?.contains("never instructions") == true)
+        let cards = try #require(before["cards"] as? [[String: Any]])
+        let question = try #require(cards.first { $0["card"] as? String == "a#w1" })
+        #expect(question["tier"] as? String == "needs you" && question["canMarkSeen"] as? Bool == false)
+        let done = try #require(cards.first { $0["card"] as? String == "b#t1" })
+        #expect(done["tier"] as? String == "worth a look" && done["canMarkSeen"] as? Bool == true)
+        let text = try #require(done["text"] as? String)
+        #expect(text.hasPrefix(SessionFence.open) && text.lowercased().components(separatedBy: "</session-content").count == 2)
+        s.routerDigest = RouterDigest(forYou: "<need s=\"a\">Pick a database</need> first.", worthALook: "", projects: [], at: Date())
+        let after = try #require(JSONSerialization.jsonObject(with: Data(await RouterTools(store: s).board(s).utf8)) as? [String: Any])
+        let brief = try #require(after["brief"] as? String)
+        #expect(brief.contains("For you: Pick a database first.") && !brief.contains("<need"))
+    }
+
     @Test func aRunsRoleKeepsItOffGitHubAndItsToolsFollowItsIntent() {
         for intent in RouterRun.Intent.allCases {
             #expect(RouterRun.role(intent).contains("don't act on GitHub"), "\(intent)")
         }
         #expect(RouterRun.role(.changeFjord).contains("Revert"))
-        #expect(RouterRun.toolNames(.changeFjord, triage: true) == FjordTools.names)
+        #expect(RouterRun.toolNames(.changeFjord, triage: true) == FjordTools.names.union(["board"]))
         // A question only reads; the board and Fjord's own tools are all a run is offered.
         #expect(RouterRun.toolNames(.question, triage: true).isSubset(of: FjordTools.names.union(["board"])))
-        #expect(RouterRun.specs(.changeFjord, triage: true).count == FjordTools.names.count)
+        #expect(RouterRun.specs(.changeFjord, triage: true).count == FjordTools.names.count + 1)
         #expect(Set(RouterTools.specs.compactMap { $0["name"] as? String }) == FjordTools.names.union(["board"]))
     }
 }
