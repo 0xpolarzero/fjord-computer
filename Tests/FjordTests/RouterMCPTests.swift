@@ -4,7 +4,7 @@ import Testing
 
 /// The Router's MCP server without a socket: HTTP framing, the JSON-RPC it speaks, and its tools on a store of the test's own.
 @MainActor
-@Suite struct RouterMCP {
+@Suite(.serialized) struct RouterMCP {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
 
     private func json(_ data: Data?) -> Any? { data.flatMap { try? JSONSerialization.jsonObject(with: $0) } }
@@ -162,8 +162,7 @@ import Testing
             "created_at": 1000, "pid": Int(getpid()), "tool_use_id": "toolu_a",
         ] as [String: Any])
         try? pending.write(to: dir.path("support/forms/cli-local_a-1-1.json"))
-        s.formBridge.refresh()
-        await waitUntil { !s.pendingForms.isEmpty }
+        await s.formBridge.refreshAndWait()
         #expect(!s.pendingForms.isEmpty, "the bridge never read the form")
         // A live process for one of them.
         let sessions = dir.path("claude/sessions")
@@ -184,8 +183,10 @@ import Testing
     }
 
     /// Tools in a turn of the user's (side effects need one).
-    private func tools(_ s: Store, turn: String? = "do it") -> RouterTools {
+    private func tools(_ s: Store, turn: String? = "do it", guestRuntime runtime: GuestRouterRuntime? = nil) -> RouterTools {
         let tools = RouterTools(store: s)
+        tools.guestRuntime = runtime ?? GuestRouterRuntime()
+        tools.keyReloadRace = { work in await work() }
         // "@lookout" at the start is the pill the composer put there.
         if let turn { tools.beginTurn(turn, pills: turn.hasPrefix("@lookout") ? [0..<8] : []) }
         return tools
@@ -242,8 +243,9 @@ import Testing
         let account = GuestAccount(home: "/home/guest", uid: 1001, operatingSystem: .linux, architecture: "aarch64",
                                    nodeExecutable: "/usr/bin/node", claudeExecutable: "/home/guest/.local/bin/claude")
         let guest = MockGuestClient(accounts: [computer: account])
-        defer { GuestRouterRuntime.shared.stopAll() }
-        try await GuestRouterRuntime.shared.startWatching(store: store, client: guest, computer: computer)
+        let guestRuntime = GuestRouterRuntime()
+        defer { guestRuntime.stopAll() }
+        try await guestRuntime.startWatching(store: store, client: guest, computer: computer)
 
         let location = SessionLocation.computer(deviceId: computer.deviceId, computerId: computer.computerId)
         let form = PendingForm(id: "guest-form-1", cliSessionID: "cli-guest-a", transcriptPath: "/guest/transcript.jsonl",
@@ -255,7 +257,8 @@ import Testing
             desktopSessionID: "local_a", guestSessionID: "cli-guest-a")]
         store.router.guestPendingForms = [GuestPendingForm(computer: computer, location: location, form: form)]
 
-        let output = try #require(await tools(store).tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
+        let output = try #require(await tools(store, guestRuntime: guestRuntime)
+            .tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]))
         let paths = try GuestRouterPaths(home: account.home)
         let guestAnswer = try await guest.filesRead(computer: computer,
             path: GuestRouterPaths.join(paths.forms, "\(form.id).answer.json"), offset: nil, length: nil)
@@ -314,7 +317,9 @@ import Testing
         await #expect(throws: FormBridge.Failure.self) { try await FormWriter.write(form, answers: [:], dir: forms) }
         // No longer valid when its turn to write comes: nothing written.
         var valid = true
-        let writing = Task { try await FormWriter.write(form, answers: ["Which database?": "SQLite"], dir: forms) { valid } }
+        let writing = Task {
+            try await FormWriter.write(form, answers: ["Which database?": "SQLite"], dir: forms, stillValid: { valid })
+        }
         valid = false
         await #expect(throws: FormWriter.Cancelled.self) { try await writing.value }
         #expect(!FileManager.default.fileExists(atPath: file.path))
@@ -331,11 +336,11 @@ import Testing
         // Stopped while the answer was being written aside: asked as it is about to be put in place, it isn't.
         var seen: [[String]] = []
         await #expect(throws: FormWriter.Cancelled.self) {
-            try await FormWriter.write(form, answers: ["Which database?": "SQLite"], dir: forms) {
+            try await FormWriter.write(form, answers: ["Which database?": "SQLite"], dir: forms, stillValid: {
                 let names = (try? FileManager.default.contentsOfDirectory(atPath: forms.path)) ?? []
                 seen.append(names)
                 return !names.contains { $0.hasSuffix(".tmp") }
-            }
+            })
         }
         #expect(seen.last?.contains { $0.hasSuffix(".tmp") } == true)
         #expect(!FileManager.default.fileExists(atPath: file.path))
@@ -376,9 +381,16 @@ import Testing
         let file = FormBridge.answerURL("cli-local_a-1-1", in: dir.path("support/forms"))
         // The writer is busy: the answer waits behind it.
         let hold = DispatchSemaphore(value: 0)
-        FormWriter.queue.async { hold.wait() }
+        let writerHeld = RouterGate()
+        FormWriter.queue.async {
+            Task { @MainActor in writerHeld.open() }
+            hold.wait()
+        }
+        await writerHeld.wait()
+        let queued = RouterGate()
+        t.formAnswerQueued = { queued.open() }
         let answering = Task { await t.tool("answer_form", ["card": "local_a#w500", "answers": ["db": "SQLite"]]) }
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await queued.wait()
         s.setCardAddressed("local_a#w500", true)
         hold.signal()
         let out = try #require(await answering.value)
@@ -490,7 +502,7 @@ import Testing
         let held = RouterGate()
         t.afterLookup = { await held.wait() }
         let late = Task { await t.tool("prepare", ["session": "local_a"]) }
-        while !held.waiting { await Task.yield() }
+        await held.waitUntilWaiting()
         // The turn ends; the next one prepares the same target.
         t.endTurn()
         t.beginTurn("@lookout tag the release", pills: [0..<8])
@@ -556,7 +568,7 @@ import Testing
         }
         t.beginTurn("start a session in lookout to bump the version")
         let starting = Task { await t.tool("start_session", ["project": "lookout", "title": "Bump"]) }
-        while !held.waiting { await Task.yield() }
+        await held.waitUntilWaiting()
         t.endTurn()
         held.open()
         let out = await starting.value
@@ -683,19 +695,25 @@ import Testing
         let s = await store(dir)
         let t = tools(s, turn: "start a session in lookout to bump the version")
         t.starter = { _, title in SessionStart.Started(sessionID: "local_late", peer: title) }
-        t.pluginWait = 120
-        let presence = dir.path("support/plugin-sessions/late")
-        // Its plugin says it runs a moment after the session appears (on a queue of its own: not Swift's busy pool).
+        let pluginWaiting = RouterGate()
+        let pluginReady = RouterGate()
         let support = dir.path("support"), claude = dir.path("claude")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) {
-            PluginFixture.live(presence.lastPathComponent, support: support, claude: claude)
+        t.pluginReadiness = { _ in
+            pluginWaiting.open()
+            await pluginReady.wait()
+            PluginFixture.live("late", support: support, claude: claude)
+            return true
         }
-        let out = try #require(await t.tool("start_session", ["project": "lookout", "title": "Bump it"]))
+        let starting = Task { await t.tool("start_session", ["project": "lookout", "title": "Bump it"]) }
+        await pluginWaiting.wait()
+        #expect(t.prepared["Bump it"] == nil)
+        pluginReady.open()
+        let out = try #require(await starting.value)
         #expect(!out.isError, "\(out.text)")
         #expect(t.prepared["Bump it"]?.text.hasPrefix("⟦fjord v1 late ") == true)
         // It never comes up: nothing to send, said.
         t.starter = { _, title in SessionStart.Started(sessionID: "local_never", peer: title) }
-        t.pluginWait = 0.5
+        t.pluginReadiness = { _ in false }
         let never = try #require(await t.tool("start_session", ["project": "lookout", "title": "Never"]))
         #expect(never.isError && never.text.contains("plugin didn't come up") && t.prepared["Never"] == nil)
     }
@@ -718,9 +736,11 @@ import Testing
         // Once the app runs it, in a turn of its own: its plugin, then the message signed for it and prepared for its peer.
         let later = tools(s, turn: "start a session in lookout to bump the version")
         later.processWaiter = { id in id == "local_late" ? "Bump it" : "?" }
-        later.pluginWait = 120
         let support = dir.path("support"), claude = dir.path("claude")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { PluginFixture.live("late", support: support, claude: claude) }
+        later.pluginReadiness = { _ in
+            PluginFixture.live("late", support: support, claude: claude)
+            return true
+        }
         let out = try await later.finishStart(s, waiting, ticket: later.ticket())
         #expect(out.contains("local_late") && later.prepared["Bump it"]?.text.hasPrefix("⟦fjord v1 late ") == true)
         #expect(later.prepared["Bump it"]?.newSessionIn == "lookout")
@@ -802,7 +822,6 @@ import Testing
         let s = await store(dir)
         let t = tools(s, turn: "@lookout bump the version")
         // What's tested is that the key is read again, not how fast: a deadline no loaded machine can miss.
-        t.keyReloadWait = 120
         func verifies(_ key: String) -> Bool {
             let signed = sealed(t, "Fix the login bug", "bump the version")
             let parts = signed.components(separatedBy: "\n")[0].dropFirst().dropLast().split(separator: " ")
@@ -835,15 +854,18 @@ import Testing
         let t = tools(s, turn: "@lookout bump the version")
         let held = RouterGate()
         t.keyReload = { await held.wait(); return false }
-        t.keyReloadWait = 0.05
+        var reload: Task<Void, Never>?
+        t.keyReloadRace = { work in
+            reload = Task { await work() }
+            await held.waitUntilWaiting()
+        }
         s.relayKeyCache = nil
-        // The read never finishes, yet the prepare returns (signed if the store's own read got there, else refused).
+        // The read never finishes, yet the prepare returns at the controlled race boundary.
         let out = try #require(await t.tool("prepare", ["session": "local_a"]))
         #expect(out.isError ? out.text.contains("couldn't sign") : t.prepared["Fix the login bug"] != nil)
-        // Its reload did start (it may start after the deadline already passed): waited for, then let go.
-        await waitUntil { held.waiting }
         #expect(held.waiting)
         held.open()
+        await reload?.value
         // Odd spans are made safe to compute with.
         #expect(RouterTools.bounded(.infinity) == 0 && RouterTools.bounded(-.greatestFiniteMagnitude) == 0)
         #expect(RouterTools.bounded(.greatestFiniteMagnitude) == 365 * 86_400 && RouterTools.bounded(.nan) == 0)
@@ -902,9 +924,18 @@ import Testing
         let forms = dir.path("support/forms")
         // The writer is busy: this answer waits behind it, still valid, and its task is cancelled meanwhile.
         let hold = DispatchSemaphore(value: 0)
-        FormWriter.queue.async { hold.wait() }
-        let writing = Task { try await FormWriter.write(form, answers: ["Which database?": "SQLite"], dir: forms) }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        let writerHeld = RouterGate()
+        FormWriter.queue.async {
+            Task { @MainActor in writerHeld.open() }
+            hold.wait()
+        }
+        await writerHeld.wait()
+        let queued = RouterGate()
+        let writing = Task {
+            try await FormWriter.write(form, answers: ["Which database?": "SQLite"], dir: forms,
+                                       didQueue: { queued.open() })
+        }
+        await queued.wait()
         writing.cancel()
         hold.signal()
         await #expect(throws: FormWriter.Cancelled.self) { try await writing.value }
@@ -979,12 +1010,20 @@ import Testing
 @MainActor final class RouterGate {
     private(set) var waiting = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var waitingContinuation: CheckedContinuation<Void, Never>?
     private var opened = false
 
     func wait() async {
         guard !opened else { return }
         waiting = true
+        waitingContinuation?.resume()
+        waitingContinuation = nil
         await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilWaiting() async {
+        guard !waiting else { return }
+        await withCheckedContinuation { waitingContinuation = $0 }
     }
 
     func open() {

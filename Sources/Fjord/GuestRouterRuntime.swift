@@ -19,8 +19,12 @@ import Foundation
     private var evidence: [String: [GuestSessionEvidence]] = [:]
     private var activeStartKeys: Set<String> = []
     private var operationTails: [String: Task<Void, Never>] = [:]
+    private var disableTask: Task<Void, Never>?
+    /// Completion hooks let tests await watch and reconnect work without polling.
+    var didRefresh: (@MainActor (GuestReference) -> Void)?
+    var didReconcileGuestRemovals: (@MainActor () -> Void)?
 
-    private init() {}
+    init() {}
 
     func reserveStart(projectID: UUID, location: SessionLocation, prompt: String) -> String? {
         let material = "\(projectID.uuidString)|\(location.key)|\(prompt)"
@@ -74,6 +78,7 @@ import Foundation
                     self.markGuestExecutionInaccessible(computer)
                     store.routerHookError = "Guest Router refresh failed on \(computer.computerId): \(error.localizedDescription)"
                 }
+                self.didRefresh?(computer)
             }
         }
         leaseChecks[computer.key] = Task { [weak self, weak store] in
@@ -97,6 +102,8 @@ import Foundation
         clients.removeAll()
         computers.removeAll()
         evidence.removeAll()
+        didRefresh = nil
+        didReconcileGuestRemovals = nil
         guard let store else { return }
         store.routerFormsLoaded = false
         var state = store.router
@@ -221,7 +228,7 @@ import Foundation
             store.router = state
         }
         stopAll()
-        Task { @MainActor [weak self, weak store] in
+        disableTask = Task { @MainActor [weak self, weak store] in
             for (computer, client) in targets {
                 do {
                     guard let self else { return }
@@ -233,8 +240,12 @@ import Foundation
                     store?.routerHookError = "Guest Router disable is pending for \(computer.computerId): \(error.localizedDescription)"
                 }
             }
+            self?.disableTask = nil
         }
     }
+
+    /// Lets tests await a Router-off transition before checking guest files and saved state.
+    func waitForDisable() async { await disableTask?.value }
 
     /// Reconciles a previously failed Router-off while the guest is reachable, before a new install can begin.
     func applyPendingDisable(computer: GuestReference, client: any GuestClient) async throws {
@@ -259,6 +270,7 @@ import Foundation
     }
 
     private func reconcilePendingGuestRemovals(store: Store) async {
+        defer { didReconcileGuestRemovals?() }
         for location in store.router.pendingGuestRemovals {
             guard case .computer(let deviceId, let computerId) = location,
                   let client = guestClient(for: location) else { continue }

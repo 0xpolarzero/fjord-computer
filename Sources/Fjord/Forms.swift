@@ -204,6 +204,19 @@ final class FormBridge: @unchecked Sendable {
         }
     }
 
+    /// Reads and delivers the current forms before returning. Callers that need the result now can order it without polling.
+    @MainActor
+    func refreshAndWait() async {
+        guard let dir, let deliver else { return }
+        let forms = await withCheckedContinuation { done in
+            queue.async {
+                let forms = Self.read(dir: dir)
+                DispatchQueue.main.async { done.resume(returning: forms) }
+            }
+        }
+        deliver(forms)
+    }
+
     /// The newest form of each session. Forms whose hook died are deleted: nothing would read their answer.
     static func read(dir: URL, alive: (Int32) -> Bool = processAlive) -> [String: PendingForm] {
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []

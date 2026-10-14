@@ -50,7 +50,7 @@ struct GuestRelayInbox: Sendable {
     }
 
     var client: any GuestClient
-    var timeout: TimeInterval = RelayInbox.wait
+    var timeout: TimeInterval? = RelayInbox.wait
     var onState: @MainActor @Sendable (GuestRelayRecord) async -> Void = { _ in }
 
     func deliver(_ signedText: String, to sessionID: String, computer: GuestReference,
@@ -146,12 +146,14 @@ struct GuestRelayInbox: Sendable {
                 }
                 throw CancellationError()
             }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                throw GuestRelayTimeout()
+            if let timeout {
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    throw GuestRelayTimeout()
+                }
             }
             defer { group.cancelAll() }
-            guard let result = try await group.next() else { throw GuestRelayTimeout() }
+            guard let result = try await group.next() else { throw CancellationError() }
             return result
         }
     }

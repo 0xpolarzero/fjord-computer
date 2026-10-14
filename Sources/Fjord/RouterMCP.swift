@@ -516,6 +516,10 @@ final class RouterMCPServer: @unchecked Sendable {
     var claudePath: () -> String? = { nil }
     /// Guest transport is injected separately until the generated engine client owns the guest.* surface.
     var guestClient: (any GuestClient)?
+    /// App-lifetime watcher state belongs to the app's shared runtime; tests supply an isolated runtime per tools instance.
+    var guestRuntime = GuestRouterRuntime.shared
+    /// The local form writer invokes this after its queue accepts a write; tests use it to gate cancellation deterministically.
+    var formAnswerQueued: (@MainActor () -> Void)?
     /// Tests provide a temporary HOME; the app uses the current user's Claude settings file.
     var guestSSHSettings: ClaudeSSHSettings?
 
@@ -940,17 +944,18 @@ final class RouterMCPServer: @unchecked Sendable {
         try live(ticket)
         let receipt = form.questions.map { "\($0.question) = \(answers[$0.question] ?? "")" }.joined(separator: "; ")
         if let guestForm {
-            try await GuestRouterRuntime.shared.answer(guestForm, answers: answers, cardID: card.id)
+            try await guestRuntime.answer(guestForm, answers: answers, cardID: card.id)
             return "Answered “\(card.title)”: " + receipt
         }
         guard let dir = store.formBridge.dir else { throw Failure("Fjord isn't holding forms (the Router is off)") }
         // Still worth writing when its turn comes: the same Router, the card still open, the same form still held.
         let cardID = card.id, formID = form.id
-        try await FormWriter.write(form, answers: answers, dir: dir) { [weak self, weak store] in
-            guard let self, let store, self.isLive(ticket),
-                  let now = store.router.cards.first(where: { $0.id == cardID }), now.isOpen else { return false }
-            return store.pendingForm(for: now)?.id == formID
-        }
+        try await FormWriter.write(form, answers: answers, dir: dir, didQueue: formAnswerQueued ?? {},
+            stillValid: { [weak self, weak store] in
+                guard let self, let store, self.isLive(ticket),
+                      let now = store.router.cards.first(where: { $0.id == cardID }), now.isOpen else { return false }
+                return store.pendingForm(for: now)?.id == formID
+            })
         return "Answered “\(card.title)”: " + receipt
     }
 
@@ -1087,6 +1092,8 @@ final class RouterMCPServer: @unchecked Sendable {
     var keyReloadWait: TimeInterval = 2
     /// Reads the key again (the store's, by default); tests hold it.
     var keyReload: (@MainActor () async -> Bool)?
+    /// Lets tests drive the wait boundary without a wall-clock deadline.
+    var keyReloadRace: ((@escaping @MainActor () async -> Void) async -> Void)?
 
     /// Runs `work`, returning when it's done or at `deadline`, whichever comes first: a stalled `work` is left to finish on
     /// its own (what it does late is only a cache filled for next time), the caller isn't held by it.
@@ -1126,11 +1133,11 @@ final class RouterMCPServer: @unchecked Sendable {
         let body = verbatim ? ready.text : RouterPointers.attach(tagged, to: ready.text)
         if let guestStart {
             guard case .computer(let deviceId, let computerId) = guestStart.location,
-                  let guestClient = self.guestClient ?? GuestRouterRuntime.shared.guestClient(for: guestStart.location) else {
+                  let guestClient = self.guestClient ?? guestRuntime.guestClient(for: guestStart.location) else {
                 throw Failure("The guest file client isn't connected for this computer yet")
             }
             let computer = GuestReference(deviceId: deviceId, computerId: computerId)
-            try await GuestRouterRuntime.shared.startWatching(store: store, client: guestClient, computer: computer)
+            try await guestRuntime.startWatching(store: store, client: guestClient, computer: computer)
             let account = try await guestClient.account(for: computer)
             let paths = try GuestRouterPaths(home: account.home)
             let keyFile = try await guestClient.filesRead(computer: computer, path: paths.key, offset: nil, length: nil)
@@ -1161,7 +1168,9 @@ final class RouterMCPServer: @unchecked Sendable {
         if text == nil {
             // Not cached yet, or the file changed: read it again (bounded), and sign once more if this is still the turn.
             let reload = keyReload ?? { [weak store] in await store?.reloadRelayKey() ?? false }
-            await Self.race(deadline: keyReloadWait) { _ = await reload() }
+            let reloadWork: @MainActor () async -> Void = { _ = await reload() }
+            if let keyReloadRace { await keyReloadRace(reloadWork) }
+            else { await Self.race(deadline: keyReloadWait, reloadWork) }
             try live(ticket)
             text = store.signRelay(body: body, target: cli, settings: settings)
         }
@@ -1257,13 +1266,13 @@ final class RouterMCPServer: @unchecked Sendable {
         try live(ticket)
         let runsOn = store.runsOnProject(for: folder)
         if case .computer = runsOn.placement {
-            guard let guestClient = self.guestClient ?? GuestRouterRuntime.shared.guestClient(for: runsOn.placement.location) else {
+            guard let guestClient = self.guestClient ?? guestRuntime.guestClient(for: runsOn.placement.location) else {
                 throw Failure("The guest file client isn't connected for this computer yet")
             }
             guard case .computer(let deviceId, let computerId, _) = runsOn.placement else { throw Failure("This project isn't on a computer") }
             let computer = GuestReference(deviceId: deviceId, computerId: computerId)
             let routerGeneration = store.routerGeneration
-            GuestRouterRuntime.shared.registerInstallationTarget(store: store, client: guestClient, computer: computer)
+            guestRuntime.registerInstallationTarget(store: store, client: guestClient, computer: computer)
             try await ensureGuestComputerReady(store: store, placement: runsOn.placement)
             if let previous = store.router.pendingDesktopStarts.first(where: {
                 $0.projectID == runsOn.id && $0.location == runsOn.placement.location && $0.prompt == ready.text
@@ -1274,20 +1283,20 @@ final class RouterMCPServer: @unchecked Sendable {
                                   "openedAt": ISO8601DateFormatter().string(from: previous.openedAt), "pendingStart": previous.id.uuidString,
                                   "next": "This task is already prepared in Claude. Open its existing Router entry to continue."])
             }
-            guard let reservation = GuestRouterRuntime.shared.reserveStart(projectID: runsOn.id,
+            guard let reservation = guestRuntime.reserveStart(projectID: runsOn.id,
                 location: runsOn.placement.location, prompt: ready.text) else {
                 throw Failure("A start for this project is already being prepared")
             }
-            defer { GuestRouterRuntime.shared.releaseStart(reservation) }
+            defer { guestRuntime.releaseStart(reservation) }
             do {
                 let rowName = store.computers.inventory?.allComputers.first(where: { $0.id == computerId })?.name ?? computerId
                 let settingsFile = guestSSHSettings ?? ClaudeSSHSettings()
-                let prepared = try await GuestRouterRuntime.shared.prepareDesktopStart(client: guestClient,
+                let prepared = try await guestRuntime.prepareDesktopStart(client: guestClient,
                     placement: runsOn.placement, project: runsOn, prompt: ready.text, computerName: rowName,
                     settings: settingsFile, store: store, computer: computer, generation: routerGeneration)
                 try live(ticket)
                 if case .computer(let deviceId, let computerId, _) = runsOn.placement {
-                    try await GuestRouterRuntime.shared.startWatching(store: store, client: guestClient,
+                    try await guestRuntime.startWatching(store: store, client: guestClient,
                         computer: GuestReference(deviceId: deviceId, computerId: computerId))
                 }
                 var state = store.router
@@ -1302,7 +1311,7 @@ final class RouterMCPServer: @unchecked Sendable {
                     store.flushSave()
                     throw Failure("Fjord couldn't save this Claude session handoff before opening it.")
                 }
-                GuestRouterRuntime.shared.reconcileDesktopMetadata()
+                guestRuntime.reconcileDesktopMetadata()
                 let announcement = "Ready in Claude · \(runsOn.name): \(prepared.url.absoluteString)"
                 if let intercept = store.interceptOpen { intercept(announcement) } else { Link.open(prepared.url) }
                 return Self.json(["state": "ready_in_claude", "project": runsOn.name, "location": runsOn.placement.location.key,
@@ -1400,8 +1409,16 @@ final class RouterMCPServer: @unchecked Sendable {
 
     /// How long a new session's plugin has to say it runs.
     var pluginWait: TimeInterval = SessionStart.wait
+    /// Tests drive plugin readiness directly instead of waiting on a wall-clock poll.
+    var pluginReadiness: (@MainActor (String) async -> Bool)?
 
     private func waitForPlugin(_ store: Store, cli: String, ticket: Ticket) async throws {
+        if let pluginReadiness {
+            guard await pluginReadiness(cli) else {
+                throw Failure("The new session started, but Fjord's plugin didn't come up in it within \(Int(Self.bounded(pluginWait))) s; nothing was sent")
+            }
+            return
+        }
         let deadline = Date().addingTimeInterval(pluginWait)
         repeat {
             try live(ticket)
@@ -1448,7 +1465,7 @@ final class RouterMCPServer: @unchecked Sendable {
         guard let session = store.claudeSessions[request.session], !session.isArchived, let cli = session.cliID else {
             throw Failure("Fjord doesn't know that session (archived, or not found)")
         }
-        if GuestRouterRuntime.shared.location(for: session.id) != nil {
+        if guestRuntime.location(for: session.id) != nil {
             throw Failure("Forking Claude Desktop SSH sessions isn't available yet; nothing was changed")
         }
         // Its id goes into a path and the CLI's arguments: only a UUID, as Claude Code makes them.
@@ -1554,19 +1571,22 @@ enum FormWriter {
     /// `Cancelled` and writes nothing.
     @MainActor
     static func write(_ form: PendingForm, answers: [String: String], dir: URL,
+                      didQueue: @escaping @MainActor () -> Void = {},
                       stillValid: @escaping @MainActor () -> Bool = { true }) async throws {
-        try await write(form, data: FormBridge.answerData(form, answers), dir: dir, stillValid: stillValid)
+        try await write(form, data: FormBridge.answerData(form, answers), dir: dir, didQueue: didQueue, stillValid: stillValid)
     }
 
     /// The same for a plan: approved, or sent back to keep planning (throws `FormBridge.Failure.notAPlan` for a question).
     @MainActor
     static func write(_ form: PendingForm, plan decision: PendingForm.PlanDecision, dir: URL,
+                      didQueue: @escaping @MainActor () -> Void = {},
                       stillValid: @escaping @MainActor () -> Bool = { true }) async throws {
-        try await write(form, data: FormBridge.answerData(form, plan: decision), dir: dir, stillValid: stillValid)
+        try await write(form, data: FormBridge.answerData(form, plan: decision), dir: dir, didQueue: didQueue, stillValid: stillValid)
     }
 
     @MainActor
-    private static func write(_ form: PendingForm, data: Data, dir: URL, stillValid: @escaping @MainActor () -> Bool) async throws {
+    private static func write(_ form: PendingForm, data: Data, dir: URL, didQueue: @escaping @MainActor () -> Void,
+                              stillValid: @escaping @MainActor () -> Bool) async throws {
         guard !Task.isCancelled, stillValid() else { throw Cancelled() }
         // The task's cancellation reaches the queued write: checked right before it commits.
         let cancelled = Flag()
@@ -1591,6 +1611,7 @@ enum FormWriter {
                         done.resume(throwing: error)
                     }
                 }
+                didQueue()
             }
         } onCancel: {
             cancelled.set()

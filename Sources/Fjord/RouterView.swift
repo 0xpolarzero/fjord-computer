@@ -114,10 +114,10 @@ extension Store {
         }
         guard let dir = formBridge.dir else { return .failure(FormWriter.Cancelled()) }
         do {
-            try await FormWriter.write(form, answers: answers, dir: dir) { [weak self] in
+            try await FormWriter.write(form, answers: answers, dir: dir, stillValid: { [weak self] in
                 guard let self else { return false }
                 return self.routerOn && self.router.cards.first(where: { $0.id == card })?.isOpen == true
-            }
+            })
             logCardAction("Answered the form", card: card)
             return .success(())
         } catch {
@@ -139,10 +139,10 @@ extension Store {
         }
         guard let dir = formBridge.dir else { return .failure(FormWriter.Cancelled()) }
         do {
-            try await FormWriter.write(form, plan: decision, dir: dir) { [weak self] in
+            try await FormWriter.write(form, plan: decision, dir: dir, stillValid: { [weak self] in
                 guard let self else { return false }
                 return self.routerOn && self.router.cards.first(where: { $0.id == card })?.isOpen == true
-            }
+            })
             logCardAction(decision.approve ? "Approved the plan" : "Sent the plan back", card: card)
             return .success(())
         } catch {

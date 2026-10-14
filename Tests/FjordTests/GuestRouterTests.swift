@@ -7,6 +7,62 @@ private actor GuestRelayStateRecorder {
     func append(_ value: GuestRelayRecord) { values.append(value) }
 }
 
+private actor GuestHookProcessSignals {
+    enum Startup { case ready, exited(Int32) }
+    private var output = Data()
+    private var isReady = false
+    private var startupWaiter: CheckedContinuation<Startup, Never>?
+    private var exitStatus: Int32?
+    private var exitWaiter: CheckedContinuation<Int32, Never>?
+
+    func receiveOutput(_ data: Data) {
+        output.append(data)
+        if output.range(of: Data("ready\n".utf8)) != nil {
+            isReady = true
+            startupWaiter?.resume(returning: .ready)
+            startupWaiter = nil
+        }
+    }
+
+    func waitUntilReadyOrExit() async -> Startup {
+        if isReady { return .ready }
+        if let exitStatus { return .exited(exitStatus) }
+        return await withCheckedContinuation { startupWaiter = $0 }
+    }
+
+    func recordExit(_ status: Int32) {
+        exitStatus = status
+        startupWaiter?.resume(returning: .exited(status))
+        startupWaiter = nil
+        exitWaiter?.resume(returning: status)
+        exitWaiter = nil
+    }
+
+    func waitForExit() async -> Int32 {
+        if let exitStatus { return exitStatus }
+        return await withCheckedContinuation { exitWaiter = $0 }
+    }
+
+    func capturedOutput() -> Data { output }
+}
+
+private actor GuestRouterGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        opened = true
+        let waiting = waiters
+        waiters.removeAll()
+        waiting.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        guard !opened else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
 private actor GuestAccountBarrier {
     private var shouldPause = true
     private var entered = false
@@ -160,105 +216,83 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(hook.contains(GuestNodeRuntime.nodePath(home: account.home)))
     }
 
-    @Test func guestFormHookExitsQuietlyOnTerminationWhileStdinIsHeldOpen() throws {
+    @Test func guestFormHookExitsQuietlyOnTerminationWhileStdinIsHeldOpen() async throws {
         let dir = TempDir()
         let module = dir.path("form-hook.mjs")
-        let ready = dir.path("ready")
         let registration = "for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, stop)"
         let source = GuestRouterArtifacts.formModule
         #expect(source.contains(registration))
         let instrumented = source.replacingOccurrences(of: registration,
-                                                        with: registration + "\nfs.writeFileSync(process.env.FJORD_TEST_READY, 'ready')")
+                                                        with: registration + "\nprocess.stdout.write('ready\\n')")
         try Data(instrumented.utf8).write(to: module)
 
+        let signals = GuestHookProcessSignals()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["node", module.path]
         var environment = ProcessInfo.processInfo.environment
         environment["HOME"] = dir.url.path
-        environment["FJORD_TEST_READY"] = ready.path
         process.environment = environment
         let stdin = Pipe()
         let stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { terminated in
+            Task { await signals.recordExit(terminated.terminationStatus) }
+        }
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+            Task { await signals.receiveOutput(data) }
+        }
         try process.run()
-        defer {
-            if process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
-                process.waitUntilExit()
-            }
-            try? stdin.fileHandleForWriting.close()
+        guard case .ready = await signals.waitUntilReadyOrExit() else {
+            Issue.record("The hook exited before registering its signal handlers")
+            return
         }
-
-        let readyDeadline = Date().addingTimeInterval(3)
-        while !FileManager.default.fileExists(atPath: ready.path), process.isRunning, Date() < readyDeadline {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        #expect(FileManager.default.fileExists(atPath: ready.path) && process.isRunning)
+        #expect(process.isRunning)
         process.terminate()
-        let exitDeadline = Date().addingTimeInterval(1)
-        while process.isRunning && Date() < exitDeadline { Thread.sleep(forTimeInterval: 0.01) }
-        let exited = !process.isRunning
-        if !exited {
-            kill(process.processIdentifier, SIGKILL)
-            process.waitUntilExit()
-        }
+        let status = await signals.waitForExit()
+        stdout.fileHandleForReading.readabilityHandler = nil
+        process.waitUntilExit()
         try? stdin.fileHandleForWriting.close()
-        #expect(exited && process.terminationReason == .exit && process.terminationStatus == 0)
-        #expect(stdout.fileHandleForReading.readDataToEndOfFile().isEmpty)
+        #expect(process.terminationReason == .exit && status == 0)
+        #expect(await signals.capturedOutput() == Data("ready\n".utf8))
     }
 
-    @Test func guestFormHookBoundsAnOpenStdinRead() throws {
+    @Test func guestFormHookBoundsAnOpenStdinRead() async throws {
         let dir = TempDir()
         let module = dir.path("form-hook.mjs")
-        let ready = dir.path("ready")
         let inputTimeout = "const INPUT_TIMEOUT = 30_000"
-        let registration = "for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, stop)"
+        let inputTimer = "const timer = setTimeout(() => { timedOut = true; process.stdin.destroy() }, INPUT_TIMEOUT)"
         var source = GuestRouterArtifacts.formModule
         #expect(source.contains(inputTimeout))
-        #expect(source.contains(registration))
-        source = source.replacingOccurrences(of: inputTimeout, with: "const INPUT_TIMEOUT = 40")
-        source = source.replacingOccurrences(of: registration,
-                                             with: registration + "\nfs.writeFileSync(process.env.FJORD_TEST_READY, 'ready')")
+        #expect(source.contains(inputTimer))
+        source = source.replacingOccurrences(of: inputTimer,
+            with: "const timer = undefined\n  queueMicrotask(() => { timedOut = true; process.stdin.destroy() })")
         try Data(source.utf8).write(to: module)
 
+        let signals = GuestHookProcessSignals()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["node", module.path]
         var environment = ProcessInfo.processInfo.environment
         environment["HOME"] = dir.url.path
-        environment["FJORD_TEST_READY"] = ready.path
         process.environment = environment
         let stdin = Pipe()
         let stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { terminated in
+            Task { await signals.recordExit(terminated.terminationStatus) }
+        }
         try process.run()
-        defer {
-            if process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
-                process.waitUntilExit()
-            }
-            try? stdin.fileHandleForWriting.close()
-        }
-
-        let readyDeadline = Date().addingTimeInterval(3)
-        while !FileManager.default.fileExists(atPath: ready.path), process.isRunning, Date() < readyDeadline {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        #expect(FileManager.default.fileExists(atPath: ready.path) && process.isRunning)
-        let exitDeadline = Date().addingTimeInterval(1)
-        while process.isRunning && Date() < exitDeadline { Thread.sleep(forTimeInterval: 0.01) }
-        let exited = !process.isRunning
-        if !exited {
-            kill(process.processIdentifier, SIGKILL)
-            process.waitUntilExit()
-        }
+        let status = await signals.waitForExit()
+        process.waitUntilExit()
         try? stdin.fileHandleForWriting.close()
-        #expect(exited && process.terminationReason == .exit && process.terminationStatus == 0)
+        #expect(process.terminationReason == .exit && status == 0)
         #expect(stdout.fileHandleForReading.readDataToEndOfFile().isEmpty)
     }
 
@@ -361,10 +395,12 @@ private struct AccountPausingGuestClient: GuestClient {
         let session = "cli-session-1"
         let nonce = "0123456789abcdef0123456789abcdef"
         let folder = GuestRouterPaths.join(paths.inbox, session)
+        let messagePath = GuestRouterPaths.join(folder, "\(nonce).msg")
         let ack = GuestRouterPaths.join(folder, "\(nonce).ack")
-        try await guest.filesWrite(.init(computer: computer, path: ack, data: Data("ok model=opus".utf8), mode: 0o600))
+        await guest.acknowledgeWhenMessageIsAdmitted(computer: computer, messagePath: messagePath, ackPath: ack,
+                                                      data: Data("ok model=opus".utf8), hintPath: folder)
         let signed = "⟦fjord v1 \(session) \(nonce) 2000000000000 \(String(repeating: "a", count: 64))⟧\nYWJj"
-        let answer = try await GuestRelayInbox(client: guest).deliver(signed, to: session, computer: computer)
+        let answer = try await GuestRelayInbox(client: guest, timeout: nil).deliver(signed, to: session, computer: computer)
         let log = await guest.callLog()
         let watch = try #require(log.firstIndex(where: { $0.hasPrefix("watch:") }))
         let write = try #require(log.firstIndex(of: "write:\(GuestRouterPaths.join(folder, "\(nonce).msg"))"))
@@ -387,13 +423,10 @@ private struct AccountPausingGuestClient: GuestClient {
         await guest.failNextRead(computer: computer, path: ackPath, with: .notFound(ackPath))
         await guest.failNextRead(computer: computer, path: ackPath, with: .notFound(ackPath))
         let signed = "⟦fjord v1 \(cli) \(nonce) 1800000000000 \(String(repeating: "a", count: 64))⟧\nRun checks"
-        let started = Date.timeIntervalSinceReferenceDate
-
-        let ack = try await GuestRelayInbox(client: guest, timeout: 0.4).deliver(signed, to: cli, computer: computer)
-        let elapsed = Date.timeIntervalSinceReferenceDate - started
+        let ack = try await GuestRelayInbox(client: guest, timeout: nil).deliver(signed, to: cli, computer: computer)
 
         #expect(ack == "ok")
-        #expect(elapsed < 0.3)
+        #expect(await guest.callLog().filter { $0 == "read:\(ackPath)" }.count == 3)
     }
 
     @MainActor @Test func launchRehydratesSavedGuestTargetsAndExecutionState() async throws {
@@ -864,13 +897,15 @@ private struct AccountPausingGuestClient: GuestClient {
         await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data("1800000000000".utf8), stderr: Data()),
             argv: [account.nodeExecutable, "-e", "process.stdout.write(String(Date.now()))"])
         let dispatcher = store.routerDispatcher
+        let finished = GuestRouterGate()
+        dispatcher.onFinish = { _ in Task { await finished.open() } }
         dispatcher.configure = { tools in
             tools.guestClient = guest
             tools.guestSSHSettings = ClaudeSSHSettings(home: tempHome)
         }
 
         let id = try #require(dispatcher.submit("start a new session to fix the bug", context: RouterContext(projects: [source])))
-        await waitUntil { store.router.decisions.first(where: { $0.id == id })?.outcome == .done }
+        await finished.wait()
         let entry = try #require(store.router.decisions.first(where: { $0.id == id }))
 
         let prepared = try #require(entry.done.compactMap { item -> (String, String, String)? in
@@ -917,7 +952,7 @@ private struct AccountPausingGuestClient: GuestClient {
         do { _ = try await starting.value } catch { }
 
         let location = SessionLocation.computer(deviceId: nil, computerId: computer.computerId)
-        await waitUntil { !store.router.pendingGuestDisables.contains(location) }
+        await GuestRouterRuntime.shared.waitForDisable()
         #expect(store.router.pendingDesktopStarts.isEmpty)
         #expect(store.router.pendingGuestDisables.isEmpty)
         #expect(await guest.filesSnapshot(for: localComputer)[paths.key] == nil)
@@ -1020,15 +1055,21 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(store.claudeActivity[desktopID]?.text == "Writing")
 
         await guest.failNextRead(computer: computer, path: paths.key, with: .unavailable("temporary read failure"))
+        let inaccessible = GuestRouterGate()
+        let dead = GuestRouterGate()
+        GuestRouterRuntime.shared.didRefresh = { _ in
+            if store.guestExecutionStates[desktopID]?.availability == .inaccessible { Task { await inaccessible.open() } }
+            if store.guestExecutionStates[desktopID]?.availability == .dead { Task { await dead.open() } }
+        }
         _ = try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.presence, cliID),
                                               data: presence, mode: 0o600))
-        await waitUntil { store.guestExecutionStates[desktopID]?.availability == .inaccessible }
+        await inaccessible.wait()
         store.applyClaude(snapshot)
         #expect(store.claudeSessions[desktopID]?.running == false)
         #expect(store.claudeActivity[desktopID]?.text == "Writing")
 
         _ = try await guest.filesRemove(computer: computer, paths: [GuestRouterPaths.join(paths.presence, cliID)])
-        await waitUntil { store.guestExecutionStates[desktopID]?.availability == .dead }
+        await dead.wait()
         #expect(store.claudeSessions[desktopID]?.running == false)
         #expect(store.claudeActivity[desktopID] == nil)
     }
@@ -1051,8 +1092,11 @@ private struct AccountPausingGuestClient: GuestClient {
             "hostSessionId": "local_desktop-1", "sessionId": cli, "pid": 42, "startedAt": 123,
         ])
         try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.registry, "42.json"), data: registry, mode: 0o600))
-        let ack = GuestRouterPaths.join(GuestRouterPaths.join(paths.inbox, cli), "\(nonceText).ack")
-        try await guest.filesWrite(.init(computer: computer, path: ack, data: Data("ok".utf8), mode: 0o600))
+        let folder = GuestRouterPaths.join(paths.inbox, cli)
+        let messagePath = GuestRouterPaths.join(folder, "\(nonceText).msg")
+        let ack = GuestRouterPaths.join(folder, "\(nonceText).ack")
+        await guest.acknowledgeWhenMessageIsAdmitted(computer: computer, messagePath: messagePath, ackPath: ack,
+                                                      data: Data("ok".utf8), hintPath: folder)
         let clockArgv = [account.nodeExecutable, "-e", "process.stdout.write(String(Date.now()))"]
         await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data(String(start + 1000).utf8), stderr: Data()), argv: clockArgv)
         let states = GuestRelayStateRecorder()
@@ -1060,7 +1104,6 @@ private struct AccountPausingGuestClient: GuestClient {
         let result = try await send.send(body: "Run the checks", to: cli, computer: computer, nonce: nonce,
                                          now: Date(timeIntervalSince1970: Double(start) / 1000))
         let saved = await states.values
-        let messagePath = GuestRouterPaths.join(GuestRouterPaths.join(paths.inbox, cli), "\(nonceText).msg")
         let message = try #require(await guest.writeRecords().first(where: { $0.path == messagePath }))
 
         #expect(result == "ok")
@@ -1089,7 +1132,7 @@ private struct AccountPausingGuestClient: GuestClient {
                                                 with: .unavailable("reply lost after admission"))
 
         do {
-            _ = try await GuestRelayInbox(client: guest, onState: { await states.append($0) })
+            _ = try await GuestRelayInbox(client: guest, timeout: nil, onState: { await states.append($0) })
                 .deliver(signed, to: cli, computer: computer, now: createdAt, decisionID: decisionID,
                          hostSessionID: "local_desktop-1", body: "Run the checks")
             Issue.record("a lost admission reply was reported as a confirmed delivery")
@@ -1105,7 +1148,7 @@ private struct AccountPausingGuestClient: GuestClient {
 
         try await guest.filesWrite(.init(computer: computer, path: ackPath, data: Data("ok".utf8), mode: 0o600))
         do {
-            let acknowledgement = try await GuestRelayInbox(client: guest, onState: { await states.append($0) })
+            let acknowledgement = try await GuestRelayInbox(client: guest, timeout: nil, onState: { await states.append($0) })
                 .deliver(signed, to: cli, computer: computer, now: createdAt, decisionID: decisionID,
                          hostSessionID: "local_desktop-1", body: "Run the checks")
             #expect(acknowledgement == "ok")
@@ -1134,7 +1177,7 @@ private struct AccountPausingGuestClient: GuestClient {
         await guest.failNextRead(computer: computer, path: ackPath, with: .unavailable("ack read reply lost"))
 
         do {
-            _ = try await GuestRelayInbox(client: guest, onState: { await states.append($0) })
+            _ = try await GuestRelayInbox(client: guest, timeout: nil, onState: { await states.append($0) })
                 .deliver(signed, to: cli, computer: computer)
             Issue.record("an acknowledgement read failure was reported as a confirmed delivery")
         } catch {
@@ -1145,7 +1188,7 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(await states.values.last?.signedPayload == signed)
         #expect(await guest.filesSnapshot(for: computer)[messagePath] == Data(signed.utf8))
         try await guest.filesWrite(.init(computer: computer, path: ackPath, data: Data("ok".utf8), mode: 0o600))
-        #expect(try await GuestRelayInbox(client: guest).deliver(signed, to: cli, computer: computer) == "ok")
+        #expect(try await GuestRelayInbox(client: guest, timeout: nil).deliver(signed, to: cli, computer: computer) == "ok")
         #expect(await guest.writeRecords().filter { $0.path == messagePath }.count == 1)
     }
 
@@ -1180,12 +1223,10 @@ private struct AccountPausingGuestClient: GuestClient {
         store.saveGuestRelayState(receipt)
         let countBeforeRetry = store.router.decisions.count
 
+        let finished = GuestRouterGate()
+        store.routerDispatcher.onFinish = { id in if id == decisionID { Task { await finished.open() } } }
         store.routerDispatcher.retryGuestDelivery(receipt)
-        await waitUntil {
-            store.router.decisions.first(where: { $0.id == decisionID })?.done.contains {
-                if case .sent = $0 { true } else { false }
-            } == true
-        }
+        await finished.wait()
 
         let recovered = try #require(store.router.decisions.first(where: { $0.id == decisionID }))
         let savedReceipt = try #require(store.router.guestRelayDeliveries.first)
@@ -1247,8 +1288,10 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(store.router.pendingGuestRemovals == [location])
         let firstPass = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: settings.settings)) as? [String: Any])
         #expect((firstPass["sshConfigs"] as? [[String: String]])?.map { $0["id"] } == ["mine"])
+        let reconciled = GuestRouterGate()
+        GuestRouterRuntime.shared.didReconcileGuestRemovals = { Task { await reconciled.open() } }
         engine.deliver(.reconnected)
-        await waitUntil { store.router.pendingGuestRemovals.isEmpty }
+        await reconciled.wait()
         let calls = await guest.callLog()
         #expect(calls.filter { $0 == "ssh-alias:remove:\(computer.key)" }.count == 2)
     }
