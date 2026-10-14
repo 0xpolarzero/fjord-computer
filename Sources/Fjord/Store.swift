@@ -49,6 +49,26 @@ final class Store {
         guard let engineLauncher else { return }
         await engineLauncher.inspect()
         await attachConnectedEngine()
+        await runEngineUpdate(automatic: true)
+    }
+
+    /// The Computers page's Update button, and the retry after a blocked update.
+    func updateComputersEngine() async {
+        await runEngineUpdate(automatic: false)
+    }
+
+    /// The engine handoff (see EngineHandoff.swift). The Computers page keeps showing the old engine's computers until the
+    /// old engine leaves, then the new engine's.
+    private func runEngineUpdate(automatic: Bool) async {
+        guard let engineLauncher else { return }
+        if automatic { await engineLauncher.continueUpdateIfAutomatic() } else { await engineLauncher.updateEngine() }
+        await attachConnectedEngine()
+    }
+
+    /// The first launch after a Fjord update that carries a new silod: connect without registering anything and hand off.
+    func resumeEngineHandoffIfPending() async {
+        guard EngineHandoffMarker.take() else { return }
+        await inspectComputersEngine()
     }
 
     /// The Computers page calls this only from its visible Enable action.
@@ -63,7 +83,10 @@ final class Store {
     }
 
     private func attachConnectedEngine() async {
-        guard let client = engineLauncher?.client else { return }
+        guard let client = engineLauncher?.client else {
+            hasEngineConnection = false
+            return
+        }
         engineClient = client
         hasEngineConnection = true
         await computers.replaceClient(client)
@@ -650,6 +673,7 @@ final class Store {
         updater.skipped = { [weak self] in self?.settings.skippedVersion }
         updater.onSkip = { [weak self] in self?.settings.skippedVersion = $0 }
         updater.start()
+        if !UnderTest.isRunning { Task { await resumeEngineHandoffIfPending() } }
         observeSleep()
         if triageOn { restartPolling() }
         // The Router is the only reader of Claude's sessions, and they have no switch of their own: they follow it.

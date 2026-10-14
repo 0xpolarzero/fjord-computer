@@ -530,9 +530,12 @@ extension EngineClient {
 
 /// Keeps Computers unavailable in ordinary Fjord launches until a real Silo adapter is connected.
 @MainActor
-final class UnavailableEngineClient: EngineClient {
+class UnavailableEngineClient: EngineClient {
     private func unavailable<T>() throws -> T { throw EngineClientError.unavailable }
 
+    func invoke<Params: Encodable & Sendable, Result: Decodable & Sendable>(
+        _ call: SiloGeneratedMethodCall<Params, Result>
+    ) async throws -> Result { throw EngineClientError.unavailable }
     func deviceFactsRead(deviceId: String?) async throws -> DeviceFacts { try unavailable() }
     func computersList(deviceId: String?) async throws -> ComputerInventory { try unavailable() }
     func connectionsDevicesList() async throws -> [SiloWireDevice] { try unavailable() }

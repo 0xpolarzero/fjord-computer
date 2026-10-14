@@ -69,7 +69,7 @@ import Testing
         #expect(launcher.state == .connected(version: "2.0.0", source: .sharedEngine))
     }
 
-    @Test func newerBundledEngineBlocksASecondOwnerUntilSafeHandoffExists() async {
+    @Test func newerBundledEngineIsOfferedAsAnUpdateWhileTheOldOneKeepsServing() async {
         let service = MockEngineAgentService(status: .notRegistered)
         let connector = MockEngineConnector([.success(connection(version: "1.1.0", build: "silo-old"))])
         let launcher = EngineLauncher(candidateVersion: "1.2.0", candidateBuild: "silo-new",
@@ -78,14 +78,11 @@ import Testing
         await launcher.inspect()
 
         #expect(service.registerCalls == 0)
-        #expect(launcher.client == nil)
-        if case .updateBlocked(let current, let bundled, let reason) = launcher.state {
-            #expect(current == "1.1.0")
-            #expect(bundled == "1.2.0")
-            #expect(reason.contains("saved and resumed safely"))
-        } else {
-            Issue.record("A newer candidate must report a blocked handoff.")
-        }
+        #expect(launcher.client != nil)
+        #expect(launcher.state == .connected(version: "1.1.0", source: .fjordAgent))
+        #expect(launcher.update == .available(current: "1.1.0", bundled: "1.2.0"))
+        // Fjord's agent isn't registered (Silo.app owns the engine): replacing it waits for the user.
+        #expect(!launcher.updateStartsAutomatically)
     }
 
     @Test func sameVersionDifferentBuildIsRejected() async {
@@ -149,6 +146,8 @@ private final class MockEngineAgentService: EngineAgentServicing {
         registerCalls += 1
         currentStatus = statusAfterRegister
     }
+
+    func unregister() async throws { currentStatus = .notRegistered }
 
     func openSystemSettings() { openSettingsCalls += 1 }
 }

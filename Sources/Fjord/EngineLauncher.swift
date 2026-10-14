@@ -15,6 +15,8 @@ enum EngineAgentStatus: Equatable {
 protocol EngineAgentServicing {
     func status() -> EngineAgentStatus
     func register() throws
+    /// Stops the agent and forgets the registration, so the next `register()` points it at the bundle as it is now.
+    func unregister() async throws
     func openSystemSettings()
 }
 
@@ -34,6 +36,10 @@ struct SystemEngineAgentService: EngineAgentServicing {
 
     func register() throws {
         try SMAppService.agent(plistName: plistName).register()
+    }
+
+    func unregister() async throws {
+        try await SMAppService.agent(plistName: plistName).unregister()
     }
 
     func openSystemSettings() {
@@ -190,6 +196,7 @@ enum EngineLaunchState: Equatable {
     case awaitingApproval
     case waitingForEngine
     case connected(version: String, source: EngineConnectionSource)
+    /// Same version, different build: not an update Fjord may make.
     case updateBlocked(current: String, bundled: String, reason: String)
     case missingBundle
     case failed(String)
@@ -218,6 +225,34 @@ enum EngineLaunchState: Equatable {
     }
 }
 
+/// The engine update the Computers tool shows. The running engine keeps serving through every state but `failed`.
+enum EngineUpdateStatus: Equatable {
+    case none
+    /// The bundled engine is newer than the running one.
+    case available(current: String, bundled: String)
+    case running(EngineHandoffPhase)
+    /// Stopped before the old engine left; it still serves, its computers untouched.
+    case blocked(String)
+    /// The old engine left and the new one didn't come up cleanly.
+    case failed(String)
+    case completed(resumed: [String], missing: [String])
+
+    var message: String? {
+        switch self {
+        case .none: nil
+        case .available(let current, let bundled):
+            "Fjord includes Silo engine \(bundled), and \(current) is running. Updating saves running computers and resumes them."
+        case .running(let phase): phase.message
+        case .blocked(let reason): "The Silo engine wasn't updated. Your computers are untouched. \(reason)"
+        case .failed(let reason): reason
+        case .completed(let resumed, let missing):
+            if !missing.isEmpty { "The Silo engine was updated. Still resuming: \(missing.joined(separator: ", "))." }
+            else if resumed.isEmpty { "The Silo engine was updated." }
+            else { "The Silo engine was updated and resumed \(resumed.joined(separator: ", "))." }
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class EngineLauncher {
@@ -227,6 +262,9 @@ final class EngineLauncher {
     @ObservationIgnored private let candidateBuild: String?
     @ObservationIgnored private let pollDelaysNanoseconds: [UInt64]
     @ObservationIgnored private var operationInFlight = false
+    @ObservationIgnored private let handoff: EngineHandoff?
+    @ObservationIgnored private var handoffTask: Task<Void, Never>?
+    private(set) var update: EngineUpdateStatus = .none
     @ObservationIgnored private(set) var client: (any EngineClient)?
     private(set) var state: EngineLaunchState = .unchecked
 
@@ -237,20 +275,26 @@ final class EngineLauncher {
 
     convenience init(socketPath: String) {
         let candidate = Self.embeddedCandidate()
+        let service = SystemEngineAgentService()
+        let connector = SocketEngineConnector(socketPath: socketPath)
+        let engineDirectory = URL(fileURLWithPath: socketPath).deletingLastPathComponent().appendingPathComponent("engine")
         self.init(candidateVersion: candidate?.version, candidateBuild: candidate?.build,
-                  service: SystemEngineAgentService(), connector: SocketEngineConnector(socketPath: socketPath),
-                  pollDelaysNanoseconds: [0, 250_000_000, 500_000_000, 1_000_000_000, 1_000_000_000])
+                  service: service, connector: connector,
+                  pollDelaysNanoseconds: [0, 250_000_000, 500_000_000, 1_000_000_000, 1_000_000_000],
+                  handoff: EngineHandoff(engineDirectory: engineDirectory, lock: FlockEngineInstallLock(), service: service,
+                                         connector: connector, probe: SocketEngineProbe(socketPath: socketPath)))
     }
 
     convenience init(candidateVersion: String, candidateBuild: String = "test-build",
                      service: any EngineAgentServicing, connector: any EngineSocketConnecting,
-                     pollDelaysNanoseconds: [UInt64] = [0]) {
+                     pollDelaysNanoseconds: [UInt64] = [0], handoff: EngineHandoff? = nil) {
         self.init(candidateVersion: Optional(candidateVersion), candidateBuild: Optional(candidateBuild),
-                  service: service, connector: connector, pollDelaysNanoseconds: pollDelaysNanoseconds)
+                  service: service, connector: connector, pollDelaysNanoseconds: pollDelaysNanoseconds, handoff: handoff)
     }
 
     private init(candidateVersion: String?, candidateBuild: String?, service: any EngineAgentServicing,
-                 connector: any EngineSocketConnecting, pollDelaysNanoseconds: [UInt64]) {
+                 connector: any EngineSocketConnecting, pollDelaysNanoseconds: [UInt64], handoff: EngineHandoff?) {
+        self.handoff = handoff
         self.candidateVersion = candidateVersion
         self.candidateBuild = candidateBuild
         self.service = service
@@ -360,9 +404,13 @@ final class EngineLauncher {
             return
         }
         if current < candidate {
-            client = nil
-            state = .updateBlocked(current: running.version, bundled: candidateVersion,
-                                   reason: "Fjord includes Silo \(candidateVersion), but version \(running.version) is running. Fjord left it running until its computers can be saved and resumed safely during an update.")
+            // The old engine keeps serving until the handoff swaps it (`updateEngine`).
+            client = running.client
+            state = .connected(version: running.version, source: running.source)
+            switch update {
+            case .running, .blocked: break
+            default: update = .available(current: running.version, bundled: candidateVersion)
+            }
             return
         }
         if current == candidate, let candidateBuild,
@@ -374,6 +422,63 @@ final class EngineLauncher {
         }
         client = running.client
         state = .connected(version: running.version, source: running.source)
+        switch update {
+        case .running, .completed, .blocked: break
+        default: update = .none
+        }
+    }
+
+    /// Whether the update goes ahead without being asked: Fjord's LaunchAgent is already registered (the user enabled the
+    /// engine here, or this is the first launch after a Fjord update), so replacing its engine registers nothing new.
+    /// Otherwise (Silo.app owns the engine) the user presses Update, as `enable()` registers only on request.
+    var updateStartsAutomatically: Bool {
+        if case .available = update { return service.status() == .enabled }
+        return false
+    }
+
+    /// The handoff to the bundled engine: lock, save, stop, re-register, start, verify. One at a time, and not tied to the
+    /// caller's task: leaving the Computers page doesn't cancel it halfway.
+    func updateEngine() async {
+        if let handoffTask { await handoffTask.value; return }
+        switch update {
+        case .available, .blocked: break
+        default: return
+        }
+        guard let handoff, let candidateVersion else { return }
+        update = .running(.locking)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await handoff.run(bundledVersion: candidateVersion, phase: { self.update = .running($0) },
+                                            engineStopped: { self.client = nil })
+            await self.finishHandoff(outcome)
+        }
+        handoffTask = task
+        await task.value
+        handoffTask = nil
+    }
+
+    /// Runs the update when it needs no consent.
+    func continueUpdateIfAutomatic() async {
+        if updateStartsAutomatically { await updateEngine() }
+    }
+
+    private func finishHandoff(_ outcome: EngineHandoffOutcome) async {
+        switch outcome {
+        case .completed(_, let resumed, let missing):
+            update = .none
+            if let fresh = try? await connector.connect() { adopt(fresh) }
+            update = .completed(resumed: resumed, missing: missing)
+        case .notNeeded(let reason):
+            update = .none
+            if let fresh = try? await connector.connect() { adopt(fresh) }
+            if case .available = update { update = .blocked(reason) }
+        case .blocked(let reason):
+            update = .blocked(reason)
+        case .failed(let reason):
+            client = nil
+            state = .failed(reason)
+            update = .failed(reason)
+        }
     }
 
     private static func embeddedCandidate() -> (version: String, build: String)? {

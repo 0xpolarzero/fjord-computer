@@ -44,6 +44,7 @@ struct ComputersView: View {
         } content: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if let launcher = store.engineLauncher { EngineUpdateBanner(store: store, launcher: launcher) }
                     if let error = model.error {
                         ComputerNotice(text: error, tone: .danger)
                     }
@@ -550,6 +551,44 @@ extension ComputerCheckpoint {
 extension ComputerPanel where Action == EmptyView {
     init(title: String, @ViewBuilder content: @escaping () -> Content) {
         self.init(title: title, action: { EmptyView() }, content: content)
+    }
+}
+
+/// The engine update: asked for, running (with its step), blocked before the swap, or done.
+private struct EngineUpdateBanner: View {
+    let store: Store
+    let launcher: EngineLauncher
+
+    var body: some View {
+        if let message = launcher.update.message {
+            HStack(spacing: 10) {
+                if case .running = launcher.update { ProgressView().controlSize(.small) }
+                Text(message).font(CDS.sans(12)).foregroundStyle(tone)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let action {
+                    ActionButton(action) { Task { await store.updateComputersEngine() } }
+                }
+            }
+            .padding(14)
+            .background(CDS.Surface.s2, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var tone: Color {
+        switch launcher.update {
+        case .blocked: CDS.Text.warning
+        case .failed: CDS.Text.danger
+        default: CDS.Text.secondary
+        }
+    }
+
+    private var action: String? {
+        switch launcher.update {
+        case .available: launcher.updateStartsAutomatically ? nil : "Update engine"
+        case .blocked: "Try again"
+        default: nil
+        }
     }
 }
 
