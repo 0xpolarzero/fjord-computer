@@ -301,6 +301,17 @@ private func node(_ extra: [String: Any] = [:]) -> [String: Any] {
         #expect(things[0].url.path.hasSuffix("/runs/5") && things[1].url.path == "/o/r/commit/abc")
         #expect(things[1].updatedAt == Date(timeIntervalSince1970: 100))
     }
+
+    @Test func aMovedRepoReadUnderItsOldNameIsTheSameThingsAsUnderItsNewOne() {
+        let status = CIStatus(branch: "main", sha: "abc", checkedAt: Date(), title: "Fix",
+                              workflows: [CIStatus.Workflow(id: "11", name: "Test", state: .failure, failing: ["test"],
+                                                            url: URL(string: "https://github.com/org/r/actions/runs/5"), updatedAt: nil)])
+        let old = InboxSync.workflowThings(repo: "me/r", branch: "main", status: status)
+        let new = InboxSync.workflowThings(repo: "org/r", branch: "main", status: status)
+        #expect(old.map(\.id) == ["workflow:org/r:11@main"] && old.map(\.id) == new.map(\.id) && old[0].repo == "org/r")
+        // Only the case differs: the name stays as asked, so nothing known of it moves.
+        #expect(InboxSync.workflowThings(repo: "Org/R", branch: "main", status: status)[0].id == "workflow:Org/R:11@main")
+    }
 }
 
 extension InboxSyncMapping {

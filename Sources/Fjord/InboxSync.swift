@@ -387,6 +387,7 @@ enum InboxSync {
     /// A branch's CI as workflow things, keeping what was read of them (`keepingUnread`), each told its repo's default branch
     /// when it is that one; off the main thread (nonisolated and async).
     static func mapWorkflows(repo: String, branch: String, status: CIStatus, known: [String: Thing], isDefault: Bool) async -> [Thing] {
+        let repo = currentName(of: repo, status: status)
         var things = keepingUnread(workflowThings(repo: repo, branch: branch, status: status), status: status, known: known,
                                    repo: repo, branch: branch)
         if isDefault { for i in things.indices { things[i].defaultBranch = branch } }
@@ -764,7 +765,8 @@ enum InboxSync {
     /// A branch's CI as workflow things: one per workflow (and one for the external checks and statuses, if it has any), each
     /// with its own state and the jobs that failed in it. A workflow that didn't run on the branch's latest commit isn't there.
     static func workflowThings(repo: String, branch: String, status: CIStatus) -> [Thing] {
-        status.workflows.map { workflow in
+        let repo = currentName(of: repo, status: status)
+        return status.workflows.map { workflow in
             let at = workflow.updatedAt ?? status.updatedAt ?? status.checkedAt
             var thing = Thing(id: workflowID(repo: repo, workflow: workflow.id, branch: branch), kind: .workflow, repo: repo,
                               number: nil, title: status.title ?? repo,
@@ -800,6 +802,20 @@ enum InboxSync {
                 && thing.ciRun?.hasPrefix("ci:\(sha):") == true
         }
         return read + kept.sorted { $0.id < $1.id }
+    }
+
+    /// The repo as GitHub names it now, as its runs' pages say. A repo moved or renamed still answers to its old name
+    /// (GitHub redirects it), so one watched under both would show each of its runs twice; a name that differs only in case
+    /// is kept as asked.
+    static func currentName(of repo: String, status: CIStatus) -> String {
+        for workflow in status.workflows {
+            guard let url = workflow.url, url.host == "github.com" else { continue }
+            let parts = url.pathComponents.filter { $0 != "/" }
+            guard parts.count >= 3, parts[2] == "actions" else { continue }
+            let named = "\(parts[0])/\(parts[1])"
+            return named.lowercased() == repo.lowercased() ? repo : named
+        }
+        return repo
     }
 
     static func workflowID(repo: String, workflow: String, branch: String) -> String {
