@@ -267,6 +267,62 @@ Triage's categories/rules/groups, marking a card seen, marking inbox things done
   Reproduce from `evals/router`: `python3 -m explore.caps_ack`, then `v2.run.episodes … --format capabilities-o`, then
   `python3 -m explore.caps_report episodes` and `bench`.
 
+## Router actions from words (2026-10-14, explore/capabilities.py `capabilities-x…`)
+
+Four more registry capabilities with an outcome phrase each: archive a card ("I'll do the theme one myself"), reopen an
+archived card, mute or unmute a project, stop a running session's turn. Each phrase was added to the `change_fjord`
+criteria and `gate_setting` text alone and together (one format per subset, `capabilities-x-<keys>`), on 42 new cases
+written on real boards (`explore/caps_ack.py`, `ack_actions`): 26 clear asks (gold: Fjord itself) and 16 traps that use the
+same words for a session's work ("archive the old logs in the repo", "stop using lodash in the code", "mute the warnings in
+the build", "reopen the issue and fix it"; 8 addressed to a session, 8 bare). Everything else is frozen, as before.
+
+Where the clear asks went (to Router / to a session / asked; the 6 to 8 cases of each kind):
+
+| text | archive (8) | reopen (6) | mute (6) | stop (6) | traps to a session (8) | bare traps (8) | wrong sends (of 42) |
+|---|---|---|---|---|---|---|---|
+| capabilities-o (adopted before) | 0 / 1 / 7 | 0 / 2 / 4 | 4 / 0 / 2 | 1 / 4 / 1 | 0 / 1 / 7 | 0 / 0 / 8 | 7 |
+| + archive | 3 / 0 / 5 | 1 / 1 / 4 | 4 / 0 / 2 | 1 / 4 / 1 | 0 / 1 / 7 | 0 / 0 / 8 | 5 |
+| + reopen | 0 / 1 / 7 | 3 / 1 / 2 | 4 / 0 / 2 | 1 / 5 / 0 | 0 / 1 / 7 | 0 / 0 / 8 | 7 |
+| + mute | 0 / 1 / 7 | 0 / 1 / 5 | 4 / 0 / 2 | 1 / 4 / 1 | 0 / 1 / 7 | 0 / 0 / 8 | 6 |
+| + stop | 0 / 1 / 7 | 1 / 1 / 4 | 4 / 0 / 2 | 1 / 2 / 3 | 0 / 1 / 7 | 0 / 0 / 8 | 4 |
+| + all four | 3 / 0 / 5 | 3 / 1 / 2 | 3 / 0 / 3 | 1 / 3 / 2 | 0 / 1 / 7 | 0 / 0 / 8 | 4 |
+| **+ archive + reopen (adopted)** | 3 / 0 / 5 | 3 / 1 / 2 | 4 / 0 / 2 | 1 / 4 / 1 | 0 / 1 / 7 | 0 / 0 / 8 | 5 |
+
+Real data, adopted text against capabilities-o (replay of the dev real episodes, and the bench on the 611 real moments;
+wrong sends / loss per submit, delta with a paired 95% interval):
+
+| set | capabilities-o | archive + reopen | all four | reordered base (placebo) |
+|---|---|---|---|---|
+| replay B (162) loss | 1.315 | 1.321 (+0.006 [-0.049, +0.045]) | 1.315 (0.000) | 1.290 (-0.025) |
+| replay A (231) loss | 1.329 | 1.511 (+0.182 [-0.037, +0.634]) | 1.519 (+0.190) | 1.623 (+0.294) |
+| replay A wrong sends | 0.9% | 1.7% | 1.7% | 2.2% |
+| bench realB (214) loss | 2.033 | 1.930 (-0.103) | 2.033 (0.000) | 2.248 (+0.215) |
+| bench realA (397) loss | 1.960 | 1.942 (-0.018) | 1.856 (-0.103) | 1.869 (-0.091) |
+| 40 acknowledgements: gold Router reaches Router / asks | 10 / 12 | 11 / 11 | 10 / 12 | 10 / 12 |
+
+- **The placebo is the noise.** The "reordered base" column is the same four capabilities in reverse order, with no new
+  meaning. It moves 14 real submits and changes replay A more (+0.294 in loss, 5 wrong sends against 2) than either action
+  text does. The two extra wrong sends in replay A under every new text are the same two messages that the placebo moves
+  ("Tell me exactly what do you want to test?" and a follow-up, sent to a session that the board makes plausible): Jev's
+  answer shifts with any change of wording, and the cost falls on the same replay A moments. Read against that, the real
+  data show no harm from the new phrases (every interval includes 0) and the bench is flat to nominally better.
+- **Verdict per action.** *Archive*: adopted. 3 of 8 reach the Router, 5 ask, none go to a session (before: 1 to a session);
+  no trap reaches the Router. *Reopen*: adopted. 3 of 6 reach the Router, 2 ask, 1 goes to the session (before: 2 to
+  sessions); no trap reaches the Router. *Mute*: dropped from the routing text. "Mute lookout" already reaches the Router
+  (4 of 6) through the notifications phrase, the new phrase added nothing, and with all four phrases it was 3 of 6.
+  *Stop*: dropped. "Stop the CI session" went to the session itself in 4 of 6 with or without the phrase (1 of 6 reached the
+  Router): a session's name next to a command reads as a message for it, and a phrase doesn't change that. In both cases the
+  tool stays in the run (`RouterCapability.routed` is false), reachable when a message reaches the Router another way, say
+  in a compound message.
+- **Traps never reach the Router**, under any text: 16 of 16 in all seven formats.
+- Cost: about +85 input tokens a call (two phrases), same latency. A few thousand fresh Jev calls over the whole comparison (cached afterwards).
+- Limits: 42 written cases; the stop and reopen asks name sessions by their titles (some awkward, they are real), the
+  reopen boards show an open card where an archived one would be; a phrase that fails here may do better in another
+  wording, and a stop that goes to a session is not necessarily wrong for the user (the session gets a message, it
+  doesn't stop). Reproduce from `evals/router`: `python3 -m explore.caps_ack`, then `python3 -m v2.run.episodes
+  v2/data/exp/ack_actions.jsonl --format capabilities-x-archive-reopen` (and each other format), then `python3 -m
+  explore.caps_report actions|episodes|bench --base capabilities-o --new capabilities-x-archive-reopen`.
+
 ## Mistakes, and what they taught
 
 - **Sorted keys hid option order.** `jev.py` sent `json.dumps(sort_keys=True)`, so named options always reached Jev in

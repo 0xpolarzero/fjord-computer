@@ -2,6 +2,9 @@
 
 python3 -m explore.caps_report bench  [--calls N]   realA / realB through bench.py's machinery (611 real moments)
 python3 -m explore.caps_report episodes             v2.run.episodes traces in v2/data/exp/out (real_A, real_B, ack)
+python3 -m explore.caps_report actions --base capabilities-o --new capabilities-x
+                                                    the 42 archive / reopen / mute / stop cases and traps (ack_actions)
+--base / --new name the two formats compared (default combo-o and capabilities-o).
 
 Both read/write only gitignored data. `bench` asks Jev for the answers missing from the cache (JEV_ORDERED=1, at most
 --calls new calls, 0 = cache only) and scores with explore.final3:best seeded with RouterRoute.swift's numbers, never
@@ -21,7 +24,7 @@ HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 OUT = HERE / "v2" / "data" / "exp" / "out"
 INTENTS = {"change_fjord", "question", "compound"}
-FORMATS = ("combo-o", "capabilities-o")
+FORMATS = ("combo-o", "capabilities-o")  # set from --base / --new
 
 
 def kind_of(dest):
@@ -162,8 +165,9 @@ def paired(base, new, key, reps=2000, seed=7):
 
 def show(title, base, new):
     m0, m1 = metrics(base), metrics(new)
+    names = FORMATS
     print(f"\n### {title}  (n={m0['n']}, paired on {len({r['id'] for r in base} & {r['id'] for r in new})})")
-    print("| metric | combo-o | capabilities-o | delta [95% paired] |")
+    print(f"| metric | {names[0]} | {names[1]} | delta [95% paired] |")
     print("|---|---|---|---|")
     rows = [("wrong / all", "wrong_all", "wrong"), ("wrong / sends", "wrong_sends", None), ("send rate", "send_rate", "send"),
             ("loss / submit (wrong 25)", "loss", "loss"), ("ask hit@4", "hit4", None)]
@@ -184,7 +188,7 @@ def show(title, base, new):
 
 def ack_table(base, new):
     print("\n### acknowledgement set: where each category went (sessions / Router / new / ask) for gold Router vs gold session")
-    for fmt, recs in (("combo-o", base), ("capabilities-o", new)):
+    for fmt, recs in ((FORMATS[0], base), (FORMATS[1], new)):
         print(f"\n{fmt}")
         print("| category | gold | n | right | to session | to Router | to new | ask | wrong |")
         print("|---|---|---|---|---|---|---|---|---|")
@@ -203,11 +207,21 @@ def ack_table(base, new):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["bench", "episodes"])
+    ap.add_argument("mode", choices=["bench", "episodes", "actions"])
+    ap.add_argument("--base", default="combo-o")
+    ap.add_argument("--new", default="capabilities-o")
     ap.add_argument("--calls", type=int, default=0)
     ap.add_argument("--sets", default="realA,realB")
     a = ap.parse_args()
-    if a.mode == "bench":
+    global FORMATS
+    FORMATS = (a.base, a.new)
+    if a.mode == "actions":
+        base, new = (episode_records(OUT / f"{f}.ack_actions.jsonl") for f in FORMATS)
+        ack_table(base, new)
+        print("\nmessages that reached the Router, by case")
+        for b, n in zip(base, new):
+            print(f"{b['id']:28} {b['message'][:56]:56} {b['sent_kind']:7} -> {n['sent_kind']:7} (gold {n['gold_kind']})")
+    elif a.mode == "bench":
         total = 0
         for s in a.sets.split(","):
             recs = {}
@@ -215,12 +229,12 @@ def main():
                 recs[fmt], todo = bench_records(fmt, s, a.calls)
                 total += todo
                 json.dump(recs[fmt], open(OUT / f"bench.{fmt}.{s}.json", "w"))
-            show(f"bench {s} (final3:best, shipped weights)", recs["combo-o"], recs["capabilities-o"])
+            show(f"bench {s} (final3:best, shipped weights)", recs[FORMATS[0]], recs[FORMATS[1]])
         print(f"\nnew calls this run: {total}")
     else:
         for s in ("real_B", "real_A"):
-            show(f"episodes dev {s}", episode_records(OUT / f"combo-o.{s}.jsonl"), episode_records(OUT / f"capabilities-o.{s}.jsonl"))
-        base, new = episode_records(OUT / "combo-o.ack.jsonl"), episode_records(OUT / "capabilities-o.ack.jsonl")
+            show(f"episodes dev {s}", *(episode_records(OUT / f"{f}.{s}.jsonl") for f in FORMATS))
+        base, new = (episode_records(OUT / f"{f}.ack.jsonl") for f in FORMATS)
         show("episodes ack set (40)", base, new)
         ack_table(base, new)
 

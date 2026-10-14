@@ -26,12 +26,37 @@ CAPABILITIES = [
 NOT_THESE = ("Not asking a session to build or change code, and not a message for a session to act on (an instruction "
              "or a reply addressed to it, even one that mentions what the user has seen)")
 
-CHANGE_FJORD = "Lookout itself does something for the user, without any session: " + "; ".join(CAPABILITIES) + ". " + NOT_THESE
+# The Router actions added after: each a registry capability in Swift (RouterCapability.all, `outcome`), measured one by one
+# and together (`capabilities-x...`, below) before any of them joined the routing text.
+EXTRA = {
+    "archive": "archive a Router card the user will handle themselves or doesn't need (\"I'll do the theme one myself\", "
+               "\"archive the login card\")",
+    "reopen": "reopen a Router card the user archived (\"reopen the docs card\")",
+    "mute": "mute or unmute a project's sessions in the Router (\"mute microsandbox\")",
+    "stop": "stop a running session's current turn (\"stop the CI session\")",
+}
+# What Fjord's routing text names now: the base list and the extras that passed (docs/design/router-research.md, "Router
+# actions from words"). parity.py writes this one for the Swift test.
+ADOPTED_EXTRA = ["archive", "reopen"]
 
-GATE_SETTING = {"type": "noul", "instructions": {
-    "question": ("Does `message` ask Lookout itself to do something for the user, without any session: "
-                 + "; ".join(CAPABILITIES) + "? Not code to be written, and not a message for a session to do or "
-                 "answer something.")}}
+
+def capability_list(extra=()):
+    return CAPABILITIES + [EXTRA[k] for k in EXTRA if k in extra]
+
+
+def change_fjord(extra=()):
+    return "Lookout itself does something for the user, without any session: " + "; ".join(capability_list(extra)) + ". " + NOT_THESE
+
+
+def gate_setting(extra=()):
+    return {"type": "noul", "instructions": {
+        "question": ("Does `message` ask Lookout itself to do something for the user, without any session: "
+                     + "; ".join(capability_list(extra)) + "? Not code to be written, and not a message for a session to do or "
+                     "answer something.")}}
+
+
+CHANGE_FJORD = change_fjord()
+GATE_SETTING = gate_setting()
 
 
 def _scrub(x):
@@ -44,13 +69,39 @@ def _scrub(x):
     return x
 
 
-GATES = {**combo.GATES, "gate_setting": GATE_SETTING}
-CRIT = {**I.CRIT_WORDED, "change_fjord": CHANGE_FJORD}
+def make(extra=()):
+    gates = {**combo.GATES, "gate_setting": gate_setting(extra)}
+    crit = {**I.CRIT_WORDED, "change_fjord": change_fjord(extra)}
+
+    def capabilities(case, rng=None):
+        state, q, keymap = combo.combo(case, rng, gates=gates, crit=crit)
+        return _scrub(state), _scrub(q), keymap
+
+    return capabilities
 
 
-def capabilities(case, rng=None):
-    state, q, keymap = combo.combo(case, rng, gates=GATES, crit=CRIT)
-    return _scrub(state), _scrub(q), keymap
+def _subsets():
+    keys = list(EXTRA)
+    for mask in range(1, 1 << len(keys)):
+        yield [k for i, k in enumerate(keys) if mask >> i & 1]
 
 
-FORMATS = {"capabilities-o": capabilities}
+# capabilities-o: the four adopted before. capabilities-x: all the extras; capabilities-x-archive-mute: that subset (in
+# the order of EXTRA); one name per subset, so a phrase that fails can be dropped and the rest measured again.
+FORMATS = {"capabilities-o": make()}
+
+
+def _placebo():
+    """The base list in reverse order: the same meaning, other words in other places, so how much a replay moves on a
+    wording change that carries no new capability (the noise the real-data comparison is read against)."""
+    base = list(CAPABILITIES)
+    CAPABILITIES.reverse()
+    try:
+        return make()
+    finally:
+        CAPABILITIES[:] = base
+
+
+FORMATS["capabilities-placebo"] = _placebo()
+for _extra in _subsets():
+    FORMATS["capabilities-x" if len(_extra) == len(EXTRA) else "capabilities-x-" + "-".join(_extra)] = make(_extra)

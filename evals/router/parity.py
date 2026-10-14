@@ -111,8 +111,8 @@ def capabilities():
     """The two texts of format capabilities-o, as Fjord words them (the eval ran under the name Lookout)."""
     from explore import capabilities as C
     name = lambda t: t.replace("Lookout", "Fjord")
-    CAPS_OUT.write_text(json.dumps({"change_fjord": name(C.CHANGE_FJORD),
-                                    "gate_setting": name(C.GATE_SETTING["instructions"]["question"])},
+    CAPS_OUT.write_text(json.dumps({"change_fjord": name(C.change_fjord(C.ADOPTED_EXTRA)),
+                                    "gate_setting": name(C.gate_setting(C.ADOPTED_EXTRA)["instructions"]["question"])},
                                    ensure_ascii=False, indent=1))
     print("capability texts →", CAPS_OUT)
 

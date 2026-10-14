@@ -7,7 +7,8 @@ redacted, never committed), the message a template filled with a real session's 
   mixed      an acknowledgement plus a request for someone else: compound or change_fjord (a session drops half of it)
 The templates are committed; the boards and filled messages go to v2/data/exp/ (gitignored).
 
-python3 -m explore.caps_ack            (from evals/router) writes v2/data/exp/ack.jsonl, real_A.jsonl, real_B.jsonl"""
+python3 -m explore.caps_ack            (from evals/router) writes v2/data/exp/ack.jsonl, real_A.jsonl, real_B.jsonl and
+                                       ack_actions.jsonl (the 42 archive / reopen / mute / stop cases and traps)"""
 import hashlib
 import json
 import pathlib
@@ -65,6 +66,58 @@ CASES = [
 assert len(CASES) == 40
 
 
+# The Router actions added after the acknowledgements (archive, reopen, mute, stop): clear asks, whose gold is Fjord itself
+# (change_fjord), and traps that use the same words for a session's work, whose gold is a session (or, with no session
+# named, any session or a new one: only a send to the Router is wrong). need: "card" a session with an open card (any kind,
+# a needs-you one too), "nocard" a session with none (its card would be an archived one), "running" a running session,
+# "proj" a project of a live session, "done" as above, "bare" any board.
+ACTIONS = [
+    ("archive", "change", "card", "archive the {t} card"),
+    ("archive", "change", "card", "I'll handle the {t} one myself"),
+    ("archive", "change", "card", "I don't need the {t} card, you can drop it"),
+    ("archive", "change", "card", "{t} is mine, I'll deal with it myself"),
+    ("archive", "change", "card", "no need for the {t} card, archive it"),
+    ("archive", "change", "card", "archive {t}"),
+    ("archive", "change", "card", "I'll do the {t} thing myself, clear it"),
+    ("archive", "change", "card", "I'll take care of {t} by hand"),
+    ("reopen", "change", "nocard", "reopen the {t} card"),
+    ("reopen", "change", "nocard", "bring back the {t} card"),
+    ("reopen", "change", "nocard", "I archived {t} by mistake, reopen it"),
+    ("reopen", "change", "nocard", "put the {t} card back"),
+    ("reopen", "change", "nocard", "unarchive {t}"),
+    ("reopen", "change", "nocard", "reopen {t}"),
+    ("mute", "change", "proj", "mute {p}"),
+    ("mute", "change", "proj", "mute the {p} project"),
+    ("mute", "change", "proj", "silence {p} for now"),
+    ("mute", "change", "proj", "unmute {p}"),
+    ("mute", "change", "proj", "{p} is too noisy, mute it"),
+    ("mute", "change", "proj", "I don't want to hear about {p} anymore, mute it"),
+    ("stop", "change", "running", "stop the {t} session"),
+    ("stop", "change", "running", "interrupt {t}"),
+    ("stop", "change", "running", "stop {t}, it's going the wrong way"),
+    ("stop", "change", "running", "abort what {t} is doing"),
+    ("stop", "change", "running", "halt the {t} session now"),
+    ("stop", "change", "running", "{t} is on the wrong track, stop it"),
+    ("trap-session", "session", "done", "{t}: archive the old logs in the repo"),
+    ("trap-session", "session", "done", "{t}: stop using lodash in the code"),
+    ("trap-session", "session", "done", "{t}: mute the warnings in the build"),
+    ("trap-session", "session", "done", "{t}: reopen the issue and fix it"),
+    ("trap-session", "session", "done", "tell {t} to archive old logs under /var/log"),
+    ("trap-session", "session", "done", "tell {t} to stop using the deprecated API"),
+    ("trap-session", "session", "done", "ask {t} to mute the noisy test output"),
+    ("trap-session", "session", "done", "tell {t} to reopen the PR and rebase it"),
+    ("trap-bare", "notrouter", "bare", "archive old logs in the repo"),
+    ("trap-bare", "notrouter", "bare", "stop using moment in the code"),
+    ("trap-bare", "notrouter", "bare", "mute the warnings"),
+    ("trap-bare", "notrouter", "bare", "reopen the issue and fix it"),
+    ("trap-bare", "notrouter", "bare", "stop the dev server and restart it"),
+    ("trap-bare", "notrouter", "bare", "mute the audio in the demo video"),
+    ("trap-bare", "notrouter", "bare", "archive the old branches"),
+    ("trap-bare", "notrouter", "bare", "reopen the issue about the crash"),
+]
+assert len(ACTIONS) == 42
+
+
 def sid_of(episode):
     return episode["group"].split(":")[0]
 
@@ -97,10 +150,30 @@ def done_sessions(state, unique=True):
     return out
 
 
+def titled(session):
+    return 3 <= len(session["title"]) <= 45 and "<" not in session["title"]
+
+
 def pick_for(need, state, rng):
     """(target session or None, other session or None, project or None) when the board suits, else None."""
     if len(live(state)) < 3:
         return None
+    if need == "bare":
+        return None, None, None
+    if need in ("card", "nocard", "running"):
+        t = titles(state)
+        carded = {c["session"] for c in state["cards"]}
+        if need == "card":
+            pool = [s for s in live(state) if s["id"] in carded]
+        elif need == "nocard":
+            pool = [s for s in live(state) if s["id"] not in carded and not s.get("running")]
+        else:
+            pool = [s for s in live(state) if s.get("running")]
+        pool = [s for s in pool if titled(s) and len(t[s["title"].strip().lower()]) == 1]
+        return (rng.choice(pool), None, None) if pool else None
+    if need == "proj":
+        projects = sorted({s["project"] for s in live(state) if s.get("project") and s["project"] != "scratch" and " " not in s["project"]})
+        return (None, None, rng.choice(projects)) if projects else None
     if need == "dup":
         c = done_sessions(state, unique=False)
         return (rng.choice(c), None, None) if c else None
@@ -160,8 +233,50 @@ def build(seed=11):
     return out, real
 
 
+def build_actions(seed=23):
+    """The archive / reopen / mute / stop cases and their traps, on real boards (a different shuffle from `build`)."""
+    rng = random.Random(seed)
+    eps = [json.loads(line) for line in open(DEV)]
+    real = [e for e in eps if e["provenance"]["source"] == "real-moment"]
+    order = list(range(len(real)))
+    rng.shuffle(order)
+    used, out = set(), []
+    for n, (cat, gold, need, template) in enumerate(ACTIONS):
+        for i in order:
+            e = real[i]
+            if e["group"] in used:
+                continue
+            picked = pick_for(need, e["state"], rng)
+            if picked is None:
+                continue
+            used.add(e["group"])
+            t, u, p = picked
+            message = template.format(t=t["title"].strip() if t else "", u="", p=p or "")
+            if gold == "session":
+                intended, acceptable = "session:" + t["id"], ["session:" + t["id"]]
+            elif gold == "notrouter":
+                acceptable = ["session:" + s["id"] for s in live(e["state"])] + ["new:" + x for x in e["state"]["projects"]]
+                intended = acceptable[0]
+            else:
+                intended, acceptable = "change_fjord", ["change_fjord"]
+            out.append({
+                "schema": 2, "id": f"act-{n:02d}-{cat}", "family": cat, "group": f"act:{e['group']}",
+                "provenance": {"source": "ack", "synthetic": ["message"], "board": e["id"]},
+                "tags": {"primary": cat, "gold": gold}, "state": e["state"],
+                "events": [{"id": "e1", "kind": "submit", "message": message, "context": CONTEXT,
+                            "gold": {"intended": intended, "acceptable": acceptable, "clarify": [], "ask": "allowed",
+                                     "consequential": False, "evidence": f"actions set: {cat}, {gold}"}}]})
+            break
+        else:
+            raise SystemExit(f"no board for action case {n} {template!r}")
+    return out
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    actions = build_actions()
+    (OUT / "ack_actions.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in actions))
+    print(f"actions: {len(actions)} cases")
     ack, real = build()
     (OUT / "ack.jsonl").write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in ack))
     for h in "AB":
