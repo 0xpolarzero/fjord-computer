@@ -709,7 +709,6 @@ extension ComputersModel {
             }
             let data = try JSONEncoder().encode(result)
             archiveInspection = try JSONDecoder().decode(SiloWireArchiveInspectionResult.self, from: data)
-            if outcome.error == nil { try await acknowledgeConsumedJob(job.jobId) }
         } catch { actionError = error.localizedDescription }
     }
 
@@ -833,7 +832,6 @@ extension ComputersModel {
         do {
             let outcome = try await waitForFinish(jobId)
             presentJobOutcome(outcome, action: label)
-            if outcome.error == nil { try await acknowledgeConsumedJob(jobId) }
         }
         catch { actionError = error.localizedDescription }
     }

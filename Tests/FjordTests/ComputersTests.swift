@@ -220,6 +220,11 @@ import Testing
         #expect(client.generatedCalls.contains("exports.create"))
         #expect(client.generatedCalls.contains("exports.inspect"))
         #expect(client.generatedCalls.contains("exports.import"))
+        #expect(client.acknowledgedJobs.isEmpty)
+        #expect(model.currentJobReceipt?.action == "Export computer")
+        while let jobId = model.jobAwaitingAcknowledgement {
+            await model.acknowledgePresentedJob(jobId)
+        }
         #expect(client.acknowledgedJobs.count == 3)
         #expect(model.actionError == nil)
     }
@@ -245,7 +250,7 @@ import Testing
         #expect(model.actionError == nil)
     }
 
-    @Test func mockFileTransferShowsUploadsInThePagedBrowseState() async {
+    @Test func mockFileTransferShowsUploadsInThePagedBrowseState() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)
 
@@ -258,6 +263,14 @@ import Testing
         #expect(client.generatedCalls.contains("files.upload"))
         #expect(client.generatedCalls.contains("files.download"))
         #expect(client.jobGetCallCount > 0)
+        #expect(client.acknowledgedJobs.isEmpty)
+        #expect(model.currentJobReceipt?.action == "Upload files")
+        let firstReceipt = try #require(model.jobAwaitingAcknowledgement)
+        await model.acknowledgePresentedJob(firstReceipt)
+        #expect(model.currentJobReceipt?.action == "Download file")
+        while let jobId = model.jobAwaitingAcknowledgement {
+            await model.acknowledgePresentedJob(jobId)
+        }
         #expect(client.acknowledgedJobs.count == 2)
         #expect(model.actionError == nil)
     }

@@ -55,6 +55,16 @@ struct ComputerUploadNotice: Equatable, Identifiable {
     var id: String { jobId }
 }
 
+struct ComputerJobReceipt: Equatable, Identifiable {
+    enum Tone: Equatable { case success, warning, danger }
+
+    var jobId: String
+    var action: String
+    var message: String
+    var tone: Tone
+    var id: String { jobId }
+}
+
 @MainActor
 @Observable
 final class ComputersModel {
@@ -107,6 +117,8 @@ final class ComputersModel {
     @ObservationIgnored private var quitResolutionTask: Task<Void, Never>?
     @ObservationIgnored var jobActions: [String: String] = [:]
     @ObservationIgnored var uploadContexts: [String: ComputerUploadContext] = [:]
+    @ObservationIgnored private var jobReceiptQueue: [String] = []
+    @ObservationIgnored private var acknowledgingJobIDs: Set<String> = []
     @ObservationIgnored private var presentedJobOutcomes: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Error>?
     @ObservationIgnored private var connectionAttemptID: UUID?
@@ -410,10 +422,6 @@ final class ComputersModel {
             presentJobOutcome(outcome, action: label)
             let hasUnresolvedUploadOutcome = label == "Upload files"
                 && (uploadConflicts.contains { $0.jobId == jobId } || uploadNotices.contains { $0.jobId == jobId })
-            if outcome.error == nil && !hasUnresolvedUploadOutcome {
-                try await acknowledgeConsumedJob(jobId)
-                uploadContexts[jobId] = nil
-            }
             let uploadWasCancelled = label == "Upload files" && uploadNotices.contains { $0.jobId == jobId }
             return outcome.error == nil && !hasUnresolvedUploadOutcome && !uploadWasCancelled
         }
@@ -445,12 +453,11 @@ final class ComputersModel {
     }
 
     func acknowledgePresentedJob(_ jobId: String) async {
-        guard jobAwaitingAcknowledgement == jobId else { return }
+        guard jobAwaitingAcknowledgement == jobId, acknowledgingJobIDs.insert(jobId).inserted else { return }
+        defer { acknowledgingJobIDs.remove(jobId) }
         do {
             try await client.operationsJobAcknowledge(jobId: jobId, deviceId: nil)
-            finishedJobs[jobId] = nil
-            jobActions[jobId] = nil
-            jobAwaitingAcknowledgement = nil
+            removeAcknowledgedJobLocally(jobId)
         } catch {
             actionError = error.localizedDescription
         }
@@ -458,9 +465,15 @@ final class ComputersModel {
 
     func acknowledgeConsumedJob(_ jobId: String) async throws {
         try await client.operationsJobAcknowledge(jobId: jobId, deviceId: nil)
+        removeAcknowledgedJobLocally(jobId)
+    }
+
+    private func removeAcknowledgedJobLocally(_ jobId: String) {
         finishedJobs[jobId] = nil
         jobActions[jobId] = nil
-        if jobAwaitingAcknowledgement == jobId { jobAwaitingAcknowledgement = nil }
+        uploadContexts[jobId] = nil
+        jobReceiptQueue.removeAll { $0 == jobId }
+        jobAwaitingAcknowledgement = jobReceiptQueue.first
     }
 
     var pendingUploadConflict: ComputerUploadConflict? { uploadConflicts.first }
@@ -471,6 +484,18 @@ final class ComputersModel {
 
     func uploadNotice(for computerId: String) -> ComputerUploadNotice? {
         uploadNotices.first { $0.computerId == computerId }
+    }
+
+    var currentJobReceipt: ComputerJobReceipt? {
+        guard let jobId = jobAwaitingAcknowledgement, let result = finishedJobs[jobId] else { return nil }
+        let action = jobActions[jobId] ?? "Computer operation"
+        if let failure = result.error {
+            let wasCancelled = failure.code == "cancelled"
+            return ComputerJobReceipt(jobId: jobId, action: action,
+                message: wasCancelled ? "\(action) was cancelled." : "\(action) failed: \(failure.message)",
+                tone: wasCancelled ? .warning : .danger)
+        }
+        return ComputerJobReceipt(jobId: jobId, action: action, message: "\(action) completed.", tone: .success)
     }
 
     func cancelJob(_ jobId: String) async {
@@ -568,53 +593,52 @@ final class ComputersModel {
     private func recordFinished(_ result: OperationJobFinished) {
         finishedJobs[result.jobId] = result
         if activeJob?.jobId == result.jobId { activeJob = nil }
-        if result.error?.code == "cancelled" {
-            jobAwaitingAcknowledgement = result.jobId
-            return
-        }
-        if let action = jobActions[result.jobId] {
-            presentJobOutcome(result, action: action)
-        } else if let failure = result.error {
-            presentJobOutcome(result, action: "Computer operation")
-            actionError = "Computer operation failed: \(failure.message)"
-        }
+        presentJobOutcome(result, action: jobActions[result.jobId] ?? "Computer operation")
     }
 
     func presentJobOutcome(_ result: OperationJobFinished, action: String) {
         guard presentedJobOutcomes.insert(result.jobId).inserted else { return }
         if action == "Upload files", result.error == nil, let upload = decodeUploadOutcome(result.result) {
-            switch upload.status {
-            case .conflict:
-                if let context = uploadContexts[result.jobId] {
-                    uploadConflicts.removeAll { $0.jobId == result.jobId }
-                    uploadConflicts.append(ComputerUploadConflict(jobId: result.jobId,
-                        computerId: context.computerId, directory: context.directory, paths: context.paths,
-                        names: upload.names ?? []))
-                    actionError = nil
-                } else {
-                    if let names = upload.names, !names.isEmpty {
+            if upload.status != .done {
+                switch upload.status {
+                case .conflict:
+                    if let context = uploadContexts[result.jobId] {
+                        uploadConflicts.removeAll { $0.jobId == result.jobId }
+                        uploadConflicts.append(ComputerUploadConflict(jobId: result.jobId,
+                            computerId: context.computerId, directory: context.directory, paths: context.paths,
+                            names: upload.names ?? []))
+                        actionError = nil
+                    } else if let names = upload.names, !names.isEmpty {
                         actionError = "Upload paused because these files already exist: \(names.joined(separator: ", "))."
                     } else {
                         actionError = "Upload paused because files with those names already exist."
                     }
-                }
-            case .cancelled:
-                if let context = uploadContexts[result.jobId] {
-                    uploadNotices.removeAll { $0.jobId == result.jobId }
-                    uploadNotices.append(ComputerUploadNotice(jobId: result.jobId,
-                        computerId: context.computerId, message: "Upload cancelled."))
-                    actionError = nil
-                } else {
+                    return
+                case .cancelled:
+                    if let context = uploadContexts[result.jobId] {
+                        uploadNotices.removeAll { $0.jobId == result.jobId }
+                        uploadNotices.append(ComputerUploadNotice(jobId: result.jobId,
+                            computerId: context.computerId, message: "Upload cancelled."))
+                        actionError = nil
+                        return
+                    }
                     actionError = "Upload cancelled."
+                    if finishedJobs[result.jobId] != nil { enqueueJobReceipt(result.jobId) }
+                    return
+                case .done:
+                    break
                 }
-            case .done:
-                break
             }
-            return
         }
-        guard let failure = result.error else { return }
-        actionError = "\(action) failed: \(failure.message)"
-        jobAwaitingAcknowledgement = result.jobId
+        if let failure = result.error, failure.code != "cancelled" {
+            actionError = "\(action) failed: \(failure.message)"
+        }
+        enqueueJobReceipt(result.jobId)
+    }
+
+    private func enqueueJobReceipt(_ jobId: String) {
+        if !jobReceiptQueue.contains(jobId) { jobReceiptQueue.append(jobId) }
+        jobAwaitingAcknowledgement = jobReceiptQueue.first
     }
 
     private func decodeUploadOutcome(_ value: JSONValue?) -> SiloWireUploadOutcome? {
