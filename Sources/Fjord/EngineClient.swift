@@ -289,6 +289,29 @@ struct MacosComputerCreateRequest: Codable, Equatable {
     var diskGiB: Int
 }
 
+struct DeviceCapacity: Codable, Equatable {
+    var logicalCpus: Int
+    var physicalMemoryBytes: UInt64
+    var maxMemoryGib: Int
+}
+
+struct MacosHostLimits: Codable, Equatable {
+    var cpus: Int
+    var memory_gib: Int
+}
+
+enum RemoteLoginStatus: String, Codable, Equatable { case enabled, disabled, unknown }
+
+struct DeviceFacts: Codable, Equatable {
+    var deviceCapacity: DeviceCapacity?
+    var macosHostLimits: MacosHostLimits?
+    var remoteLogin: RemoteLoginStatus
+
+    static let demo = DeviceFacts(
+        deviceCapacity: DeviceCapacity(logicalCpus: 16, physicalMemoryBytes: 68_719_476_736, maxMemoryGib: 64),
+        macosHostLimits: MacosHostLimits(cpus: 16, memory_gib: 64), remoteLogin: .unknown)
+}
+
 struct ComputerCreateRequest: Codable, Equatable {
     var kind: ComputerKind
     var configuration: ComputerConfiguration? = nil
@@ -685,10 +708,64 @@ enum EngineClientError: LocalizedError, Equatable {
     }
 }
 
+enum ComputerName {
+    static let maximumLength = 32
+
+    static func isValid(_ name: String) -> Bool {
+        let bytes = Array(name.utf8)
+        guard (1...maximumLength).contains(bytes.count), (97...122).contains(bytes[0]) else { return false }
+        return bytes.dropFirst().allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
+    }
+
+    static func unique(_ base: String, among existing: [String]) -> String {
+        let slug = normalized(base)
+        let used = Set(existing.map { $0.lowercased() })
+        var suffixNumber = 1
+        while true {
+            let suffix = suffixNumber == 1 ? "" : "-\(suffixNumber)"
+            let available = max(1, maximumLength - suffix.utf8.count)
+            let prefix = String(slug.prefix(available)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            let candidate = prefix + suffix
+            if isValid(candidate), !used.contains(candidate.lowercased()) { return candidate }
+            suffixNumber += 1
+        }
+    }
+
+    static func uniqueFork(from sourceName: String, among existing: [String]) -> String {
+        let slug = normalized(sourceName)
+        let used = Set(existing.map { $0.lowercased() })
+        var suffixNumber = 1
+        while true {
+            let suffix = suffixNumber == 1 ? "-fork" : "-fork-\(suffixNumber)"
+            let available = max(1, maximumLength - suffix.utf8.count)
+            let prefix = String(slug.prefix(available)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            let candidate = prefix + suffix
+            if isValid(candidate), !used.contains(candidate.lowercased()) { return candidate }
+            suffixNumber += 1
+        }
+    }
+
+    private static func normalized(_ base: String) -> String {
+        var result = ""
+        for byte in base.lowercased().utf8 {
+            if (97...122).contains(byte) || (48...57).contains(byte) || byte == 45 {
+                result.append(contentsOf: String(decoding: [byte], as: UTF8.self))
+            } else if !result.isEmpty, !result.hasSuffix("-") {
+                result.append("-")
+            }
+        }
+        result = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        if result.isEmpty { return "computer" }
+        if let first = result.utf8.first, !(97...122).contains(first) { return "computer-\(result)" }
+        return result
+    }
+}
+
 /// The Computer tool's boundary. Method names map to the canonical Silo API; `checkpointsList` is a client projection of
 /// `computers.list`, because the spec embeds checkpoint records in each computer row and defines no `checkpoints.list` wire method.
 @MainActor
 protocol EngineClient {
+    func deviceFactsRead(deviceId: String?) async throws -> DeviceFacts
     func computersList(deviceId: String?) async throws -> ComputerInventory
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult
     func computersStart(_ reference: ComputerReference) async throws -> ComputerJob
@@ -716,6 +793,7 @@ protocol EngineClient {
 final class UnavailableEngineClient: EngineClient {
     private func unavailable<T>() throws -> T { throw EngineClientError.unavailable }
 
+    func deviceFactsRead(deviceId: String?) async throws -> DeviceFacts { try unavailable() }
     func computersList(deviceId: String?) async throws -> ComputerInventory { try unavailable() }
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult { try unavailable() }
     func computersStart(_ reference: ComputerReference) async throws -> ComputerJob { try unavailable() }
@@ -791,6 +869,9 @@ final class MockEngineClient: EngineClient {
             template: MacosTemplateSummary(macosVersion: "26.6.2", build: "25G83", current: true), minDiskGiB: 64))
 
     private(set) var inventory: ComputerInventory
+    var deviceFacts: DeviceFacts
+    private(set) var createRequests: [ComputerCreateRequest] = []
+    private(set) var forkRequests: [CheckpointForkRequest] = []
     private(set) var currentProgress: OperationJobProgress?
     private(set) var disconnected = false
     private(set) var disconnectCount = 0
@@ -828,13 +909,17 @@ final class MockEngineClient: EngineClient {
 
     init() {
         inventory = Self.demoInventory
+        deviceFacts = .demo
         currentProgress = Self.demoProgress
     }
 
-    init(inventory: ComputerInventory) {
+    init(inventory: ComputerInventory, deviceFacts: DeviceFacts = .demo) {
         self.inventory = inventory
+        self.deviceFacts = deviceFacts
         currentProgress = Self.demoProgress
     }
+
+    func deviceFactsRead(deviceId: String? = nil) async throws -> DeviceFacts { deviceFacts }
 
     private static var demoProgress: OperationJobProgress {
         OperationJobProgress(jobId: "job:starting-macos-demo", kind: "lifecycle", computerId: startingID,
@@ -862,8 +947,25 @@ final class MockEngineClient: EngineClient {
     }
 
     func computersCreate(_ request: ComputerCreateRequest) async throws -> ComputerCreateResult {
-        let jobId = request.kind == .linux ? "setup:\(request.requestId ?? UUID().uuidString)" : nextJobId()
         if request.kind == .macos, let values = request.request {
+            try validateComputerName(values.name)
+            guard let limits = deviceFacts.macosHostLimits else {
+                throw EngineClientError.invalidAction("macOS host limits are unavailable.")
+            }
+            let maxCpus = max(limits.cpus, 2)
+            let maxMemory = max(limits.memory_gib - 4, 4)
+            let minDisk = max(32, inventory.macos.minDiskGiB)
+            guard (2...maxCpus).contains(values.cpus) else {
+                throw EngineClientError.invalidAction("CPUs must be between 2 and \(maxCpus) on this Mac.")
+            }
+            guard (4...maxMemory).contains(values.memoryGiB) else {
+                throw EngineClientError.invalidAction("Memory must be between 4 and \(maxMemory) GiB on this Mac.")
+            }
+            guard (minDisk...1024).contains(values.diskGiB) else {
+                throw EngineClientError.invalidAction("Disk must be between \(minDisk) and 1024 GiB.")
+            }
+            createRequests.append(request)
+            let jobId = nextJobId()
             let computer = MacosComputer(kind: .macos, id: UUID().uuidString.lowercased(), name: values.name,
                                          cpus: values.cpus, memoryGiB: values.memoryGiB, diskGiB: values.diskGiB,
                                          osVersion: inventory.macos.template.map { "macOS \($0.macosVersion) (\($0.build))" },
@@ -890,6 +992,23 @@ final class MockEngineClient: EngineClient {
         guard request.kind == .linux, var configuration = request.configuration else {
             throw EngineClientError.invalidAction("The create request does not match its computer kind.")
         }
+        try validateComputerName(configuration.name)
+        guard let capacity = deviceFacts.deviceCapacity else {
+            throw EngineClientError.invalidAction("Host capacity is unavailable.")
+        }
+        let memoryCapacityGiB = min(capacity.maxMemoryGib, Int(capacity.physicalMemoryBytes / 1_073_741_824))
+        guard capacity.logicalCpus > 0, configuration.maxCPUs > 0,
+              configuration.maxCPUs <= capacity.logicalCpus,
+              (1...configuration.maxCPUs).contains(configuration.cpus) else {
+            throw EngineClientError.invalidAction("Linux CPU settings exceed this device's capacity.")
+        }
+        guard memoryCapacityGiB > 0, configuration.maxMemoryGiB > 0,
+              configuration.maxMemoryGiB <= memoryCapacityGiB,
+              (1...configuration.maxMemoryGiB).contains(configuration.memoryGiB) else {
+            throw EngineClientError.invalidAction("Linux memory settings exceed this device's capacity.")
+        }
+        createRequests.append(request)
+        let jobId = "setup:\(request.requestId ?? UUID().uuidString)"
         if configuration.id.isEmpty { configuration.id = UUID().uuidString.lowercased() }
         let row = ApplicationComputer(kind: .linux, configuration: configuration, purpose: "Local MicroSandbox",
                                       state: .stopped, stateDetail: "Stopped", canDismissError: false,
@@ -1036,6 +1155,8 @@ final class MockEngineClient: EngineClient {
 
     func checkpointsFork(_ request: CheckpointForkRequest) async throws -> ComputerJob {
         let source = try requireComputer(request.computerId)
+        try validateComputerName(request.newName)
+        forkRequests.append(request)
         if let checkpointId = request.checkpointId, !source.checkpoints.contains(where: { $0.id == checkpointId }) {
             throw EngineClientError.notFound("This checkpoint no longer exists.")
         }
@@ -1210,6 +1331,15 @@ final class MockEngineClient: EngineClient {
     private func requireComputer(_ id: String) throws -> ComputerRow {
         guard let row = inventory.computer(id) else { throw EngineClientError.notFound("This computer no longer exists.") }
         return row
+    }
+
+    private func validateComputerName(_ name: String) throws {
+        guard ComputerName.isValid(name) else {
+            throw EngineClientError.invalidAction("Computer names must be 1–32 characters and match [a-z][a-z0-9-]*.")
+        }
+        guard !inventory.allComputers.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            throw EngineClientError.invalidAction("A computer named '\(name)' already exists.")
+        }
     }
 
     private func nextJobId() -> String {

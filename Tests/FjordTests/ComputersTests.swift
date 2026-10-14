@@ -181,6 +181,61 @@ import Testing
         #expect(model.finishedJobs["job:queued-macos"]?.error?.code == "cancelled")
     }
 
+    @Test func creationAndForkUseUniqueValidNamesWithinSmallHostLimits() async throws {
+        let smallFacts = DeviceFacts(
+            deviceCapacity: DeviceCapacity(logicalCpus: 4, physicalMemoryBytes: 8_589_934_592, maxMemoryGib: 8),
+            macosHostLimits: MacosHostLimits(cpus: 4, memory_gib: 8), remoteLogin: .unknown)
+        var smallInventory = MockEngineClient.demoInventory
+        smallInventory.linux.computers = smallInventory.linux.computers.map { row in
+            var row = row
+            row.configuration.maxCPUs = 4
+            row.configuration.maxMemoryGiB = 8
+            return row
+        }
+        let client = MockEngineClient(inventory: smallInventory, deviceFacts: smallFacts)
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        await model.createLinuxComputer()
+        await model.createLinuxComputer()
+        await model.createMacosComputer()
+        await model.createMacosComputer()
+
+        let linuxRequests = client.createRequests.compactMap(\.configuration)
+        let macosRequests = client.createRequests.compactMap(\.request)
+        let names = linuxRequests.map(\.name) + macosRequests.map(\.name)
+        #expect(names == ["linux-new", "linux-new-2", "macos-new", "macos-new-2"])
+        #expect(names.allSatisfy(ComputerName.isValid))
+        #expect(Set(names.map(\.lowercased())).count == names.count)
+        #expect(linuxRequests.allSatisfy { $0.maxCPUs <= smallFacts.deviceCapacity!.logicalCpus })
+        #expect(linuxRequests.allSatisfy { $0.maxMemoryGiB <= smallFacts.deviceCapacity!.maxMemoryGib })
+        #expect(linuxRequests.allSatisfy { $0.cpus <= $0.maxCPUs && $0.memoryGiB <= $0.maxMemoryGiB })
+        #expect(macosRequests.allSatisfy { $0.cpus <= smallFacts.macosHostLimits!.cpus })
+        #expect(macosRequests.allSatisfy { $0.memoryGiB <= smallFacts.macosHostLimits!.memory_gib - 4 })
+
+        var duplicate = try #require(linuxRequests.first)
+        duplicate.name = "linux-new"
+        do {
+            _ = try await client.computersCreate(.linux(duplicate, requestId: UUID().uuidString))
+            Issue.record("The mock must reject an existing computer name.")
+        } catch {
+            #expect(error.localizedDescription.contains("already exists"))
+        }
+
+        await model.createCheckpoint(for: MockEngineClient.linuxID)
+        let checkpointID = try #require(model.inventory?.computer(MockEngineClient.linuxID)?.checkpoints.first?.id)
+        let longName = String(repeating: "x", count: ComputerName.maximumLength)
+        await model.forkCheckpoint(checkpointID, computerId: MockEngineClient.linuxID, computerName: longName)
+        await model.forkCheckpoint(checkpointID, computerId: MockEngineClient.linuxID, computerName: longName)
+
+        let forkNames = client.forkRequests.map(\.newName)
+        #expect(forkNames.count == 2)
+        #expect(forkNames.allSatisfy { ComputerName.isValid($0) && $0.count == ComputerName.maximumLength })
+        #expect(forkNames.contains { $0.hasSuffix("-fork") })
+        #expect(forkNames.contains { $0.hasSuffix("-fork-2") })
+        #expect(Set(forkNames.map(\.lowercased())).count == 2)
+    }
+
     @Test func completedCheckpointJobsApplyDelayedCheckpointEvents() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)

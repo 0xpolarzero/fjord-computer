@@ -64,6 +64,7 @@ final class ComputersModel {
     @ObservationIgnored private var recoveryRevision: UInt64 = 0
     @ObservationIgnored private var stateRevision: UInt64 = 0
     @ObservationIgnored private var bufferedEvents: [(UInt64, EngineEvent)] = []
+    @ObservationIgnored private var reservedNames: Set<String> = []
     @ObservationIgnored private var isRecovering = false
     @ObservationIgnored private var wantsConnection = false
 
@@ -259,24 +260,62 @@ final class ComputersModel {
         await perform("Create checkpoint") { try await self.client.checkpointsCreate(CheckpointCreateRequest(computerId: computerId, name: name, kind: .manual)) }
     }
     func createLinuxComputer() async {
-        let id = UUID().uuidString.lowercased()
-        let configuration = ComputerConfiguration(id: id, name: "linux-new", cpus: 4, maxCPUs: 12,
-                                                  memoryGiB: 8, maxMemoryGiB: 32, workspaceStorageGiB: 64,
-                                                  runtimeStorageGiB: 32)
-        await perform("Create Linux computer") { try await self.client.computersCreate(.linux(configuration, requestId: id)) }
+        do {
+            let facts = try await client.deviceFactsRead(deviceId: nil)
+            guard let capacity = facts.deviceCapacity else {
+                throw EngineClientError.invalidAction("Host CPU and memory capacity are unavailable.")
+            }
+            let current = try await inventoryForCreation()
+            let cpuLimit = min(capacity.logicalCpus, max(1, capacity.logicalCpus / 2))
+            let memoryLimit = min(capacity.maxMemoryGib, Int(capacity.physicalMemoryBytes / 1_073_741_824)) / 2
+            guard cpuLimit > 0, memoryLimit > 0 else {
+                throw EngineClientError.invalidAction("This device does not have enough available capacity to create a Linux computer.")
+            }
+            let name = reserveName("linux-new", in: current)
+            defer { reservedNames.remove(name.lowercased()) }
+            let id = UUID().uuidString.lowercased()
+            let configuration = ComputerConfiguration(id: id, name: name, cpus: min(2, cpuLimit), maxCPUs: cpuLimit,
+                                                      memoryGiB: min(4, memoryLimit), maxMemoryGiB: memoryLimit,
+                                                      workspaceStorageGiB: 64, runtimeStorageGiB: 32)
+            await perform("Create Linux computer") {
+                try await self.client.computersCreate(.linux(configuration, requestId: id))
+            }
+        } catch { actionError = error.localizedDescription }
     }
     func createMacosComputer() async {
-        let request = MacosComputerCreateRequest(name: "macos-new", cpus: 4, memoryGiB: 8, diskGiB: 64)
-        await perform("Create macOS computer") { try await self.client.computersCreate(.macos(request)) }
+        do {
+            let facts = try await client.deviceFactsRead(deviceId: nil)
+            guard let limits = facts.macosHostLimits else {
+                throw EngineClientError.invalidAction("macOS host limits are unavailable.")
+            }
+            let current = try await inventoryForCreation()
+            let cpuLimit = max(limits.cpus, 2)
+            let memoryLimit = max(limits.memory_gib - 4, 4)
+            let minimumDisk = max(32, current.macos.minDiskGiB)
+            guard minimumDisk <= 1024 else {
+                throw EngineClientError.invalidAction("The macOS template requires more disk space than this computer can create.")
+            }
+            let name = reserveName("macos-new", in: current)
+            defer { reservedNames.remove(name.lowercased()) }
+            let request = MacosComputerCreateRequest(name: name, cpus: max(2, cpuLimit / 2),
+                                                     memoryGiB: min(memoryLimit, max(4, limits.memory_gib / 2)),
+                                                     diskGiB: minimumDisk)
+            await perform("Create macOS computer") { try await self.client.computersCreate(.macos(request)) }
+        } catch { actionError = error.localizedDescription }
     }
     func restoreCheckpoint(_ checkpointId: String, computerId: String) async {
         await perform("Restore checkpoint") { try await self.client.checkpointsRestore(CheckpointRestoreRequest(computerId: computerId, checkpointId: checkpointId)) }
     }
     func forkCheckpoint(_ checkpointId: String, computerId: String, computerName: String) async {
-        await perform("Fork checkpoint") {
-            try await self.client.checkpointsFork(CheckpointForkRequest(computerId: computerId, checkpointId: checkpointId,
-                                                                        newName: "\(computerName)-fork"))
-        }
+        do {
+            let current = try await inventoryForCreation()
+            let name = reserveForkName(from: computerName, in: current)
+            defer { reservedNames.remove(name.lowercased()) }
+            await perform("Fork checkpoint") {
+                try await self.client.checkpointsFork(CheckpointForkRequest(computerId: computerId, checkpointId: checkpointId,
+                                                                            newName: name))
+            }
+        } catch { actionError = error.localizedDescription }
     }
     func deleteCheckpoint(_ checkpointId: String, computerId: String) async {
         await perform("Delete checkpoint") { try await self.client.checkpointsDelete(CheckpointDeleteRequest(computerId: computerId, checkpointId: checkpointId)) }
@@ -294,6 +333,30 @@ final class ComputersModel {
             presentJobOutcome(try await waitForFinish(jobId), action: label)
         }
         catch { actionError = error.localizedDescription }
+    }
+
+    private func inventoryForCreation() async throws -> ComputerInventory {
+        let revision = stateRevision
+        let latest = try await client.computersList(deviceId: nil)
+        guard stateRevision == revision else { return inventory ?? latest }
+        inventory = latest
+        stateRevision &+= 1
+        error = nil
+        return latest
+    }
+
+    private func reserveName(_ base: String, in inventory: ComputerInventory) -> String {
+        let existing = inventory.allComputers.map(\.name) + Array(reservedNames)
+        let name = ComputerName.unique(base, among: existing)
+        reservedNames.insert(name.lowercased())
+        return name
+    }
+
+    private func reserveForkName(from sourceName: String, in inventory: ComputerInventory) -> String {
+        let existing = inventory.allComputers.map(\.name) + Array(reservedNames)
+        let name = ComputerName.uniqueFork(from: sourceName, among: existing)
+        reservedNames.insert(name.lowercased())
+        return name
     }
 
     func acknowledgePresentedJob(_ jobId: String) async {
