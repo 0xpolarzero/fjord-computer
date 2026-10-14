@@ -2,6 +2,8 @@
 // To parse the JSON, add this file to your project and do:
 //
 //   let siloWireAcknowledgeJobParams = try? JSONDecoder().decode(SiloWireAcknowledgeJobParams.self, from: jsonData)
+//   let siloWireAgentToolsState = try? JSONDecoder().decode(SiloWireAgentToolsState.self, from: jsonData)
+//   let siloWireAgentToolsStatus = try? JSONDecoder().decode(SiloWireAgentToolsStatus.self, from: jsonData)
 //   let siloWireApplicationComputer = try? JSONDecoder().decode(SiloWireApplicationComputer.self, from: jsonData)
 //   let siloWireApplicationSource = try? JSONDecoder().decode(SiloWireApplicationSource.self, from: jsonData)
 //   let siloWireApprovalMode = try? JSONDecoder().decode(SiloWireApprovalMode.self, from: jsonData)
@@ -1790,9 +1792,11 @@ struct SiloWireDesktopActionParams: Codable, Equatable, Sendable {
     }
 }
 
+/// Install or update the Node.js runtime and Claude Code CLI (Linux computers).
 enum SiloWireDesktopAction: String, Codable, Equatable, Sendable {
     case restart = "restart"
     case restartStreamer = "restart-streamer"
+    case setupAgentTools = "setup-agent-tools"
     case start = "start"
     case stop = "stop"
     case updateStreamer = "update-streamer"
@@ -4946,6 +4950,7 @@ enum SiloWireErrorCode: String, Codable, Equatable, Sendable {
     case busy = "busy"
     case cancelled = "cancelled"
     case changed = "changed"
+    case credentialAccessDenied = "credential_access_denied"
     case desktopUpdateRequired = "desktop_update_required"
     case errorCodeInternal = "internal"
     case exists = "exists"
@@ -5230,6 +5235,9 @@ struct SiloWireCheckpointCreatedResult: Codable, Equatable, Sendable {
 
 // MARK: - SiloWireDesktopStatus
 struct SiloWireDesktopStatus: Codable, Equatable, Sendable {
+    /// The agent tools (Node.js and the Claude Code CLI) of the computer; null when the
+    /// computer cannot be inspected (stopped Linux computers).
+    var agentTools: SiloWireAgentToolsStatus? = nil
     var autoStart: Bool
     var backend: String? = nil
     var computerUse: SiloWireComputerUseState? = nil
@@ -5246,6 +5254,7 @@ struct SiloWireDesktopStatus: Codable, Equatable, Sendable {
     var version: String? = nil
 
     enum CodingKeys: String, CodingKey {
+        case agentTools = "agentTools"
         case autoStart = "autoStart"
         case backend = "backend"
         case computerUse = "computerUse"
@@ -5261,6 +5270,50 @@ struct SiloWireDesktopStatus: Codable, Equatable, Sendable {
         case user = "user"
         case version = "version"
     }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// What `claude -p` runs and Fjord's guest scripts need in a computer. Silo never signs in
+/// to Claude Code; authentication comes from the client.
+// MARK: - SiloWireAgentToolsStatus
+struct SiloWireAgentToolsStatus: Codable, Equatable, Sendable {
+    var claudeVersion: String? = nil
+    var expectedClaudeVersion: String
+    var expectedNodeVersion: String
+    var expectedRecipeVersion: Int
+    /// Any of `node`, `claude`.
+    var missing: [String]
+    var nodeVersion: String? = nil
+    /// The recipe that installed the tools; null when none did.
+    var recipeVersion: Int? = nil
+    var state: SiloWireAgentToolsState
+
+    enum CodingKeys: String, CodingKey {
+        case claudeVersion = "claudeVersion"
+        case expectedClaudeVersion = "expectedClaudeVersion"
+        case expectedNodeVersion = "expectedNodeVersion"
+        case expectedRecipeVersion = "expectedRecipeVersion"
+        case missing = "missing"
+        case nodeVersion = "nodeVersion"
+        case recipeVersion = "recipeVersion"
+        case state = "state"
+    }
+}
+
+/// Both tools are installed and the setup recipe is current.
+///
+/// At least one tool is not installed.
+///
+/// Everything is installed, but by an older recipe than this Silo ships.
+enum SiloWireAgentToolsState: String, Codable, Equatable, Sendable {
+    case missing = "missing"
+    case outdated = "outdated"
+    case ready = "ready"
 }
 
 //
@@ -6500,11 +6553,13 @@ struct SiloWireParams: Codable, Equatable, Sendable {
     }
 }
 
+/// Install or update the Node.js runtime and Claude Code CLI (Linux computers).
 enum SiloWireAction: String, Codable, Equatable, Sendable {
     case copy = "copy"
     case paste = "paste"
     case restart = "restart"
     case restartStreamer = "restart-streamer"
+    case setupAgentTools = "setup-agent-tools"
     case start = "start"
     case stop = "stop"
     case updateStreamer = "update-streamer"
@@ -6951,6 +7006,9 @@ struct SiloWireJobStartResultClass: Codable, Equatable, Sendable {
     var password: String? = nil
     var port: Int? = nil
     var username: String? = nil
+    /// The agent tools (Node.js and the Claude Code CLI) of the computer; null when the
+    /// computer cannot be inspected (stopped Linux computers).
+    var agentTools: SiloWireAgentToolsStatus? = nil
     var autoStart: Bool? = nil
     var backend: String? = nil
     var computerUse: SiloWireComputerUseState? = nil
@@ -7154,6 +7212,7 @@ struct SiloWireJobStartResultClass: Codable, Equatable, Sendable {
         case password = "password"
         case port = "port"
         case username = "username"
+        case agentTools = "agentTools"
         case autoStart = "autoStart"
         case backend = "backend"
         case computerUse = "computerUse"
