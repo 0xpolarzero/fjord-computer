@@ -284,7 +284,7 @@ import Testing
         let id = try #require(w.dispatcher.submit("fix the login redirect"))
         await w.finish(id)
         let parent = UUID()
-        w.store.updateDecision(id) { $0.splitFrom = parent; $0.generated = true; $0.inherited = .init(projects: ["/code/docs"], mentions: []) }
+        w.store.updateDecision(id) { $0.splitFrom = parent; $0.inherited = .init(projects: ["/code/docs"], mentions: []) }
         w.fakes.finished = []
         w.fakes.ranked = [.init(target: "compound", p: 0.95), .init(target: "session:local_a", p: 0.04)]
         w.fakes.answer.leftover = ["and also tell CI"]
@@ -293,7 +293,7 @@ import Testing
         await w.finish(id)
         try await Task.sleep(for: .milliseconds(100))
         #expect(w.store.router.decisions.count == count, "no new part was split from a part")
-        #expect(w.entry(id)?.splitFrom == parent && w.entry(id)?.generated == true)
+        #expect(w.entry(id)?.splitFrom == parent)
     }
 
     @Test func anActionsMessageSentElsewhereIsStillAnActionsMessage() async throws {

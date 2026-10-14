@@ -151,14 +151,14 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     /// The same message's session settings: what a session the Router starts for it is called and runs on. Nil for anything
     /// else, and in entries from before (the thing's line is the title then, on your defaults).
     var actionStart: ActionStart?
-    /// The decision whose compound message this one is the session half of (`RouterDispatcher.think`). Nil for anything else.
+    /// The decision whose compound message this one is a session part of (`RouterDispatcher.think`): it waited for your pick,
+    /// and is yours like any message you sent. Nil for anything else.
     var splitFrom: UUID?
-    /// Set with `splitFrom`: the words were written by the Router's run, not typed by you (so they are the original
-    /// message's generated part, never a new message of yours: no address or permission exemption of your own words applies,
-    /// and the digest doesn't count them as something you said). Nil for anything else.
+    /// No longer set: parts of a compound message wait for your pick and are then your decisions, linked by `splitFrom`.
+    /// Kept so entries from before still decode.
     var generated: Bool?
-    /// What a generated part inherits from the message it was split from, to route it with the same constraints (and again
-    /// when it is sent elsewhere): the projects and pointers of the original.
+    /// What a part inherits from the message it was split from, to rank it within the same scope (and again when it is sent
+    /// elsewhere): the projects and pointers of the original.
     var inherited: Inherited?
 
     struct Inherited: Codable, Equatable {

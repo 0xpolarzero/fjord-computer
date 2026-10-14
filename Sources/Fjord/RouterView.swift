@@ -102,12 +102,23 @@ extension Store {
     /// Writes a form's answer for its card's session (the hook passes it on) through the shared `FormWriter`, off the main
     /// thread; in a demo, nothing is written. The folder is taken now, on the main thread: none while the Router is off. The
     /// write is dropped if, by the time it happens, the Router or the sessions are off or the card is no longer open.
-    func answerForm(_ form: PendingForm, _ answers: [String: String], card: String) async -> Result<Void, Error> {
+    /// The last check before a form's answer is written: the Router is on, the card still open and, for an answer the Router
+    /// read, still holding the form it was read against.
+    func answerStillValid(card: String, snapshot: FormSnapshot?, alsoValid: (@MainActor () -> Bool)? = nil) -> Bool {
+        routerOn && alsoValid?() != false && router.cards.first(where: { $0.id == card })?.isOpen == true
+            && snapshot.map { $0.holds(self) } != false
+    }
+
+    /// With a `snapshot` (an answer the Router read), it is written only while the card still holds that very form, checked
+    /// again right before the write.
+    func answerForm(_ form: PendingForm, _ answers: [String: String], card: String,
+                    snapshot: FormSnapshot? = nil, alsoValid: (@MainActor () -> Bool)? = nil) async -> Result<Void, Error> {
+        if let snapshot, !snapshot.holds(self) { return .failure(FormWriter.Cancelled()) }
         if routerIsPretend { return Result { _ = try FormBridge.validate(form, answers) } }
         if let cardState = router.cards.first(where: { $0.id == card }),
            let guestForm = guestPendingForm(for: cardState) {
             do {
-                try await GuestRouterRuntime.shared.answer(guestForm, answers: answers, cardID: card)
+                try await GuestRouterRuntime.shared.answer(guestForm, answers: answers, cardID: card, snapshot: snapshot)
                 logCardAction("Answered the form", card: card)
                 return .success(())
             } catch { return .failure(error) }
@@ -115,8 +126,7 @@ extension Store {
         guard let dir = formBridge.dir else { return .failure(FormWriter.Cancelled()) }
         do {
             try await FormWriter.write(form, answers: answers, dir: dir, stillValid: { [weak self] in
-                guard let self else { return false }
-                return self.routerOn && self.router.cards.first(where: { $0.id == card })?.isOpen == true
+                self?.answerStillValid(card: card, snapshot: snapshot, alsoValid: alsoValid) ?? false
             })
             logCardAction("Answered the form", card: card)
             return .success(())
@@ -127,12 +137,14 @@ extension Store {
 
     /// The same for a plan: your decision is written for the hook, which gives it to the session as Approve or Keep planning
     /// in the app would.
-    func answerPlan(_ form: PendingForm, _ decision: PendingForm.PlanDecision, card: String) async -> Result<Void, Error> {
+    func answerPlan(_ form: PendingForm, _ decision: PendingForm.PlanDecision, card: String,
+                    snapshot: FormSnapshot? = nil) async -> Result<Void, Error> {
+        if let snapshot, !snapshot.holds(self) { return .failure(FormWriter.Cancelled()) }
         if routerIsPretend { return Result { _ = try FormBridge.answerData(form, plan: decision) } }
         if let cardState = router.cards.first(where: { $0.id == card }),
            let guestForm = guestPendingForm(for: cardState) {
             do {
-                try await GuestRouterRuntime.shared.answer(guestForm, plan: decision, cardID: card)
+                try await GuestRouterRuntime.shared.answer(guestForm, plan: decision, cardID: card, snapshot: snapshot)
                 logCardAction(decision.approve ? "Approved the plan" : "Sent the plan back", card: card)
                 return .success(())
             } catch { return .failure(error) }
@@ -140,8 +152,7 @@ extension Store {
         guard let dir = formBridge.dir else { return .failure(FormWriter.Cancelled()) }
         do {
             try await FormWriter.write(form, plan: decision, dir: dir, stillValid: { [weak self] in
-                guard let self else { return false }
-                return self.routerOn && self.router.cards.first(where: { $0.id == card })?.isOpen == true
+                self?.answerStillValid(card: card, snapshot: snapshot) ?? false
             })
             logCardAction(decision.approve ? "Approved the plan" : "Sent the plan back", card: card)
             return .success(())

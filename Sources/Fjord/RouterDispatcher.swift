@@ -42,20 +42,16 @@ struct RouterContext: Equatable {
     var flies = false
     /// The decision this message was split from: the session half of a compound message (`RouterDispatcher.think`).
     var splitFrom: UUID?
-    /// Written by the Router's run, not typed by you (the split halves of a compound message): routed with the original's
-    /// constraints (projects, tagged sessions, `notTo`), but never by the exemptions meant for words you typed (a session or
-    /// project they name, a fork or a new session they ask for, an address that lets them reach a session waiting on a
-    /// permission).
-    var generated = false
-    /// With `generated`: the leftover parts past what is routed on their own, sent together and always asked about.
-    var overflow = false
+    /// With `splitFrom`: the words were written by the Router's run, not typed by you. They are only ranked, within the
+    /// original's scope (projects, tagged sessions, `notTo`), and always asked about: nothing is sent until you pick, no
+    /// exemption for words you typed applies, and the Router's own runs are not offered.
+    var asksFirst = false
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
          predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = [],
-         splitFrom: UUID? = nil, generated: Bool = false, overflow: Bool = false) {
+         splitFrom: UUID? = nil, asksFirst: Bool = false) {
         self.splitFrom = splitFrom
-        self.generated = generated
-        self.overflow = overflow
+        self.asksFirst = asksFirst && splitFrom != nil
         self.replyTo = replyTo
         self.projects = projects
         self.target = target
@@ -313,21 +309,18 @@ struct RouterAskBack: Identifiable, Equatable {
         let projects = context.projects.filter { seen.insert($0).inserted }
         var context = context
         context.projects = projects
-        // Generated words are a split half of a message (`think`), nothing else.
-        context.generated = context.generated && context.splitFrom != nil
-        context.overflow = context.overflow && context.generated
+        context.asksFirst = context.asksFirst && context.splitFrom != nil
         // A pill is an "@name" where it was said; anything else given as one isn't.
         let chars = Array(text)
         context.pills = context.pills.filter { $0.lowerBound >= 0 && $0.upperBound <= chars.count && !$0.isEmpty && chars[$0.lowerBound] == "@" }
-        // A generated part inherits its original's pointers, which stand where they did in that message, not in these words.
-        if !context.generated { context.mentions = Self.mentions(context.mentions, in: text) } else { context.pills = [] }
+        // A part inherits its original's pointers, which stand where they did in that message, not in these words.
+        if !context.asksFirst { context.mentions = Self.mentions(context.mentions, in: text) } else { context.pills = [] }
         var entry = RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
                                    links: .init(cards: context.replyTo.map { [$0] } ?? []))
-        entry.mentions = context.generated || context.mentions.isEmpty ? nil : context.mentions
+        entry.mentions = context.asksFirst || context.mentions.isEmpty ? nil : context.mentions
         entry.fromAction = context.action?.origin
         entry.splitFrom = context.splitFrom
-        if context.generated, context.splitFrom != nil {
-            entry.generated = true
+        if context.asksFirst {
             entry.inherited = .init(projects: context.projects, mentions: context.mentions)
         }
         entry.actionStart = context.action.map { .init(title: $0.title, model: $0.model, effort: $0.effort) }
@@ -659,12 +652,11 @@ struct RouterAskBack: Identifiable, Equatable {
         // Wholly for the Router ("@router what needs me?"): asked of it, whatever reply is armed or target pinned (a session
         // would get nothing of it). An aside in a message for a session goes with that message, taken out.
         if !unattended, forRouter(text, pills: context.pills) { return .classify }
-        // A part the Router's run wrote is classified like any message, in its original's scope: what only words you typed
-        // may ask for (a fork, a new session) is not taken from it, and a leftover past the bound is always asked about.
-        if context.generated, context.overflow { return .classify }
+        // A part the Router's run wrote is only ranked, in its original's scope: it asks, whatever its words say.
+        if context.asksFirst { return .classify }
         // "fork <session>…": of the session named, else of the one pinned ("fork this session"). Never while a card's reply
         // is armed: words for it are its answer ("branch" to "Should I create a branch or commit to main?").
-        if !unattended, !context.generated, context.replyTo == nil,
+        if !unattended, context.replyTo == nil,
            let fork = SessionFork.request(RouterTools.pastLeadingTags(text, pills: context.pills),
                                           pinned: context.target.flatMap { $0.hasPrefix("session:") ? String($0.dropFirst(8)) : nil },
                                           store: store) {
@@ -678,12 +670,12 @@ struct RouterAskBack: Identifiable, Equatable {
         let tagged = context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true }
         if tagged.count == 1 { return .route("session:\(tagged[0])") }
         if context.projects.count == 1, let folder = context.projects.first {
-            if !context.generated, wantsNewSession(text, pills: context.pills) { return .start(folder: folder) }
+            if wantsNewSession(text, pills: context.pills) { return .start(folder: folder) }
             let other = store.openRouterCards.contains { store.routerCardMatchesProject($0, folder: folder) }
                 || store.claudeSessions.values.contains {
                     !$0.isArchived && store.routerSessionMatchesProject($0.id, folder: folder)
                 }
-            if !other, !context.generated { return .start(folder: folder) }
+            if !other { return .start(folder: folder) }
         }
         return .classify
     }
@@ -919,7 +911,7 @@ struct RouterAskBack: Identifiable, Equatable {
         // A split half stays one: it keeps what it was split from and what it inherited, so it can't be split again.
         if let from = entry.splitFrom {
             context.splitFrom = from
-            context.generated = true
+            context.asksFirst = true
             context.projects = entry.inherited?.projects ?? []
         }
         // What it tagged goes with it again; where it goes is asked anew, not taken from its pills. An action's message is
@@ -1149,31 +1141,27 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.reply = reply.isEmpty ? nil : reply
             $0.note = done.isEmpty ? nil : done
         }
-        // What the run left for sessions is routed as messages of its own (not again from one of those: no chain).
-        // Not one that was split itself, by this message's context or by what the log says of it.
-        guard intent == .compound, job.context.splitFrom == nil, job.context.generated == false,
-              store.router.decisions.first(where: { $0.id == job.id })?.splitFrom == nil else { return }
+        // What the run left for sessions is never sent on its own: each part is a card asking where it should go.
+        guard intent == .compound else { return }
         let parts = Self.distinct(effects.leftovers(answer))
-        // The parts are the original's, generated: routed under its constraints, never by the exemptions of words you typed.
-        func submitPart(_ text: String, overflow: Bool = false) {
-            var context = RouterContext(projects: job.context.projects, notTo: job.context.notTo, splitFrom: job.id,
-                                        generated: true, overflow: overflow)
+        func askPart(_ text: String) {
+            var context = RouterContext(projects: job.context.projects, notTo: job.context.notTo, splitFrom: job.id, asksFirst: true)
             context.mentions = job.context.mentions
             submit(text, context: context)
         }
-        for text in parts.prefix(Self.maxSplit) { submitPart(text) }
-        // None is dropped: the rest go together as one message that is always asked about, with the parts as its words.
-        if parts.count > Self.maxSplit { submitPart(parts.dropFirst(Self.maxSplit).joined(separator: "\n"), overflow: true) }
+        for text in parts.prefix(Self.maxParts) { askPart(text) }
+        // None is dropped: the rest are listed on one more card.
+        if parts.count > Self.maxParts { askPart(parts.dropFirst(Self.maxParts).joined(separator: "\n")) }
     }
-    /// Session halves routed on their own from one compound message, at most; the others are asked about together.
-    static let maxSplit = 3
+    /// Parts of one compound message that get a card each; the others are listed together on one more.
+    static let maxParts = 5
 
-    /// The parts trimmed, their whitespace collapsed, without the empty and the repeated ones (case aside), in order.
+    /// The parts trimmed, without the empty and the repeated ones (the same text exactly), in order.
     static func distinct(_ parts: [String]) -> [String] {
         var seen = Set<String>()
         return parts.compactMap { part in
-            let text = part.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-            return !text.isEmpty && seen.insert(text.lowercased()).inserted ? text : nil
+            let text = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && seen.insert(text).inserted ? text : nil
         }
     }
 
@@ -1227,14 +1215,19 @@ struct RouterAskBack: Identifiable, Equatable {
             liveCache[Self.liveKey(job.text, narrowed)] = nil
         }
         Self.keep(&found, world: world, unattended: unattended, store: store)
-        // The leftovers past the bound are never sent on a guess: you pick.
-        if job.context.overflow { found.sure = false }
+        // A part the Router's run wrote is never sent on a guess, and never to its own runs: you pick, among the sessions
+        // and projects in its original's scope.
+        if job.context.asksFirst {
+            found.sure = false
+            found.ranked = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) == nil }
+            found.card = found.card?.filter { RouterRun.Intent(rawValue: $0) == nil }
+        }
         // Where your own words send it ("start a session in lookout …", "tell CI to …"), resolved here and not by Jev, is
         // where it goes: his pick of another doesn't send it elsewhere ("tell CI to update the docs" isn't for Docs). Not
         // where you waved it off, nor when it is gone.
         // The sessions you tagged (more than one: one alone was sent to, `plan`): only they, their cards and the Router's own
         // runs are gone to; when Jev's pick isn't among them, you pick among them. Not for a message wholly for the Router.
-        let scope = Self.forRouter(job.text, pills: job.context.pills) ? []
+        let scope = !job.context.asksFirst && Self.forRouter(job.text, pills: job.context.pills) ? []
             : Set(job.context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true })
         let inScope = { (target: String) in
             scope.isEmpty || RouterRun.Intent(rawValue: target) != nil || Self.session(of: target, store: store).map(scope.contains) == true
@@ -1251,7 +1244,7 @@ struct RouterAskBack: Identifiable, Equatable {
         if unbounded { found.sure = false }
         let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
         // What the Router's run wrote names no destination of its own: the exemptions for your typed words don't apply to it.
-        let named = unbounded || job.context.generated || (!unattended && Self.forRouter(job.text, pills: job.context.pills))
+        let named = unbounded || job.context.asksFirst || (!unattended && Self.forRouter(job.text, pills: job.context.pills))
             ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
         if let named, named != found.top?.target, named != job.context.notTo, inScope(named), inWorld(named),
            eligible(named, store: store) {
@@ -1260,7 +1253,7 @@ struct RouterAskBack: Identifiable, Equatable {
             return try await route(job, to: named)
         }
         // Wholly for the Router: one of its own runs, never a session or a project; you pick when Jev's pick isn't one.
-        if !unattended, Self.forRouter(job.text, pills: job.context.pills) {
+        if !unattended, !job.context.asksFirst, Self.forRouter(job.text, pills: job.context.pills) {
             let intents = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) != nil }
             if intents.first?.target != found.top?.target { found.sure = false }
             found.ranked = intents.isEmpty ? [Scored(target: "question", p: 0), Scored(target: "change_fjord", p: 0)] : intents
@@ -1277,7 +1270,7 @@ struct RouterAskBack: Identifiable, Equatable {
         // button. Its card could be what made it the pick ("May I delete the production data?" for a "yes"). An ask of its
         // own ("SQLite or Postgres?") takes an answer on the evidence above, as any session does.
         if found.sure, !found.live, let top = found.top, let session = Self.session(of: top.target, store: store),
-           Self.asksYou(session, store: store), job.context.generated || !Self.addressed(job.text, to: session, store: store) {
+           Self.asksYou(session, store: store), !Self.addressed(job.text, to: session, store: store) {
             found.sure = false
         }
         // Hidden, addressed or gone while Jev was asked: you pick among what is there now.
@@ -1597,8 +1590,21 @@ extension RouterDispatcher.Effects {
             },
             answer: { [weak dispatcher] tools, card, answers, snapshot in
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
-                guard snapshot.holds(try store(dispatcher)) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
-                return try await tools.answerForm(try store(dispatcher), ["card": card, "answers": answers], ticket: tools.ticket())
+                let store = try store(dispatcher)
+                guard snapshot.holds(store) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
+                guard let c = store.router.cards.first(where: { $0.id == card }), c.isOpen,
+                      let form = store.guestPendingForm(for: c)?.form ?? store.pendingForm(for: c), !form.isPlan else {
+                    throw RouterTools.Failure("That question isn't waiting anymore")
+                }
+                let ticket = tools.ticket()
+                try tools.live(ticket)
+                // The write itself checks the snapshot once more, right before it.
+                switch await store.answerForm(form, answers, card: card, snapshot: snapshot,
+                                              alsoValid: { (try? tools.live(ticket)) != nil }) {
+                case .success:
+                    return "Answered “\(c.title)”: " + form.questions.map { "\($0.question) = \(answers[$0.question] ?? "")" }.joined(separator: "; ")
+                case .failure(let error): throw error
+                }
             },
             run: { [weak dispatcher] tools, intent, input in
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }
@@ -1639,7 +1645,7 @@ extension RouterDispatcher.Effects {
                       let form = store.guestPendingForm(for: c)?.form ?? store.pendingForm(for: c), form.isPlan else {
                     throw RouterTools.Failure("That plan isn't waiting anymore")
                 }
-                switch await store.answerPlan(form, decision, card: card) {
+                switch await store.answerPlan(form, decision, card: card, snapshot: snapshot) {
                 case .success: return decision.approve ? "Approved “\(c.title)”" : "Sent “\(c.title)” back"
                 case .failure(let error): throw error
                 }

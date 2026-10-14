@@ -126,11 +126,12 @@ extension RouterRun.Answer {
     }
 }
 
-/// The form a message was judged against: the card (and the revision it was at), the form's id and the call it answers. A
-/// judgment is applied only while the card still holds that very form, when it is made and at the write.
+/// The form a message was judged against: the card, the form's id and the call it answers. A judgment is applied only while
+/// the card is open and still holds that very form, when it is made and at the write. It binds to what identifies the
+/// question, not to the card's change counter (which moves with its title, triage state or text as well): a card that is
+/// retold (its brief, unread) or retitled still holds the form, and one that closed, or moved on to another, doesn't.
 struct FormSnapshot: Equatable {
     var card: String
-    var revision: Int
     var formID: String
     var toolUseID: String?
 
@@ -138,15 +139,13 @@ struct FormSnapshot: Equatable {
 
     @MainActor init(card: RouterCard, form: PendingForm, store: Store) {
         self.card = card.id
-        revision = store.cardRevisions[card.id, default: 0]
         formID = form.id
         toolUseID = form.toolUseID
     }
 
     @MainActor func holds(_ store: Store) -> Bool {
         guard let c = store.router.cards.first(where: { $0.id == card }), c.isOpen,
-              store.cardRevisions[card, default: 0] == revision,
-              let form = store.pendingForm(for: c) else { return false }
+              let form = store.guestPendingForm(for: c)?.form ?? store.pendingForm(for: c) else { return false }
         return form.id == formID && form.toolUseID == toolUseID
     }
 }
