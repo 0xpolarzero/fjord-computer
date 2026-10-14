@@ -83,6 +83,83 @@ import Testing
         #expect(model.jobAwaitingAcknowledgement == nil)
     }
 
+    @Test func staleComputerListResponseCannotReplaceANewerEvent() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        var staleLinux = client.inventory.linux
+        let computerID = try #require(staleLinux.computers.first?.id)
+        staleLinux.computers[0].state = .stopped
+        staleLinux.computers[0].stateDetail = "Stopped"
+        client.inventory.linux = staleLinux
+        client.suspendNextComputersList = true
+        let refresh = Task { try await model.refresh() }
+        await client.waitForSuspendedComputersList()
+
+        var newerLinux = staleLinux
+        newerLinux.computers[0].state = .running
+        newerLinux.computers[0].stateDetail = "Running"
+        client.deliver(.event(sequence: 2, event: .computersChanged(ComputersChangedPayload(linux: newerLinux))))
+        client.resumeSuspendedComputersList()
+        try await refresh.value
+
+        #expect(model.inventory?.linux == newerLinux)
+        #expect(model.inventory?.computer(computerID)?.displayState == .running)
+    }
+
+    @Test func sequenceGapAndReconnectReReadComputerAndOperationState() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+        let initialReads = client.computersListCallCount
+
+        var afterGap = client.inventory
+        afterGap.linux.computers.removeAll()
+        client.inventory = afterGap
+        client.deliver(.event(sequence: 3, event: .operationsQueueChanged(.empty)))
+        await model.waitForRecovery()
+        #expect(client.computersListCallCount > initialReads)
+        #expect(model.inventory?.linux.computers.isEmpty == true)
+
+        var afterReconnect = client.inventory
+        afterReconnect.macos.computers.removeAll()
+        client.inventory = afterReconnect
+        let readsBeforeReconnect = client.computersListCallCount
+        client.deliver(.reconnected)
+        await model.waitForRecovery()
+        #expect(client.computersListCallCount > readsBeforeReconnect)
+        #expect(model.inventory?.macos.computers.isEmpty == true)
+    }
+
+    @Test func retainedJobOutcomeIsRecoveredThroughJobGet() async throws {
+        let client = MockEngineClient()
+        client.retainFinishedJob(OperationJobFinished(jobId: "retained:failed",
+                                                       error: OperationJobError(code: "internal", message: "recovered failure")))
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+
+        try await model.connect()
+
+        #expect(client.jobGetCallCount == 1)
+        #expect(model.finishedJobs["retained:failed"]?.error?.message == "recovered failure")
+        #expect(model.actionError == "Computer operation failed: recovered failure")
+        #expect(model.jobAwaitingAcknowledgement == "retained:failed")
+    }
+
+    @Test func jobGetRecoversACompletionWhenTheFinishedEventIsLost() async throws {
+        let client = MockEngineClient()
+        client.nextJobFailure = OperationJobError(code: "internal", message: "completion event was lost")
+        client.dropNextFinishedEvent = true
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        try await model.connect()
+
+        await model.start(MockEngineClient.failedID)
+
+        #expect(client.jobGetCallCount > 1)
+        #expect(model.actionError == "Start failed: completion event was lost")
+        #expect(model.jobAwaitingAcknowledgement != nil)
+    }
+
     @Test func completedCheckpointJobsApplyDelayedCheckpointEvents() async throws {
         let client = MockEngineClient()
         let model = ComputersModel(client: client, initialInventory: client.inventory)

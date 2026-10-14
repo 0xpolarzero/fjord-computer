@@ -44,6 +44,7 @@ final class ComputersModel {
     private(set) var actionError: String?
     private(set) var activeJob: OperationJobProgress?
     private(set) var finishedJobs: [String: OperationJobFinished] = [:]
+    private(set) var operationQueue = OperationsList.empty
     private(set) var jobAwaitingAcknowledgement: String?
     private(set) var quitPrompt: ComputerQuitPrompt?
     private(set) var quitError: String?
@@ -51,11 +52,19 @@ final class ComputersModel {
 
     @ObservationIgnored private var subscription: String?
     @ObservationIgnored private var quitHandler: ((ComputerQuitChoice) -> Void)?
-    @ObservationIgnored private var finishWaiters: [String: [CheckedContinuation<OperationJobFinished, Never>]] = [:]
     @ObservationIgnored private var jobActions: [String: String] = [:]
     @ObservationIgnored private var presentedJobOutcomes: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Error>?
     @ObservationIgnored private var connectionAttemptID: UUID?
+    @ObservationIgnored private var eventStreamID: UUID?
+    @ObservationIgnored private var recoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var recoveryID: UUID?
+    @ObservationIgnored private var sequence: UInt64 = 0
+    @ObservationIgnored private var hasSequence = false
+    @ObservationIgnored private var recoveryRevision: UInt64 = 0
+    @ObservationIgnored private var stateRevision: UInt64 = 0
+    @ObservationIgnored private var bufferedEvents: [(UInt64, EngineEvent)] = []
+    @ObservationIgnored private var isRecovering = false
     @ObservationIgnored private var wantsConnection = false
 
     init(client: any EngineClient, initialInventory: ComputerInventory? = nil) {
@@ -82,23 +91,45 @@ final class ComputersModel {
                     self.connectionAttemptID = nil
                     self.connectionTask = nil
                     self.isLoading = false
+                    if self.subscription == nil { self.eventStreamID = nil }
                 }
             }
             let firstRead = try await self.client.computersList(deviceId: nil)
-            if self.inventory == nil { self.inventory = firstRead }
+            if self.inventory == nil {
+                self.inventory = firstRead
+                self.stateRevision &+= 1
+            }
+            self.sequence = 0
+            self.hasSequence = true
+            self.eventStreamID = attemptID
             let newSubscription = try await self.client.eventsSubscribe(events: ["computers.*", "checkpoints.*", "operations.*"]) { [weak self] event in
-                self?.receive(event)
+                self?.receive(event, stream: attemptID)
             }
             guard self.wantsConnection, self.connectionAttemptID == attemptID else {
+                self.eventStreamID = nil
                 await self.client.eventsUnsubscribe(subscription: newSubscription)
                 return
             }
             self.subscription = newSubscription
-            // Close the read/subscribe race; sequenced state updates prevent a stale read from winning.
+            // Re-read after subscribing, but do not let a response that crossed an event replace newer state.
+            let inventoryRevision = self.stateRevision
             let secondRead = try await self.client.computersList(deviceId: nil)
             guard self.wantsConnection, self.connectionAttemptID == attemptID else { return }
-            self.inventory = secondRead
-            self.error = nil
+            if self.stateRevision == inventoryRevision {
+                self.inventory = secondRead
+                self.stateRevision &+= 1
+                self.error = nil
+            }
+            let operationsRevision = self.stateRevision
+            let operations = try await self.client.operationsList(deviceId: nil)
+            guard self.wantsConnection, self.connectionAttemptID == attemptID else { return }
+            if self.stateRevision == operationsRevision {
+                self.operationQueue = operations
+                self.stateRevision &+= 1
+                await self.recoverOutstandingJobs(operations.unacknowledgedJobIds)
+            } else {
+                self.beginRecovery(invalidated: true)
+            }
         }
         connectionTask = task
         try await task.value
@@ -112,8 +143,14 @@ final class ComputersModel {
     func deactivate() async {
         wantsConnection = false
         connectionAttemptID = nil
+        eventStreamID = nil
         connectionTask?.cancel()
         connectionTask = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        recoveryID = nil
+        isRecovering = false
+        bufferedEvents.removeAll()
         isLoading = false
         guard let subscription else { return }
         self.subscription = nil
@@ -121,8 +158,13 @@ final class ComputersModel {
     }
 
     func refresh() async throws {
-        inventory = try await client.computersList(deviceId: nil)
-        error = nil
+        let revision = stateRevision
+        let latest = try await client.computersList(deviceId: nil)
+        if stateRevision == revision {
+            inventory = latest
+            stateRevision &+= 1
+            error = nil
+        }
     }
 
     func loadCheckpoints(for computerId: String) async {
@@ -184,7 +226,7 @@ final class ComputersModel {
             }
             for computer in prompt.runningComputers {
                 let job = try await client.computersStop(ComputerReference(computerId: computer.computerId))
-                let finished = await waitForFinish(job.jobId)
+                let finished = try await waitForFinish(job.jobId)
                 if let failure = finished.error { throw EngineClientError.jobFailed(failure.message) }
             }
             try await waitUntilStopped(Set(prompt.runningComputers.map(\.computerId)))
@@ -249,7 +291,7 @@ final class ComputersModel {
                 else { nil }
             guard let jobId else { return }
             jobActions[jobId] = label
-            presentJobOutcome(await waitForFinish(jobId), action: label)
+            presentJobOutcome(try await waitForFinish(jobId), action: label)
         }
         catch { actionError = error.localizedDescription }
     }
@@ -257,7 +299,7 @@ final class ComputersModel {
     func acknowledgePresentedJob(_ jobId: String) async {
         guard jobAwaitingAcknowledgement == jobId else { return }
         do {
-            try await client.operationsJobAcknowledge(jobId: jobId)
+            try await client.operationsJobAcknowledge(jobId: jobId, deviceId: nil)
             finishedJobs[jobId] = nil
             jobActions[jobId] = nil
             jobAwaitingAcknowledgement = nil
@@ -266,24 +308,65 @@ final class ComputersModel {
         }
     }
 
-    private func receive(_ event: EngineEvent) {
+    private func receive(_ delivery: EngineEventDelivery, stream: UUID) {
+        guard wantsConnection, eventStreamID == stream else { return }
+        switch delivery {
+        case .disconnected(let reason):
+            error = reason
+        case .reconnected:
+            hasSequence = false
+            beginRecovery(invalidated: true)
+        case .event(let next, let event):
+            if hasSequence {
+                guard next > sequence else { return }
+                if next != sequence &+ 1 {
+                    sequence = next
+                    bufferedEvents.append((next, event))
+                    beginRecovery(invalidated: true)
+                    return
+                }
+            } else {
+                hasSequence = true
+            }
+            sequence = next
+            if isRecovering {
+                bufferedEvents.append((next, event))
+                return
+            }
+            apply(event)
+        }
+    }
+
+    private func apply(_ event: EngineEvent) {
         switch event {
         case .computersChanged(let change):
+            stateRevision &+= 1
             if let inventory { self.inventory = inventory.applying(change) }
             error = nil
         case .checkpointsChanged(let change):
+            stateRevision &+= 1
             if let inventory {
                 self.inventory = inventory.applying(ComputersChangedPayload(linux: change.linux, macos: change.macos))
             }
             if let usage = change.usage { checkpointUsage.merge(usage) { _, next in next } }
+        case .operationsQueueChanged(let queue):
+            stateRevision &+= 1
+            operationQueue = queue
         case .jobProgress(let progress):
             activeJob = progress
         case .jobFinished(let result):
-            finishedJobs[result.jobId] = result
-            if activeJob?.jobId == result.jobId { activeJob = nil }
-            if let action = jobActions[result.jobId] { presentJobOutcome(result, action: action) }
-            let waiters = finishWaiters.removeValue(forKey: result.jobId) ?? []
-            waiters.forEach { $0.resume(returning: result) }
+            recordFinished(result)
+        }
+    }
+
+    private func recordFinished(_ result: OperationJobFinished) {
+        finishedJobs[result.jobId] = result
+        if activeJob?.jobId == result.jobId { activeJob = nil }
+        if let action = jobActions[result.jobId] {
+            presentJobOutcome(result, action: action)
+        } else if let failure = result.error {
+            presentJobOutcome(result, action: "Computer operation")
+            actionError = "Computer operation failed: \(failure.message)"
         }
     }
 
@@ -294,11 +377,83 @@ final class ComputersModel {
         jobAwaitingAcknowledgement = result.jobId
     }
 
-    private func waitForFinish(_ jobId: String) async -> OperationJobFinished {
-        if let finished = finishedJobs[jobId] { return finished }
-        return await withCheckedContinuation { continuation in
-            finishWaiters[jobId, default: []].append(continuation)
+    private func waitForFinish(_ jobId: String) async throws -> OperationJobFinished {
+        while true {
+            if let finished = finishedJobs[jobId] { return finished }
+            let snapshot = try await client.operationsJobGet(jobId: jobId, deviceId: nil)
+            if snapshot.state == .finished {
+                let result = snapshot.finishedEvent
+                recordFinished(result)
+                return result
+            }
+            try await Task.sleep(for: .milliseconds(250))
         }
+    }
+
+    private func beginRecovery(invalidated: Bool) {
+        if invalidated { recoveryRevision &+= 1 }
+        isRecovering = true
+        guard recoveryTask == nil else { return }
+        let recoveryID = UUID()
+        self.recoveryID = recoveryID
+        recoveryTask = Task { @MainActor [weak self] in
+            await self?.recoverDomainState(id: recoveryID)
+        }
+    }
+
+    private func recoverDomainState(id: UUID) async {
+        defer {
+            if recoveryID == id {
+                isRecovering = false
+                recoveryTask = nil
+                recoveryID = nil
+            }
+        }
+        while recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled {
+            let revision = recoveryRevision
+            do {
+                let inventorySnapshot = try await client.computersList(deviceId: nil)
+                guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
+                let operationsSnapshot = try await client.operationsList(deviceId: nil)
+                guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
+                guard revision == recoveryRevision else { continue }
+
+                inventory = inventorySnapshot
+                operationQueue = operationsSnapshot
+                stateRevision &+= 1
+                error = nil
+                let events = bufferedEvents.sorted { $0.0 < $1.0 }
+                bufferedEvents.removeAll()
+                events.forEach { apply($0.1) }
+                await recoverOutstandingJobs(operationsSnapshot.unacknowledgedJobIds)
+                guard recoveryID == id, wantsConnection, subscription != nil, !Task.isCancelled else { return }
+                guard revision == recoveryRevision else { continue }
+                let lateEvents = bufferedEvents.sorted { $0.0 < $1.0 }
+                bufferedEvents.removeAll()
+                lateEvents.forEach { apply($0.1) }
+                if revision == recoveryRevision { return }
+            } catch {
+                self.error = error.localizedDescription
+                if revision == recoveryRevision { return }
+            }
+        }
+    }
+
+    private func recoverOutstandingJobs(_ jobIds: [String]) async {
+        for jobId in jobIds {
+            guard !Task.isCancelled else { return }
+            do {
+                let snapshot = try await client.operationsJobGet(jobId: jobId, deviceId: nil)
+                guard snapshot.state == .finished else { continue }
+                recordFinished(snapshot.finishedEvent)
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func waitForRecovery() async {
+        await recoveryTask?.value
     }
 
     func waitUntilStopped(_ computerIds: Set<String>, timeout: Duration = .seconds(20)) async throws {

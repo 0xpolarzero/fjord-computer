@@ -608,9 +608,48 @@ struct OperationJobFinished: Codable, Equatable {
     var error: OperationJobError? = nil
 }
 
+struct OperationQueueEntry: Codable, Equatable, Identifiable {
+    var id: UInt64
+    var jobId: String? = nil
+    var label: String
+    var kind: String
+    var computerId: String? = nil
+    var computerName: String? = nil
+    var sinceMs: UInt64
+    var cancellable: Bool
+    var expectedMs: UInt64? = nil
+    var blockedByHidden: Bool
+}
+
+struct OperationsList: Codable, Equatable {
+    var running: [OperationQueueEntry]
+    var waiting: [OperationQueueEntry]
+    var unacknowledgedJobIds: [String]
+
+    static let empty = OperationsList(running: [], waiting: [], unacknowledgedJobIds: [])
+}
+
+enum OperationJobState: String, Codable { case waiting, running, finished }
+
+struct OperationJobOutcome: Codable, Equatable {
+    var result: JSONValue? = nil
+    var error: OperationJobError? = nil
+}
+
+struct OperationJobSnapshot: Codable, Equatable {
+    var jobId: String
+    var state: OperationJobState
+    var outcome: OperationJobOutcome? = nil
+
+    var finishedEvent: OperationJobFinished {
+        OperationJobFinished(jobId: jobId, result: outcome?.result, error: outcome?.error)
+    }
+}
+
 enum EngineEvent: Equatable {
     case computersChanged(ComputersChangedPayload)
     case checkpointsChanged(CheckpointsChangedPayload)
+    case operationsQueueChanged(OperationsList)
     case jobProgress(OperationJobProgress)
     case jobFinished(OperationJobFinished)
 
@@ -618,10 +657,17 @@ enum EngineEvent: Equatable {
         switch self {
         case .computersChanged: "computers.changed"
         case .checkpointsChanged: "checkpoints.changed"
+        case .operationsQueueChanged: "operations.queue.changed"
         case .jobProgress: "operations.job.progress"
         case .jobFinished: "operations.job.finished"
         }
     }
+}
+
+enum EngineEventDelivery: Equatable {
+    case event(sequence: UInt64, event: EngineEvent)
+    case reconnected
+    case disconnected(String)
 }
 
 enum EngineClientError: LocalizedError, Equatable {
@@ -656,9 +702,11 @@ protocol EngineClient {
     func checkpointsFork(_ request: CheckpointForkRequest) async throws -> ComputerJob
     func checkpointsDelete(_ request: CheckpointDeleteRequest) async throws -> ComputerJob
     func displayShow(_ reference: ComputerReference) async throws
-    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String
+    func operationsList(deviceId: String?) async throws -> OperationsList
+    func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot
+    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String
     func eventsUnsubscribe(subscription: String) async
-    func operationsJobAcknowledge(jobId: String) async throws
+    func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws
     func engineDisconnect() async throws
 }
 
@@ -680,9 +728,11 @@ final class UnavailableEngineClient: EngineClient {
     func checkpointsFork(_ request: CheckpointForkRequest) async throws -> ComputerJob { try unavailable() }
     func checkpointsDelete(_ request: CheckpointDeleteRequest) async throws -> ComputerJob { try unavailable() }
     func displayShow(_ reference: ComputerReference) async throws { try unavailable() }
-    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String { try unavailable() }
+    func operationsList(deviceId: String?) async throws -> OperationsList { try unavailable() }
+    func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot { try unavailable() }
+    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String { try unavailable() }
     func eventsUnsubscribe(subscription: String) async {}
-    func operationsJobAcknowledge(jobId: String) async throws { try unavailable() }
+    func operationsJobAcknowledge(jobId: String, deviceId: String?) async throws { try unavailable() }
     func engineDisconnect() async throws {}
 }
 
@@ -745,9 +795,17 @@ final class MockEngineClient: EngineClient {
     private(set) var stopRequests: [String] = []
     var stopRefusalIDs: Set<String> = []
     private(set) var deleteRequests: [ComputerDeleteRequest] = []
+    var operationQueue = OperationsList.empty
+    var dropNextFinishedEvent = false
     private var nextJob = 1
     private var finished: [String: OperationJobFinished] = [:]
     private var subscribers: [String: Subscriber] = [:]
+    var suspendNextComputersList = false
+    private var computersListContinuation: CheckedContinuation<Void, Never>?
+    private var computersListWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var computersListCallCount = 0
+    private(set) var operationsListCallCount = 0
+    private(set) var jobGetCallCount = 0
     var suspendNextSubscription = false
     private var subscriptionContinuation: CheckedContinuation<Void, Never>?
     private var subscriptionWaiters: [CheckedContinuation<Void, Never>] = []
@@ -761,7 +819,8 @@ final class MockEngineClient: EngineClient {
 
     private struct Subscriber {
         var events: [String]
-        var handler: @MainActor (EngineEvent) -> Void
+        var sequence: UInt64
+        var handler: @MainActor (EngineEventDelivery) -> Void
     }
 
     init() {
@@ -781,7 +840,19 @@ final class MockEngineClient: EngineClient {
                                                              detail: "Starting macOS")))
     }
 
-    func computersList(deviceId: String? = nil) async throws -> ComputerInventory { inventory }
+    func computersList(deviceId: String? = nil) async throws -> ComputerInventory {
+        computersListCallCount += 1
+        let snapshot = inventory
+        if suspendNextComputersList {
+            suspendNextComputersList = false
+            await withCheckedContinuation { continuation in
+                computersListContinuation = continuation
+                computersListWaiters.forEach { $0.resume() }
+                computersListWaiters.removeAll()
+            }
+        }
+        return snapshot
+    }
 
     func computersConfigurationRead(deviceId: String? = nil) async throws -> ComputerConfigurationRequest {
         ComputerConfigurationRequest(schemaVersion: 1, computers: inventory.linux.computers.map(\.configuration))
@@ -1020,7 +1091,24 @@ final class MockEngineClient: EngineClient {
         updateMacos(reference.computerId) { $0.displayOpen = true }
     }
 
-    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEvent) -> Void) async throws -> String {
+    func operationsList(deviceId: String? = nil) async throws -> OperationsList {
+        operationsListCallCount += 1
+        var snapshot = operationQueue
+        snapshot.unacknowledgedJobIds = Array(Set(snapshot.unacknowledgedJobIds + Array(finished.keys))).sorted()
+        return snapshot
+    }
+
+    func operationsJobGet(jobId: String, deviceId: String? = nil) async throws -> OperationJobSnapshot {
+        jobGetCallCount += 1
+        if let result = finished[jobId] {
+            return OperationJobSnapshot(jobId: jobId, state: .finished,
+                                        outcome: OperationJobOutcome(result: result.result, error: result.error))
+        }
+        let waiting = operationQueue.waiting.contains { $0.jobId == jobId }
+        return OperationJobSnapshot(jobId: jobId, state: waiting ? .waiting : .running)
+    }
+
+    func eventsSubscribe(events: [String], handler: @escaping @MainActor (EngineEventDelivery) -> Void) async throws -> String {
         subscribeCallCount += 1
         if suspendNextSubscription {
             suspendNextSubscription = false
@@ -1031,9 +1119,9 @@ final class MockEngineClient: EngineClient {
             }
         }
         let subscription = UUID().uuidString
-        subscribers[subscription] = Subscriber(events: events, handler: handler)
+        subscribers[subscription] = Subscriber(events: events, sequence: 0, handler: handler)
         if let currentProgress, Self.matches("operations.job.progress", requested: events) {
-            handler(.jobProgress(currentProgress))
+            deliver(.jobProgress(currentProgress), to: subscription)
         }
         return subscription
     }
@@ -1043,9 +1131,38 @@ final class MockEngineClient: EngineClient {
         subscribers[subscription] = nil
     }
 
-    func operationsJobAcknowledge(jobId: String) async throws {
+    func operationsJobAcknowledge(jobId: String, deviceId: String? = nil) async throws {
         acknowledgedJobs.append(jobId)
         finished[jobId] = nil
+    }
+
+    func deliver(_ delivery: EngineEventDelivery) {
+        for id in Array(subscribers.keys) {
+            guard var subscriber = subscribers[id] else { continue }
+            if case .event(let sequence, _) = delivery {
+                subscriber.sequence = max(subscriber.sequence, sequence)
+                subscribers[id] = subscriber
+            }
+            subscriber.handler(delivery)
+        }
+    }
+
+    func retainFinishedJob(_ outcome: OperationJobFinished) {
+        finished[outcome.jobId] = outcome
+        if !operationQueue.unacknowledgedJobIds.contains(outcome.jobId) {
+            operationQueue.unacknowledgedJobIds.append(outcome.jobId)
+        }
+    }
+
+    func waitForSuspendedComputersList() async {
+        if computersListContinuation != nil { return }
+        await withCheckedContinuation { computersListWaiters.append($0) }
+    }
+
+    func resumeSuspendedComputersList() {
+        let continuation = computersListContinuation
+        computersListContinuation = nil
+        continuation?.resume()
     }
 
     func waitForSuspendedSubscription() async {
@@ -1120,7 +1237,8 @@ final class MockEngineClient: EngineClient {
         nextJobFailure = nil
         finished[jobId] = event
         if currentProgress?.jobId == jobId { currentProgress = nil }
-        publish(.jobFinished(event))
+        if dropNextFinishedEvent { dropNextFinishedEvent = false }
+        else { publish(.jobFinished(event)) }
     }
 
     private func scheduleCheckpointFinish(_ jobId: String, computerId: String, after duration: Duration) {
@@ -1151,9 +1269,19 @@ final class MockEngineClient: EngineClient {
     }
 
     private func publish(_ event: EngineEvent) {
-        for subscriber in subscribers.values where Self.matches(event.name, requested: subscriber.events) {
-            subscriber.handler(event)
+        for id in Array(subscribers.keys) {
+            guard var subscriber = subscribers[id], Self.matches(event.name, requested: subscriber.events) else { continue }
+            subscriber.sequence &+= 1
+            subscribers[id] = subscriber
+            subscriber.handler(.event(sequence: subscriber.sequence, event: event))
         }
+    }
+
+    private func deliver(_ event: EngineEvent, to subscription: String) {
+        guard var subscriber = subscribers[subscription], Self.matches(event.name, requested: subscriber.events) else { return }
+        subscriber.sequence &+= 1
+        subscribers[subscription] = subscriber
+        subscriber.handler(.event(sequence: subscriber.sequence, event: event))
     }
 
     private static func matches(_ name: String, requested: [String]) -> Bool {
