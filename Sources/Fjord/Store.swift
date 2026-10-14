@@ -1003,7 +1003,10 @@ final class Store {
         agents = state.agents ?? AgentsState()
         var router = state.router ?? RouterState()
         router.settleInterrupted()
+        // What was saved isn't news for the Brief.
+        routerDigester.suspended = true
         self.router = router
+        routerDigester.suspended = false
         changingInbox(.load) {
             if let c = state.categories { categories = c }
             groups = state.groups ?? []
