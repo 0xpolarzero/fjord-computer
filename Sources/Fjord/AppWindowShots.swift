@@ -715,42 +715,58 @@ enum AppWindowShots {
         guard let view = captureWindow.contentView else { return }
         view.layoutSubtreeIfNeeded()
         guard let base = snapshot(view, view.bounds) else { return }
-        // The root's direct children in z order: those holding a scroll view's document are redrawn from the document, and
-        // every sibling above them is drawn again on top.
-        let image = NSImage(size: view.bounds.size)
-        image.lockFocusFlipped(true)
-        base.draw(in: view.bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        // Composited in a bitmap context of our own, top to bottom: the window pass, then each scroll view's content, then
+        // the views stacked above it.
+        let scale = captureWindow.backingScaleFactor
+        let width = Int(view.bounds.width * scale), height = Int(view.bounds.height * scale)
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        func draw(_ rep: NSBitmapImageRep, at rect: NSRect) {
+            guard let image = rep.cgImage else { return }
+            // `rect` is in the root's coordinates (flipped or not); the context's origin is the bottom left.
+            let y = view.isFlipped ? view.bounds.height - rect.maxY : rect.minY
+            ctx.draw(image, in: CGRect(x: rect.minX * scale, y: y * scale, width: rect.width * scale, height: rect.height * scale))
+        }
+        // Opaque from the start: what no pass draws is the window's ground, not a hole.
+        ctx.setFillColor(NSColor.windowBackgroundColor.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        draw(base, at: view.bounds)
         var above = false
         for child in view.subviews {
-            if let scroll = scrollView(in: child), let document = scroll.documentView {
-                let visible = document.visibleRect
-                if let shot = snapshot(document, visible) {
-                    let frame = document.convert(visible, to: view)
-                    shot.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            let documents = scrollViews(in: child).compactMap(\.documentView)
+            if !documents.isEmpty {
+                for document in documents {
+                    let visible = document.visibleRect
+                    if let shot = snapshot(document, visible) { draw(shot, at: document.convert(visible, to: view)) }
                 }
                 above = true
             } else if above, let shot = snapshot(child, child.bounds) {
-                shot.draw(in: child.convert(child.bounds, to: view), from: .zero, operation: .sourceOver, fraction: 1,
-                          respectFlipped: true, hints: nil)
+                draw(shot, at: child.convert(child.bounds, to: view))
             }
         }
-        image.unlockFocus()
-        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return }
-        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        guard let cg = ctx.makeImage() else { return }
+        try? NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
     }
 
     private static func snapshot(_ view: NSView, _ rect: NSRect) -> NSBitmapImageRep? {
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: rect) else { return nil }
+        // With an alpha channel (the cache `bitmapImageRepForCachingDisplay` makes has none, so a transparent view came out
+        // black and shadows piled up), and transparent to begin with.
+        let scale = view.window?.backingScaleFactor ?? 2
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(rect.width * scale), pixelsHigh: Int(rect.height * scale),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = rect.size
+        if let data = rep.bitmapData { memset(data, 0, rep.bytesPerRow * rep.pixelsHigh) }
         view.cacheDisplay(in: rect, to: rep)
         return rep
     }
 
-    /// The first SwiftUI scroll view with a document (the sidebar's included) under a view.
-    private static func scrollView(in view: NSView) -> NSScrollView? {
-        // SwiftUI's scroll views only: an AppKit text field's own scroll view draws fine in the window pass.
-        if let scroll = view as? NSScrollView, scroll.documentView != nil, String(describing: type(of: scroll)).contains("Hosting") { return scroll }
-        for child in view.subviews { if let found = scrollView(in: child) { return found } }
-        return nil
+    /// The SwiftUI scroll views with a document (the sidebar's included) under a view, in drawing order.
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        // SwiftUI's only: an AppKit text field's own scroll view draws fine in the window pass.
+        if let scroll = view as? NSScrollView, scroll.documentView != nil, String(describing: type(of: scroll)).contains("Hosting") { return [scroll] }
+        return view.subviews.flatMap { scrollViews(in: $0) }
     }
 }
 
