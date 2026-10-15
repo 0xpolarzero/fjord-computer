@@ -1,10 +1,10 @@
 {
   "sourceRepository": "Silo",
-  "sourceCommit": "e29122f00fd7b934544cb0e6a802604d241a1630",
+  "sourceCommit": "086fb8d478c62532e7f1dd2b4ce9ad72e3af233a",
   "sourcePath": "app/SiloUI/api/schema/silo-api.schema.json",
-  "schemaSha256": "20b7ae36c9eb6b51d604b5cd1f5cfd39a9cf355ffa2aff3e9f5c3753dd27cd53",
+  "schemaSha256": "cb43bf16e243854581909f48c4ac62383e03bc2c3f35141ba58f87ed13396e0b",
   "dialect": "https://json-schema.org/draft/2020-12/schema",
   "quicktypeCore": "26.0.0",
-  "methodCount": 146,
+  "methodCount": 148,
   "jobResultCount": 29
 }

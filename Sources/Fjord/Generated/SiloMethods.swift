@@ -78,6 +78,8 @@ enum SiloGeneratedMethods {
         SiloGeneratedMethodDescriptor(name: "display.viewer.sound.check", kind: .query, paramsType: "display::ViewerConnectionParams", resultType: "display::ViewerSoundCheckResult"),
         SiloGeneratedMethodDescriptor(name: "editor.command", kind: .command, paramsType: "terminal::EditorCommandParams", resultType: "terminal::CommandResult"),
         SiloGeneratedMethodDescriptor(name: "editor.includeNotice", kind: .query, paramsType: "common::EmptyParams", resultType: "Option<String>"),
+        SiloGeneratedMethodDescriptor(name: "engine.credentials.repair", kind: .command, paramsType: "credentials::EngineCredentialsRepairParams", resultType: "credentials::CredentialsRepairResult"),
+        SiloGeneratedMethodDescriptor(name: "engine.credentials.status", kind: .query, paramsType: "credentials::EngineCredentialsStatusParams", resultType: "credentials::CredentialsStatus"),
         SiloGeneratedMethodDescriptor(name: "engine.disconnect", kind: .command, paramsType: "engine::EngineDisconnectParams", resultType: "()"),
         SiloGeneratedMethodDescriptor(name: "engine.handshake", kind: .query, paramsType: "transport::HandshakeParams", resultType: "transport::HandshakeResult"),
         SiloGeneratedMethodDescriptor(name: "engine.shutdown", kind: .job, paramsType: "engine::EngineShutdownParams", resultType: "common::JobStartResult"),
@@ -386,6 +388,14 @@ enum SiloGeneratedMethods {
 
     static func editorIncludeNotice(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, String?> {
         SiloGeneratedMethodCall<SiloWireEmptyParams, String?>(name: "editor.includeNotice", kind: .query, params: params)
+    }
+
+    static func engineCredentialsRepair(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWireCredentialsRepairResult> {
+        SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWireCredentialsRepairResult>(name: "engine.credentials.repair", kind: .command, params: params)
+    }
+
+    static func engineCredentialsStatus(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWireCredentialsStatus> {
+        SiloGeneratedMethodCall<SiloWireEmptyParams, SiloWireCredentialsStatus>(name: "engine.credentials.status", kind: .query, params: params)
     }
 
     static func engineDisconnect(_ params: SiloWireEmptyParams) -> SiloGeneratedMethodCall<SiloWireEmptyParams, SiloNull> {

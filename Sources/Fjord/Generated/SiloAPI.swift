@@ -70,6 +70,13 @@
 //   let siloWireConnectDeviceParams = try? JSONDecoder().decode(SiloWireConnectDeviceParams.self, from: jsonData)
 //   let siloWireConnectionsSetEnabledParams = try? JSONDecoder().decode(SiloWireConnectionsSetEnabledParams.self, from: jsonData)
 //   let siloWireConnectionsStatus = try? JSONDecoder().decode(SiloWireConnectionsStatus.self, from: jsonData)
+//   let siloWireCredentialItem = try? JSONDecoder().decode(SiloWireCredentialItem.self, from: jsonData)
+//   let siloWireCredentialKind = try? JSONDecoder().decode(SiloWireCredentialKind.self, from: jsonData)
+//   let siloWireCredentialRepairItem = try? JSONDecoder().decode(SiloWireCredentialRepairItem.self, from: jsonData)
+//   let siloWireCredentialRepairOutcome = try? JSONDecoder().decode(SiloWireCredentialRepairOutcome.self, from: jsonData)
+//   let siloWireCredentialState = try? JSONDecoder().decode(SiloWireCredentialState.self, from: jsonData)
+//   let siloWireCredentialsRepairResult = try? JSONDecoder().decode(SiloWireCredentialsRepairResult.self, from: jsonData)
+//   let siloWireCredentialsStatus = try? JSONDecoder().decode(SiloWireCredentialsStatus.self, from: jsonData)
 //   let siloWireDependencyCheck = try? JSONDecoder().decode(SiloWireDependencyCheck.self, from: jsonData)
 //   let siloWireDependencyReport = try? JSONDecoder().decode(SiloWireDependencyReport.self, from: jsonData)
 //   let siloWireDependencyReportParams = try? JSONDecoder().decode(SiloWireDependencyReportParams.self, from: jsonData)
@@ -1092,6 +1099,9 @@ struct SiloWireMacosComputer: Codable, Equatable, Sendable {
     var memoryGiB: UInt64
     var name: String
     var needsPersonalizing: Bool
+    /// Informational only: something to know that is not a problem and needs no action (for
+    /// example, an imported computer has no SecureToken). Never a failure detail.
+    var note: String? = nil
     var osVersion: String? = nil
     var pendingRestore: SiloWirePendingRestore? = nil
     var progress: Double? = nil
@@ -1111,6 +1121,7 @@ struct SiloWireMacosComputer: Codable, Equatable, Sendable {
         case memoryGiB = "memoryGiB"
         case name = "name"
         case needsPersonalizing = "needsPersonalizing"
+        case note = "note"
         case osVersion = "osVersion"
         case pendingRestore = "pendingRestore"
         case progress = "progress"
@@ -1707,6 +1718,130 @@ enum SiloWireDeviceAddressKind: String, Codable, Equatable, Sendable {
     case name = "name"
     case network = "network"
     case tailscale = "tailscale"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// `status` is read again after the repair, with Keychain prompts off again.
+// MARK: - SiloWireCredentialsRepairResult
+struct SiloWireCredentialsRepairResult: Codable, Equatable, Sendable {
+    var items: [SiloWireCredentialRepairItem]
+    var status: SiloWireCredentialsStatus
+
+    enum CodingKeys: String, CodingKey {
+        case items = "items"
+        case status = "status"
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - SiloWireCredentialRepairItem
+struct SiloWireCredentialRepairItem: Codable, Equatable, Sendable {
+    var computerId: String? = nil
+    var kind: SiloWireCredentialKind
+    var label: String
+    var outcome: SiloWireCredentialRepairOutcome
+
+    enum CodingKeys: String, CodingKey {
+        case computerId = "computerId"
+        case kind = "kind"
+        case label = "label"
+        case outcome = "outcome"
+    }
+}
+
+/// Which of the engine's Keychain items this is.
+///
+/// The GitHub sign-in.
+///
+/// The ledger of GitHub tokens handed to running computers.
+///
+/// A GitHub personal access token.
+///
+/// The secrets vault.
+///
+/// A macOS computer's proxy certificate authority (`computerId` names the computer).
+enum SiloWireCredentialKind: String, Codable, Equatable, Sendable {
+    case githubGrants = "githubGrants"
+    case githubPersonalToken = "githubPersonalToken"
+    case githubSignIn = "githubSignIn"
+    case proxyCa = "proxyCa"
+    case secretsVault = "secretsVault"
+}
+
+/// What a repair did for one item.
+///
+/// It was usable already; nothing was asked.
+///
+/// macOS asked and the user allowed it.
+///
+/// macOS asked and the user declined, or could not ask.
+enum SiloWireCredentialRepairOutcome: String, Codable, Equatable, Sendable {
+    case alreadyAccessible = "alreadyAccessible"
+    case failed = "failed"
+    case repaired = "repaired"
+    case stillDenied = "stillDenied"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// Only items that exist are listed; an item the engine never made is not a problem.
+// MARK: - SiloWireCredentialsStatus
+struct SiloWireCredentialsStatus: Codable, Equatable, Sendable {
+    var deniedCount: Int
+    var items: [SiloWireCredentialItem]
+
+    enum CodingKeys: String, CodingKey {
+        case deniedCount = "deniedCount"
+        case items = "items"
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - SiloWireCredentialItem
+struct SiloWireCredentialItem: Codable, Equatable, Sendable {
+    /// Set for `proxyCa`.
+    var computerId: String? = nil
+    var kind: SiloWireCredentialKind
+    /// Short name to show.
+    var label: String
+    var state: SiloWireCredentialState
+
+    enum CodingKeys: String, CodingKey {
+        case computerId = "computerId"
+        case kind = "kind"
+        case label = "label"
+        case state = "state"
+    }
+}
+
+/// Whether the engine can use an item without asking.
+///
+/// The item exists, but this engine build is not allowed to use it.
+///
+/// The Keychain failed in some other way.
+enum SiloWireCredentialState: String, Codable, Equatable, Sendable {
+    case accessible = "accessible"
+    case denied = "denied"
+    case failed = "failed"
 }
 
 //
@@ -6254,6 +6389,8 @@ enum SiloWireMethodName: String, Codable, Equatable, Sendable {
     case displayViewerSoundCheck = "display.viewer.sound.check"
     case editorCommand = "editor.command"
     case editorIncludeNotice = "editor.includeNotice"
+    case engineCredentialsRepair = "engine.credentials.repair"
+    case engineCredentialsStatus = "engine.credentials.status"
     case engineDisconnect = "engine.disconnect"
     case engineHandshake = "engine.handshake"
     case engineShutdown = "engine.shutdown"
@@ -6929,6 +7066,10 @@ enum SiloWireResultComputer: Codable, Equatable, Sendable {
 ///
 /// Mirrors `app/SiloUI/src-tauri/engine/src/remote.rs::ConnectionsStatus`.
 ///
+/// `status` is read again after the repair, with Keychain prompts off again.
+///
+/// Only items that exist are listed; an item the engine never made is not a problem.
+///
 /// Result of protocol negotiation. `clientId` is supplied on `engine.sock`
 /// and omitted when the handshake runs through the remote control socket.
 ///
@@ -6964,7 +7105,7 @@ struct SiloWireJobStartResultClass: Codable, Equatable, Sendable {
     var action: SiloWireClipboardAction? = nil
     var content: SiloWireClipboardTransferContent? = nil
     var message: String? = nil
-    var status: String? = nil
+    var status: SiloWireStatusUnion? = nil
     var agents: [String]? = nil
     var appliedApproval: SiloWireComputerUseApprovalState? = nil
     var approval: SiloWireComputerUseApprovalState? = nil
@@ -7052,6 +7193,8 @@ struct SiloWireJobStartResultClass: Codable, Equatable, Sendable {
     var url: String? = nil
     var sound: Bool? = nil
     var argv: [String]? = nil
+    var items: [SiloWireItemElement]? = nil
+    var deniedCount: Int? = nil
     var capabilities: [String]? = nil
     var clientId: String? = nil
     var jobStartResultProtocol: Int? = nil
@@ -7256,6 +7399,8 @@ struct SiloWireJobStartResultClass: Codable, Equatable, Sendable {
         case url = "url"
         case sound = "sound"
         case argv = "argv"
+        case items = "items"
+        case deniedCount = "deniedCount"
         case capabilities = "capabilities"
         case clientId = "clientId"
         case jobStartResultProtocol = "protocol"
@@ -7573,6 +7718,59 @@ struct SiloWireEntry: Codable, Equatable, Sendable {
         case occurredAt = "occurredAt"
         case session = "session"
         case source = "source"
+    }
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+// MARK: - SiloWireItemElement
+struct SiloWireItemElement: Codable, Equatable, Sendable {
+    /// Set for `proxyCa`.
+    var computerId: String? = nil
+    var kind: SiloWireCredentialKind
+    /// Short name to show.
+    var label: String
+    var outcome: SiloWireCredentialRepairOutcome? = nil
+    var state: SiloWireCredentialState? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case computerId = "computerId"
+        case kind = "kind"
+        case label = "label"
+        case outcome = "outcome"
+        case state = "state"
+    }
+}
+
+enum SiloWireStatusUnion: Codable, Equatable, Sendable {
+    case siloWireCredentialsStatus(SiloWireCredentialsStatus)
+    case string(String)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let x = try? container.decode(String.self) {
+            self = .string(x)
+            return
+        }
+        if let x = try? container.decode(SiloWireCredentialsStatus.self) {
+            self = .siloWireCredentialsStatus(x)
+            return
+        }
+        throw DecodingError.typeMismatch(SiloWireStatusUnion.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SiloWireStatusUnion"))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .siloWireCredentialsStatus(let x):
+            try container.encode(x)
+        case .string(let x):
+            try container.encode(x)
+        }
     }
 }
 
