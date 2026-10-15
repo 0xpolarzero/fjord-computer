@@ -56,7 +56,8 @@ enum SessionControlAck {
 
     static func delivery(_ ack: String) -> Delivered? {
         let words = ack.split(separator: " ").map(String.init)
-        guard words.first == "ok" else { return nil }
+        // "ok not-running" is a stop's word for a turn it couldn't reach: an interrupt behind it was not delivered.
+        guard words.first == "ok", words.dropFirst().first != "not-running" else { return nil }
         return Delivered(interrupted: words.count >= 3 && words[1] == "interrupted" ? words[2] : nil)
     }
 }

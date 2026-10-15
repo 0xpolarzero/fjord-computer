@@ -228,6 +228,79 @@ import Testing
         guard case .unsupported = await l.store.stopTurn(sessionID: "local_nowhere") else { Issue.record("not unsupported"); return }
     }
 
+    @Test func anInterruptTheTurnWouldNotYieldToIsNotDelivered() async throws {
+        let l = try local(extra: Self.capable)
+        var fake = plugin(l.inbox, answer: "refused: the running turn could not be stopped")
+        #expect(await l.store.interrupt(sessionID: "local_a", text: "Go") == .refused("the running turn could not be stopped"))
+        _ = await fake.value
+        // An older plugin's "ok not-running" was not a delivery either.
+        #expect(SessionControlAck.delivery("ok not-running") == nil)
+        fake = plugin(l.inbox, answer: "refused: not submitted: nothing to send")
+        #expect(await l.store.interrupt(sessionID: "local_a", text: "Go") == .refused("not submitted: nothing to send"))
+        _ = await fake.value
+    }
+
+    // MARK: Presence reads
+
+    private final class Calls: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+        func bump() { lock.lock(); n += 1; lock.unlock() }
+    }
+
+    /// Lets the main queue run what the presence scan handed it.
+    private func drain() async {
+        for _ in 0..<5 { try? await Task.sleep(nanoseconds: 20_000_000) }
+    }
+
+    @Test func aHeartbeatRenewsTheLeaseWithoutAReadOfTheSessionsButATurnChangeAsksForOne() async throws {
+        let l = try local(extra: Self.capable)
+        let calls = Calls()
+        l.store.claudeFeed.readPresence(from: l.paths) { calls.bump() }
+        await drain()
+        l.store.claudeFeed.scanPresence()
+        await drain()
+        let base = calls.count
+        let renewed = Int64(ClaudePlugin.leaseNow.timeIntervalSince1970 * 1000) + 10_000
+        func rewrite(_ extra: [String: Any]) {
+            PluginFixture.live("cli-a", support: l.paths.support, claude: l.paths.claudeDir, extra: Self.capable.merging(extra) { _, new in new })
+        }
+        // The heartbeat: the same file with a later time.
+        rewrite(["renewedAt": renewed])
+        l.store.claudeFeed.presenceNow = { Date(timeIntervalSince1970: Double(renewed) / 1000) }
+        l.store.claudeFeed.scanPresence()
+        await drain()
+        #expect(calls.count == base)
+        #expect(l.store.claudeFeed.presence["cli-a"]?.renewedAt == renewed)
+        // The turn ends: that is something to reconcile.
+        rewrite(["renewedAt": renewed, "turn": NSNull()])
+        l.store.claudeFeed.scanPresence()
+        await drain()
+        #expect(calls.count == base + 1)
+        #expect(l.store.claudeFeed.presence["cli-a"]?.turn == nil)
+    }
+
+    @Test func aLeaseThatRunsOutDropsTheStateAndAsksForAReconcile() async throws {
+        let l = try local(extra: Self.capable)
+        let calls = Calls()
+        l.store.claudeFeed.readPresence(from: l.paths) { calls.bump() }
+        await drain()
+        // The clock: 0.3 s before the lease ends, running on in real time. The scan schedules its own look for the expiry.
+        let renewed = ClaudePlugin.leaseNow.timeIntervalSince1970
+        let start = Date()
+        l.store.claudeFeed.presenceNow = { Date(timeIntervalSince1970: renewed + ClaudePlugin.lease - 1.5 + Date().timeIntervalSince(start)) }
+        l.store.claudeFeed.scanPresence()
+        await drain()
+        let base = calls.count
+        #expect(l.store.canStop(sessionID: "local_a"))
+        var watchdog = Watchdog()
+        while l.store.canStop(sessionID: "local_a"), !watchdog.expired() { try? await Task.sleep(nanoseconds: 20_000_000) }
+        await drain()
+        #expect(!l.store.canStop(sessionID: "local_a") && l.store.claudeFeed.presence["cli-a"] == nil)
+        #expect(calls.count == base + 1)
+    }
+
     @Test func theGateIsAskedRightBeforeTheWriteAndAStaleRequestWritesNothing() async throws {
         let l = try local(extra: Self.capable)
         let stop = await l.store.stopTurn(sessionID: "local_a") { "The card was archived" }

@@ -821,16 +821,81 @@ final class ClaudeFeed: @unchecked Sendable {
     /// The live presence files as of the last read, by the CLI session id.
     private var presenceRead: [String: ClaudePlugin.Presence] = [:]
 
-    /// Sets where presence is read from, on the next read, and calls `changed` (on the main thread) when a presence file
-    /// changes: a plugin rewrites its own as a turn starts and completes, so the running state follows the turn.
+    /// Sets where presence is read from, on the next read, and calls `changed` (on the main thread) when what a presence file
+    /// says changes in a way that matters (see `PresenceSignature`): a plugin rewrites its own as a turn starts and
+    /// completes, so the running state follows the turn. Its 10 s heartbeat only renews the lease, which is noted here and
+    /// triggers nothing; and when a lease runs out with no renewal, `changed` is called then.
     func readPresence(from paths: RouterPaths?, changed: @escaping @MainActor () -> Void) {
         lock.lock()
         let same = presencePaths == paths
         presencePaths = paths
+        presenceChanged = changed
         lock.unlock()
         guard !same else { return }
         presenceWatcher = paths.map { paths in
-            FolderWatcher([paths.pluginSessions], latency: 0.5) { MainActor.assumeIsolated { changed() } }
+            FolderWatcher([paths.pluginSessions], latency: 0.5) { [weak self] in
+                self?.presenceQueue.async { self?.scanPresence() }
+            }
+        }
+    }
+
+    /// What of a presence file makes a difference to Fjord besides its lease: whether it speaks for the turn at all, the turn
+    /// running, what the plugin can do, and the process it is bound to.
+    struct PresenceSignature: Equatable {
+        var hasTurnField: Bool
+        var turn: String?
+        var capabilities: [String]
+        var pid: Int32?
+        var startedAt: Int64?
+
+        init(_ file: ClaudePlugin.Presence) {
+            hasTurnField = file.hasTurnField
+            turn = file.turn?.id
+            capabilities = file.capabilities ?? []
+            pid = file.pid
+            startedAt = file.startedAt
+        }
+    }
+
+    private let presenceQueue = DispatchQueue(label: "fjord.claude.presence", qos: .utility)
+    private var presenceChanged: (@MainActor () -> Void)?
+    /// Which scheduled lease check is current (an older one does nothing).
+    private var expiryToken = 0
+    /// The clock the lease is judged by (tests move it).
+    var presenceNow: @Sendable () -> Date = { ClaudePlugin.leaseNow }
+
+    /// Reads the presence files alone, cheaply (no session history): notes the lease timestamps, and calls the change handler
+    /// on the main thread only when a session appeared, vanished or changed in what `PresenceSignature` holds. Schedules the
+    /// next look for the moment the earliest lease runs out unless renewed, so a plugin that stopped renewing (unloaded mid-turn)
+    /// stops counting then. Runs on the presence queue.
+    func scanPresence() {
+        lock.lock()
+        let paths = presencePaths, changed = presenceChanged
+        lock.unlock()
+        guard let paths else { return }
+        let now = presenceNow()
+        let found = ClaudePlugin.live(in: paths.pluginSessions,
+                                      registry: ClaudePeers.registry(dir: paths.claudeDir.appendingPathComponent("sessions", isDirectory: true)),
+                                      keyID: ClaudePlugin.currentKeyID(beside: paths.pluginSessions), now: now)
+        lock.lock()
+        let before = presenceRead.mapValues(PresenceSignature.init)
+        presenceRead = found
+        expiryToken += 1
+        let token = expiryToken
+        lock.unlock()
+        if before != found.mapValues(PresenceSignature.init), let changed {
+            DispatchQueue.main.async { MainActor.assumeIsolated { changed() } }
+        }
+        let expiries = found.values.compactMap { $0.renewedAt }.map { Double($0) / 1000 + ClaudePlugin.lease }
+        guard let first = expiries.min() else { return }
+        // A hair after the lease ends (it holds while `|now - renewed| < lease`).
+        let wait = max(0.05, first - now.timeIntervalSince1970 + 0.05)
+        presenceQueue.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let current = self.expiryToken == token
+            self.lock.unlock()
+            if current { self.scanPresence() }
         }
     }
 
@@ -865,6 +930,8 @@ final class ClaudeFeed: @unchecked Sendable {
         lock.lock()
         presenceRead = found
         lock.unlock()
+        // Its lease is watched from here on (see `scanPresence`): this read applies what it found, so nothing differs yet.
+        presenceQueue.async { [self] in scanPresence() }
         return Self.applying(presence: found, to: sessions)
     }
 

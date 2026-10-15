@@ -55,6 +55,8 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     order: [] as string[],
     aborted: [] as string[],
     abortFails: false,
+    /** Holds turn.abort until let go. */
+    holdAbort: undefined as Promise<void> | undefined,
     /** The notices appended to the session. */
     appended: [] as string[],
     /** Tool calls that reached the tool, and what lets each finish. */
@@ -133,7 +135,8 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
       w.finish[e.tool_use_id] = () => resolve({ result: 'finished', text: 'finished' })
     })
   })
-  on('turn.abort', ($, e) => {
+  on('turn.abort', async ($, e) => {
+    await w.holdAbort
     if (w.abortFails) throw new Error(`${e.turnId} is not the running turn`)
     w.aborted.push(e.turnId)
     w.order.push(`abort ${e.turnId}`)
@@ -928,6 +931,100 @@ describe('stopping a turn and interrupting it', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const dropped = await ($ as any).prompt.submit({ text: '<task-notification><tool-use-id>toolu_1</tool-use-id></task-notification>', origin: { kind: 'task-notification' } })
     expect(dropped.drop).toBeDefined()
+  })
+
+  test('a turn that completes while its stop awaits the abort is still cut and muted', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    const pending = call($, 'toolu_1')
+    await settle()
+    let release = () => {}
+    w.holdAbort = new Promise<void>((resolve) => (release = resolve))
+    w.inbox[`${TARGET}/${STOP_NONCE}.msg`] = await signStop('t1')
+    await look($, w)
+    await $.turn.complete({ ...complete, turnId: 't1' })
+    release()
+    await settle()
+    await settle()
+    expect(w.written[`/inbox/${TARGET}/${STOP_NONCE}.ack`]).toBe('ok stopped t1\n')
+    expect((await pending).deny).toBeDefined()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dropped = await ($ as any).prompt.submit({ text: '<task-notification><tool-use-id>toolu_1</tool-use-id></task-notification>', origin: { kind: 'task-notification' } })
+    expect(dropped.drop).toBeDefined()
+  })
+
+  test('an interrupt whose stop fails while the turn still runs is refused and submits nothing', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    w.abortFails = true
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true }))).toBe('refused: the running turn could not be stopped\n')
+    await settle()
+    expect(w.submitted).toEqual([])
+  })
+
+  test('an interrupt whose stop fails because the turn just ended goes through as idle', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    w.abortFails = true
+    let release = () => {}
+    w.holdAbort = new Promise<void>((resolve) => (release = resolve))
+    w.inbox[`${TARGET}/${NONCE}.msg`] = await sign(BODY, { interrupt: true })
+    await look($, w)
+    await $.turn.complete({ ...complete, turnId: 't1' })
+    release()
+    await settle()
+    await settle()
+    expect(w.written[`/inbox/${TARGET}/${NONCE}.ack`]).toBe('ok idle\n')
+    expect(w.submitted).toEqual([{ text: BODY, asUser: true }])
+  })
+
+  for (const [name, text] of [['empty', ''], ['whitespace', ' \n\t '], ['a slash command', '/clear']] as const) {
+    test(`an interrupt with ${name} text is refused before the turn is aborted`, async ($, on) => {
+      const w = world(on)
+      await look($, w)
+      await $.turn.start({ text: 'typed', turnId: 't1' })
+      expect(await put($, w, NONCE, await sign(text, { interrupt: true }))).toMatch(/^refused: not submitted: /)
+      await settle()
+      expect(w.aborted).toEqual([])
+      expect(w.submitted).toEqual([])
+      expect(w.appended).toEqual([])
+    })
+  }
+
+  test('an interrupt whose submit is rejected says so in the ack', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    w.dropSubmit = true
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true }))).toBe('refused: not submitted: a hook beneath said no\n')
+  })
+
+  test('a subagent belongs to the turn its parent does: an older agent’s child is not cut with a newer turn', async ($, on) => {
+    const w = world(on)
+    let next = ''
+    on('agent.spawn', () => ({ model: 'haiku', agentId: next }))
+    await look($, w)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const spawn = (id: string, parentAgentId?: string) => ((next = id), ($ as any).agent.spawn({ prompt: 'go', parentAgentId }))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const run = (agentId: string, id: string): Promise<any> => $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: id, agentId })
+    await $.turn.start({ text: 'first', turnId: 't0' })
+    await spawn('a-old')
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    await $.turn.start({ text: 'second', turnId: 't1' })
+    await spawn('a-old-child', 'a-old')
+    await spawn('a-new')
+    await spawn('a-new-child', 'a-new')
+    const oldChild = run('a-old-child', 'toolu_oc')
+    const newChild = run('a-new-child', 'toolu_nc')
+    await settle()
+    expect(await put($, w, STOP_NONCE, await signStop('t1'))).toBe('ok stopped t1\n')
+    expect((await newChild).deny).toBeDefined()
+    w.finish.toolu_oc()
+    expect((await oldChild).result).toBe('finished')
   })
 
   test('a stop for a turn that is not the running one leaves the running one be', async ($, on) => {

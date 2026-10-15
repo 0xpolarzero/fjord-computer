@@ -257,6 +257,12 @@ import type { EngineInterface, Register } from 'claude-code'
 // the settings did. Plain v1 and v2 messages keep queueing behind a running turn. Over the peer channel (whose hook a turn
 // waits on) a v3 message is not taken at all.
 //
+// An interrupt is refused ("refused: why", nothing submitted) when its words can't be submitted (empty, or a slash command:
+// checked before anything is stopped), when the running turn can't be stopped, or when the submit is rejected.
+//
+// A subagent belongs to the main turn that spawned it, found from the spawn's parent: a background agent of an older turn that
+// spawns another during a newer turn keeps it with the older one, so stopping the newer turn leaves it be.
+//
 // Presence files carry `turn`: `{ id, startedAt }` while a main turn runs, null when idle, rewritten as the turn starts and
 // as it completes.
 //
@@ -491,7 +497,13 @@ let running: string | undefined
 let runningSince = 0
 /** In a main turn: the tool calls under way, each with what cuts it short, the ids of every call made, and
  * the subagents it spawned. */
-const calls = new Map<string, { cuts: Set<() => void>; ids: Set<string>; agents: Set<string> }>()
+type Calls = { cuts: Set<() => void>; ids: Set<string>; agents: Set<string> }
+const calls = new Map<string, Calls>()
+/** The main turn that owns each subagent (by the agent's id): a spawn from the main loop belongs to the turn running, one
+ * from a subagent to that subagent's owner, so an older turn's background agent spawning during a newer turn stays the older
+ * turn's. The latest few only. */
+const owners = new Map<string, string>()
+const OWNERS_KEPT = 500
 /** The tool calls of turns taken back, with when: a notification naming only them (a background command ending) is
  * dropped. Kept an hour. */
 const quiet = new Map<string, number>()
@@ -501,18 +513,19 @@ const QUIET_MS = 60 * 60 * 1000
 export const forget = () => {
   sent.clear()
   calls.clear()
+  owners.clear()
   quiet.clear()
   running = undefined
   runningSince = 0
 }
 
-/** Stops what a turn's tools are doing, and keeps their notifications out from now on. */
-const silence = (turnId: string, now: number) => {
-  const turn = calls.get(turnId)
-  if (!turn) return
-  for (const cut of turn.cuts) cut()
-  for (const id of turn.ids) quiet.set(id, now)
-  calls.delete(turnId)
+/** Stops what a turn's tools are doing, and keeps their notifications out from now on. `record` is the turn's record taken
+ * before an abort was awaited: the turn may have completed (and dropped its record) meanwhile, and its tools are still cut. */
+const silence = (turnId: string, now: number, record = calls.get(turnId)) => {
+  if (!record) return
+  for (const cut of record.cuts) cut()
+  for (const id of record.ids) quiet.set(id, now)
+  if (calls.get(turnId) === record) calls.delete(turnId)
 }
 
 /** Forgets deliveries past the window (an abort of one is refused as stale anyway) and notifications kept long enough. */
@@ -529,13 +542,29 @@ const remember = (nonce: string, body: string, now: number) => {
 
 /** Submits a delivery's words; one a hook drops, or that fails, started nothing and is forgotten (else a later turn of the
  * person's own could be taken for its turn). */
-const submit = ($: EngineInterface, nonce: string, body: string) => {
+const submit = ($: EngineInterface, nonce: string, body: string): Promise<string | undefined> => {
   const forgotten = () => {
     if (sent.get(nonce)?.turnId === undefined) sent.delete(nonce)
   }
-  void $.prompt.submit({ text: body, asUser: true }).then((r) => {
-    if (r && 'drop' in r && r.drop !== undefined) forgotten()
-  }, forgotten)
+  return $.prompt.submit({ text: body, asUser: true }).then(
+    (r) => {
+      if (r && 'drop' in r && r.drop !== undefined) {
+        forgotten()
+        return String(r.drop)
+      }
+      return undefined
+    },
+    (error) => {
+      forgotten()
+      return String((error as { message?: unknown })?.message ?? error)
+    },
+  )
+}
+
+/** Whether `$.prompt.submit` takes this text: not empty, not a slash command (those are rejected). Undefined: fine. */
+const unsubmittable = (body: string) => {
+  const text = body.trim()
+  return text === '' ? 'nothing to send' : text.startsWith('/') ? 'a slash command can’t be sent as a message' : undefined
 }
 
 /** The deliveries a main turn starts with: each one waiting whose words are the turn's text, or, when Claude Code read
@@ -575,13 +604,14 @@ export async function cancel($: EngineInterface, nonce: string, ts: number, now:
     return 'before-start'
   }
   if (running !== s.turnId) return 'too-late'
+  const record = calls.get(s.turnId)
   try {
     await $.turn.abort({ turnId: s.turnId })
   } catch {
     return 'too-late'
   }
   // Only once the abort is taken: the tools it was running, and what they would say afterwards.
-  silence(s.turnId, now)
+  silence(s.turnId, now, record)
   for (const other of sent.values()) if (other.turnId === s.turnId) other.ended = true
   return 'aborted'
 }
@@ -592,12 +622,14 @@ export async function stopRunning($: EngineInterface, now: number, turnId?: stri
   if (turnId !== undefined && running !== turnId) return 'not-running'
   const id = running
   if (id === undefined) return 'idle'
+  // Kept alive across the abort: the turn may complete while it is awaited, and its tools are still to be cut.
+  const record = calls.get(id)
   try {
     await $.turn.abort({ turnId: id })
   } catch {
     return 'not-running'
   }
-  silence(id, now)
+  silence(id, now, record)
   for (const other of sent.values()) if (other.turnId === id) other.ended = true
   await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: notice }] } }).catch(() => undefined)
   return `stopped ${id}`
@@ -658,9 +690,17 @@ export async function accept(
   }
   const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
   const body = bom ? `\uFEFF${decoded}` : decoded
+  // An interrupt's words are checked before anything is stopped: a turn is never aborted for text that can't be submitted.
+  const unfit = apply && signed.interrupt ? unsubmittable(body) : undefined
+  if (unfit) return { ok: false, reason: `not submitted: ${unfit}` }
   if (!(await claim($, signed.nonce, ts, now))) return { ok: false, reason: 'already delivered' }
-  // An interrupt stops the turn under way first (the person's words then start the next one at once).
-  const interrupted = apply && signed.interrupt ? await stopRunning($, now, undefined, 'Interrupted from Fjord') : undefined
+  // An interrupt stops the turn under way first (the person's words then start the next one at once). When the stop fails
+  // and the turn still runs, the words would only queue behind it: refused, not delivered.
+  let interrupted = apply && signed.interrupt ? await stopRunning($, now, undefined, 'Interrupted from Fjord') : undefined
+  if (interrupted === 'not-running') {
+    if (running !== undefined) return { ok: false, reason: 'the running turn could not be stopped' }
+    interrupted = 'idle'
+  }
   // The settings first, so the turn the text starts uses them: the model, then the effort (a model resets it). Each can fail
   // on its own; the person's words go either way. Only from the inbox (`apply`): never from inside a hook a turn waits on.
   const applied: string[] = []
@@ -677,7 +717,11 @@ export async function accept(
     }
   }
   remember(signed.nonce, body, now)
-  submit($, signed.nonce, body)
+  const sending = submit($, signed.nonce, body)
+  if (apply && signed.interrupt) {
+    const why = await sending
+    if (why !== undefined) return { ok: false, reason: `not submitted: ${why.replace(/\s+/g, ' ').slice(0, 80)}` }
+  } else void sending
   return { ok: true, ...(applied.length ? { applied: applied.join(' ') } : {}), ...(interrupted ? { interrupted } : {}) }
 }
 
@@ -772,11 +816,17 @@ export const register: Register = (on) => {
     return next(e)
   })
   // The subagents a turn spawns are its own: their tool calls are cut with it.
+  // Whose it is goes by its parent: the main loop's spawn belongs to the turn running, a subagent's to that subagent's turn.
   on('agent.spawn', async ($, e, next) => {
-    const turn = running === undefined ? undefined : calls.get(running)
+    const parent = (e as { parentAgentId?: unknown }).parentAgentId
+    const owner = typeof parent === 'string' ? owners.get(parent) : running
     const spawned = await next(e)
     const id = (spawned as { agentId?: unknown })?.agentId
-    if (turn && typeof id === 'string') turn.agents.add(id)
+    if (owner !== undefined && typeof id === 'string') {
+      owners.set(id, owner)
+      while (owners.size > OWNERS_KEPT) owners.delete(owners.keys().next().value as string)
+      calls.get(owner)?.agents.add(id)
+    }
     return spawned
   }).catch(($, e, next) => next(e))
   // A tool call of a main turn (on the main loop, or in a subagent it spawned) can be cut short by a cancel or a stop:
