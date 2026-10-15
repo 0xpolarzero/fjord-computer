@@ -505,7 +505,7 @@ import Foundation
             return (cli, pending.folder)
         }, uniquingKeysWith: { _, latest in latest })
         evidence[computer.key] = try await GuestSessionObserver(client: client).read(computer: computer, paths: paths,
-            projectFoldersBySession: projectFoldersBySession)
+            projectFoldersBySession: projectFoldersBySession, formSessionIDs: Set(current.map(\.form.cliSessionID)))
         reconcileDesktopMetadata()
         applyGuestEvidenceToStore()
     }

@@ -20,4 +20,22 @@ import Testing
         #expect(client.acknowledgedJobs == [jobId])
         #expect(model.finishedJobs[jobId] == nil)
     }
+
+    @Test func failedStartShowsItsErrorInTheToastAndOnTheComputer() async throws {
+        let client = MockEngineClient()
+        let model = ComputersModel(client: client, initialInventory: client.inventory)
+        let target = GuestReference.thisMac(MockEngineClient.failedID)
+        client.nextJobFailure = OperationJobError(code: "internal", message: "The runtime did not complete the operation")
+
+        await model.start(target)
+
+        let receipt = try #require(model.currentJobReceipt)
+        #expect(receipt.message.hasPrefix("Start failed:"))
+        #expect(receipt.tone == .danger)
+        #expect(model.computerFailures[target.key]?.hasPrefix("Start failed:") == true)
+        #expect(model.actionError?.hasPrefix("Start failed:") == true)
+
+        await model.start(target)
+        #expect(model.computerFailures[target.key] == nil)
+    }
 }

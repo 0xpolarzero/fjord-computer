@@ -176,11 +176,18 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(backup.data == originalSettings)
         #expect(backup.mode == 0o600)
         #expect(files[GuestRouterPaths.join(installed.paths.forms, FormBridge.marker)] != nil)
-        #expect(await guest.execRecords().map(\.argv).contains([account.claudeExecutable, "plugin", "install", ClaudePlugin.id, "--scope", "user"]))
+        #expect(await guest.execRecords().map(\.argv).contains([account.claudeExecutable, "plugin", "install", ClaudePlugin.guestID, "--scope", "user"]))
+        // The guest plugin has a name of its own, so Desktop's hookless --plugin-dir copy of the Mac's `fjord` cannot shadow it.
+        let manifest = String(decoding: try #require(files[GuestRouterPaths.join(installed.paths.plugin, ".claude-plugin/plugin.json")]), as: UTF8.self)
+        let market = String(decoding: try #require(files[GuestRouterPaths.join(installed.paths.plugin, ".claude-plugin/marketplace.json")]), as: UTF8.self)
+        #expect(manifest.contains("\"name\" : \"fjord-guest\""))
+        #expect(market.contains("\"name\": \"fjord-guest\"") && !market.contains("\"name\": \"fjord\""))
+        #expect(await guest.execRecords().map(\.argv).contains([account.claudeExecutable, "plugin", "uninstall", "fjord@fjord", "--scope", "user"]))
+        #expect(await guest.execRecords().map(\.argv).contains([account.claudeExecutable, "plugin", "marketplace", "remove", "fjord"]))
         #expect(FileManager.default.fileExists(atPath: installed.paths.hook) == false)
 
         _ = try await GuestRouterInstaller(client: guest).install(computer: computer)
-        #expect(await guest.execRecords().contains { $0.argv == [account.claudeExecutable, "plugin", "update", ClaudePlugin.id, "--scope", "user"] })
+        #expect(await guest.execRecords().contains { $0.argv == [account.claudeExecutable, "plugin", "update", ClaudePlugin.guestID, "--scope", "user"] })
         try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(installed.paths.presence, "cli-1"),
                                          data: Data("{}".utf8), mode: 0o600))
         try await GuestRouterInstaller(client: guest).disable(computer: computer)
@@ -527,6 +534,21 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop, evidence: []) == nil)
         let sameFolderElsewhere = DesktopSSHSession(id: "local_other", alias: "ssh-other-computer", folder: pending.folder)
         #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop + [sameFolderElsewhere], evidence: [evidence]) == evidence)
+    }
+
+    @Test func pendingStartMatchesAFormBackedSessionWithoutPluginPresence() {
+        let opened = Date(timeIntervalSince1970: 1_800_000_000)
+        let pending = PendingDesktopStart(projectID: UUID(), location: .computer(deviceId: "owner-1", computerId: "computer-1"),
+            alias: "ssh-computer-1", folder: "/workspace/repo", prompt: "Fix the bug", openedAt: opened)
+        let message = SessionFork.Message(uuid: "message-1", parent: nil, text: "Fix the bug now", cwd: "/workspace/repo",
+                                          at: opened.addingTimeInterval(10))
+        var evidence = GuestSessionEvidence(computer: computer, cliSessionID: "cli-1", hostSessionID: "local_desktop-1",
+            pid: 42, startedAt: 123, renewedAt: 1_800_000_010_000, capabilities: [], transcriptMessages: [message])
+        let desktop = [DesktopSSHSession(id: "local_desktop-1", alias: "ssh-computer-1", folder: "/workspace/repo")]
+
+        #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop, evidence: [evidence]) == nil)
+        evidence.formBacked = true
+        #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop, evidence: [evidence]) == evidence)
     }
 
     @Test func desktopSessionDecodesItsActualSSHHostAlias() throws {

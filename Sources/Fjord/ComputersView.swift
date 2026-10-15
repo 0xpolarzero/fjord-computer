@@ -68,7 +68,7 @@ struct ComputersView: View {
                     } else if count == 0 && model.unreachableOwners.isEmpty {
                         ComputerEmptyState()
                     } else if groups.count == 1 && model.unreachableOwners.isEmpty {
-                        ComputerRowList(rows: groups[0].inventory.allComputers, deviceId: nil, navigator: navigator)
+                        ComputerRowList(rows: groups[0].inventory.allComputers, deviceId: nil, navigator: navigator, failures: model.computerFailures)
                     } else {
                         ForEach(groups) { group in
                             VStack(alignment: .leading, spacing: 8) {
@@ -77,7 +77,7 @@ struct ComputersView: View {
                                 if group.inventory.allComputers.isEmpty {
                                     SettingsNote("No computers on \(group.name) yet.")
                                 } else {
-                                    ComputerRowList(rows: group.inventory.allComputers, deviceId: group.deviceId, navigator: navigator)
+                                    ComputerRowList(rows: group.inventory.allComputers, deviceId: group.deviceId, navigator: navigator, failures: model.computerFailures)
                                 }
                             }
                         }
@@ -129,12 +129,13 @@ private struct ComputerRowList: View {
     let rows: [ComputerRow]
     let deviceId: String?
     let navigator: AppNavigator
+    var failures: [String: String] = [:]
 
     var body: some View {
         VStack(spacing: 1) {
             ForEach(rows) { row in
                 Button { navigator.go(.computerDetail(GuestReference(deviceId: deviceId, computerId: row.id))) } label: {
-                    ComputerListRow(row: row)
+                    ComputerListRow(row: row, failure: failures[GuestReference(deviceId: deviceId, computerId: row.id).key])
                 }
                 .buttonStyle(.plain)
                 if row.id != rows.last?.id { Rectangle().fill(CDS.Settings.divider).frame(height: 1) }
@@ -227,6 +228,7 @@ struct ComputerDetailView: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         ComputerOperationQueue(model: model, target: target)
+                        if let failure = model.computerFailures[target.key] { ComputerNotice(text: failure, tone: .danger) }
                         if let job = model.activeJob, model.activeJobDeviceId == target.deviceId,
                            (job.computerId ?? job.data.presentationComputerId) == row.id {
                             ComputerJobCard(job: job, inventory: model.inventory(for: target.deviceId), ownerName: nil)
@@ -315,6 +317,7 @@ struct ComputerDetailView: View {
 
 private struct ComputerListRow: View {
     let row: ComputerRow
+    var failure: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -327,6 +330,7 @@ private struct ComputerListRow: View {
                 Text(row.name).font(CDS.sans(13, .medium)).foregroundStyle(CDS.Text.primary).lineLimit(1)
                 Text([row.kind.title, row.resources].joined(separator: " · "))
                     .font(CDS.sans(11)).foregroundStyle(CDS.Text.muted).lineLimit(1)
+                if let failure { Text(failure).font(CDS.sans(11)).foregroundStyle(CDS.Text.danger).lineLimit(2) }
             }
             Spacer(minLength: 10)
             ComputerStateBadge(state: row.displayState, detail: row.detail)

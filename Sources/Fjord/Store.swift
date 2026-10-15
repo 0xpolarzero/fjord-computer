@@ -17,7 +17,7 @@ final class Store {
 
     init(engineClient: (any EngineClient)? = nil, engineLauncher: EngineLauncher? = nil) {
         let offlineContext = Store.isDemo || UnderTest.isRunning
-        let socketPath = ProcessInfo.processInfo.environment["FJORD_SILO_SOCKET_PATH"] ?? SocketEngineClient.defaultSocketPath
+        let socketPath = SocketEngineClient.defaultSocketPath
         let defaultClient: any EngineClient
         if offlineContext { defaultClient = MockEngineClient() }
         else { defaultClient = UnavailableEngineClient() }
@@ -644,8 +644,7 @@ final class Store {
     }
 
     nonisolated private static let fileURL: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Fjord", isDirectory: true)
+        let dir = AppIdentity.supportDirectory()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("state.json")
     }()

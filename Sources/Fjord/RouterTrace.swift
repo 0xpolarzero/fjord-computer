@@ -84,8 +84,7 @@ final class RouterTraceLog: @unchecked Sendable {
     init(url: URL?) { _url = url }
 
     static var defaultURL: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Fjord", isDirectory: true)
+        let dir = AppIdentity.supportDirectory()
         return dir.appendingPathComponent("router-trace.jsonl")
     }
 

@@ -320,8 +320,7 @@ actor LocalComputerRunArtifactStore {
     init(root: URL? = nil) { self.root = root }
 
     func saveVideo(_ data: Data, runID: UUID) throws -> URL {
-        let base = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Fjord/TriageRuns", isDirectory: true)
+        let base = root ?? AppIdentity.supportDirectory().appendingPathComponent("TriageRuns", isDirectory: true)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         let url = base.appendingPathComponent("\(runID.uuidString.lowercased()).mp4")
         try data.write(to: url, options: .atomic)

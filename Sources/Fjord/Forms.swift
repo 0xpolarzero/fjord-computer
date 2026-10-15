@@ -30,8 +30,7 @@ struct RouterPaths: Equatable, Sendable {
 
     /// For the hook process, which is never a test run.
     static var unguarded: RouterPaths {
-        RouterPaths(support: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                        .appendingPathComponent("Fjord", isDirectory: true),
+        RouterPaths(support: AppIdentity.supportDirectory(),
                     claudeDir: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude", isDirectory: true))
     }
 }

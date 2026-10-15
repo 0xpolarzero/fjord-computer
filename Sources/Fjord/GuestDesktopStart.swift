@@ -71,6 +71,9 @@ struct GuestSessionEvidence: Equatable, Sendable {
     var transcriptMessages: [SessionFork.Message]
     var transcript: GuestTranscriptSnapshot? = nil
     var tasks: [ClaudeTask]? = nil
+    /// Live by the Router hook's held form and the guest registry, with no plugin presence (so no relay): enough to
+    /// match a start to its Desktop session and answer its form, not to deliver messages.
+    var formBacked = false
 }
 
 /// Guest execution is authoritative for the session body; the local SSH mirror supplies only Desktop metadata.
@@ -99,7 +102,7 @@ enum PendingDesktopStartMatcher {
         let owners = desktop.filter { $0.alias == pending.alias && $0.folder == pending.folder }
         guard owners.count == 1 else { return nil }
         let candidates = evidence.filter { $0.computer.deviceId == deviceId && $0.computer.computerId == computerId
-            && $0.hostSessionID == owners[0].id && $0.capabilities.contains(ClaudePlugin.inboxCapability)
+            && $0.hostSessionID == owners[0].id && ($0.capabilities.contains(ClaudePlugin.inboxCapability) || $0.formBacked)
             && $0.transcriptMessages.contains(where: { message in
                 guard let at = message.at, at >= pending.openedAt, message.cwd == pending.folder else { return false }
                 return pending.prompt.isEmpty || allowEditedPrompt || message.text.contains(pending.prompt)
@@ -144,7 +147,8 @@ struct GuestSessionObserver: Sendable {
     }
 
     func read(computer: GuestReference, paths: GuestRouterPaths, guestNowMs: Int64? = nil,
-              projectFoldersBySession: [String: String] = [:]) async throws -> [GuestSessionEvidence] {
+              projectFoldersBySession: [String: String] = [:],
+              formSessionIDs: Set<String> = []) async throws -> [GuestSessionEvidence] {
         let account = try await client.account(for: computer)
         let keyFile: GuestFileReadResult
         do { keyFile = try await client.filesRead(computer: computer, path: paths.key, offset: nil, length: nil) }
@@ -154,7 +158,7 @@ struct GuestSessionObserver: Sendable {
         let presenceFiles: [GuestFileEntry]
         let registries: [GuestFileEntry]
         do { presenceFiles = try await client.filesList(computer: computer, path: paths.presence) }
-        catch GuestClientFailure.notFound(_) { return [] }
+        catch GuestClientFailure.notFound(_) { presenceFiles = [] }
         do { registries = try await client.filesList(computer: computer, path: paths.registry) }
         catch GuestClientFailure.notFound(_) { return [] }
         let nowMs: Int64
@@ -170,6 +174,26 @@ struct GuestSessionObserver: Sendable {
                   let pid = (object["pid"] as? NSNumber)?.int32Value ?? Int32(entry.name.dropLast(5)) else { continue }
             registryByPID[pid] = (host, session, (object["startedAt"] as? NSNumber)?.int64Value)
         }
+        func evidenceFor(cli: String, host: String, pid: Int32, startedAt: Int64?, renewed: Int64, capabilities: [String],
+                         formBacked: Bool) async throws -> GuestSessionEvidence? {
+            let alive: Bool
+            do {
+                let result = try await client.exec(GuestExecRequest(computer: computer, argv: ["/bin/kill", "-0", String(pid)],
+                                                                      cwd: paths.home, timeoutSeconds: 2))
+                alive = result.succeeded
+            } catch GuestClientFailure.permissionDenied(_) { return nil }
+            guard alive else { return nil }
+            let transcript = try await GuestTranscripts(client: client).read(computer: computer,
+                projectsRoot: paths.projects, cliSessionID: cli)
+            let messages = transcript?.messages ?? []
+            let projectFolders = [projectFoldersBySession[cli], messages.last?.cwd].compactMap { $0 }
+            let taskResult = await GuestBackgroundTasks(client: client).read(computer: computer, account: account,
+                cliSessionID: cli, projectFolders: projectFolders, parentTranscript: transcript?.tail ?? Data())
+            return GuestSessionEvidence(computer: computer, cliSessionID: cli, hostSessionID: host,
+                                        pid: pid, startedAt: startedAt, renewedAt: renewed, capabilities: capabilities,
+                                        transcriptMessages: messages, transcript: transcript,
+                                        tasks: taskResult.certain ? taskResult.tasks : nil, formBacked: formBacked)
+        }
         var found: [GuestSessionEvidence] = []
         for entry in presenceFiles where entry.type == .file && !entry.name.hasPrefix(".") {
             let path = GuestRouterPaths.join(paths.presence, entry.name)
@@ -179,23 +203,19 @@ struct GuestSessionObserver: Sendable {
                   let renewed = value.renewedAt, abs(Double(nowMs) - Double(renewed)) < ClaudePlugin.lease * 1000,
                   value.keyId == expectedKeyID, registryByPID[pid]?.cli == cli,
                   registryByPID[pid]?.startedAt == value.startedAt else { continue }
-            let alive: Bool
-            do {
-                let result = try await client.exec(GuestExecRequest(computer: computer, argv: ["/bin/kill", "-0", String(pid)],
-                                                                      cwd: paths.home, timeoutSeconds: 2))
-                alive = result.succeeded
-            } catch GuestClientFailure.permissionDenied(_) { continue }
-            guard alive else { continue }
-            let transcript = try await GuestTranscripts(client: client).read(computer: computer,
-                projectsRoot: paths.projects, cliSessionID: cli)
-            let messages = transcript?.messages ?? []
-            let projectFolders = [projectFoldersBySession[cli], messages.last?.cwd].compactMap { $0 }
-            let taskResult = await GuestBackgroundTasks(client: client).read(computer: computer, account: account,
-                cliSessionID: cli, projectFolders: projectFolders, parentTranscript: transcript?.tail ?? Data())
-            found.append(GuestSessionEvidence(computer: computer, cliSessionID: cli, hostSessionID: registryByPID[pid]?.host ?? "",
-                                               pid: pid, startedAt: value.startedAt, renewedAt: renewed,
-                                               capabilities: value.capabilities ?? [], transcriptMessages: messages,
-                                               transcript: transcript, tasks: taskResult.certain ? taskResult.tasks : nil))
+            if let item = try await evidenceFor(cli: cli, host: registryByPID[pid]?.host ?? "", pid: pid,
+                                                startedAt: value.startedAt, renewed: renewed,
+                                                capabilities: value.capabilities ?? [], formBacked: false) {
+                found.append(item)
+            }
+        }
+        // A held form proves the session is live even when the plugin never wrote presence (the guest plugin's modules
+        // may not run): the registry still names its Desktop session.
+        for (pid, entry) in registryByPID where formSessionIDs.contains(entry.cli) && !found.contains(where: { $0.cliSessionID == entry.cli }) {
+            if let item = try await evidenceFor(cli: entry.cli, host: entry.host, pid: pid, startedAt: entry.startedAt,
+                                                renewed: nowMs, capabilities: [], formBacked: true) {
+                found.append(item)
+            }
         }
         return found
     }

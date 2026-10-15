@@ -211,6 +211,11 @@ final class ComputersModel {
     @ObservationIgnored private var jobReceiptQueue: [String] = []
     @ObservationIgnored private var acknowledgingJobIDs: Set<String> = []
     @ObservationIgnored private var presentedJobOutcomes: Set<String> = []
+    /// Jobs whose outcome was presented before their action was known (the finished event beat the reply that names the
+    /// job): presented again, with the right action, once it is known.
+    @ObservationIgnored private var presentedWithoutAction: Set<String> = []
+    /// The last failed operation per computer (`GuestReference.key`), shown on its row until the next one succeeds.
+    private(set) var computerFailures: [String: String] = [:]
     @ObservationIgnored private var connectionTask: Task<Void, Error>?
     @ObservationIgnored private var connectionAttemptID: UUID?
     @ObservationIgnored private var eventStreamID: UUID?
@@ -602,10 +607,10 @@ final class ComputersModel {
     }
 
     func start(_ target: GuestReference) async {
-        await perform("Start", on: target.deviceId) { try await self.client.computersStart(Self.reference(target)) }
+        await perform("Start", on: target.deviceId, computer: target) { try await self.client.computersStart(Self.reference(target)) }
     }
     func stop(_ target: GuestReference) async {
-        await perform("Stop", on: target.deviceId) { try await self.client.computersStop(Self.reference(target)) }
+        await perform("Stop", on: target.deviceId, computer: target) { try await self.client.computersStop(Self.reference(target)) }
     }
     func forceStop(_ target: GuestReference) async {
         actionError = nil
@@ -624,7 +629,7 @@ final class ComputersModel {
             catch { actionError = error.localizedDescription; return }
         }
         let expected: ComputerConfiguration? = if case .linux(let computer) = row { computer.configuration } else { nil }
-        let deleted = await perform("Delete", on: target.deviceId) {
+        let deleted = await perform("Delete", on: target.deviceId, computer: target) {
             try await self.client.computersDelete(ComputerDeleteRequest(computerId: target.computerId,
                                                                         deviceId: target.deviceId, expected: expected))
         }
@@ -674,7 +679,7 @@ final class ComputersModel {
 
     /// Runs an action and follows the job it starts, which belongs to the device that owns the computer (`deviceId`).
     @discardableResult
-    func perform<T>(_ label: String, on deviceId: String?, _ action: () async throws -> T) async -> Bool {
+    func perform<T>(_ label: String, on deviceId: String?, computer: GuestReference? = nil, _ action: () async throws -> T) async -> Bool {
         actionError = nil
         do {
             let accepted = try await action()
@@ -685,8 +690,16 @@ final class ComputersModel {
             guard let jobId else { return false }
             let key = ComputerJobKey.make(deviceId: deviceId, jobId: jobId)
             jobActions[key] = label
+            if presentedWithoutAction.remove(key) != nil { presentedJobOutcomes.remove(key) }
             let outcome = try await waitForFinish(jobId, deviceId: deviceId)
             presentJobOutcome(outcome, action: label, deviceId: deviceId)
+            if let computer {
+                if let failure = outcome.error, failure.code != "cancelled" {
+                    computerFailures[computer.key] = "\(label) failed: \(failure.userMessage)"
+                } else {
+                    computerFailures[computer.key] = nil
+                }
+            }
             let hasUnresolvedUploadOutcome = label == "Upload files"
                 && (uploadConflicts.contains { $0.jobId == key } || uploadNotices.contains { $0.jobId == key })
             let uploadWasCancelled = label == "Upload files" && uploadNotices.contains { $0.jobId == key }
@@ -881,6 +894,7 @@ final class ComputersModel {
         let key = ComputerJobKey.make(deviceId: deviceId, jobId: result.jobId)
         finishedJobs[key] = result
         if activeJob?.jobId == result.jobId, activeJobDeviceId == deviceId { activeJob = nil }
+        if jobActions[key] == nil { presentedWithoutAction.insert(key) }
         presentJobOutcome(result, action: jobActions[key] ?? "Computer operation", deviceId: deviceId)
     }
 

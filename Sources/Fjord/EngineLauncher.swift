@@ -22,7 +22,7 @@ protocol EngineAgentServicing {
 
 @MainActor
 struct SystemEngineAgentService: EngineAgentServicing {
-    private let plistName = "org.silo.preview.engine.plist"
+    private let plistName = AppIdentity.engineAgentPlistName()
 
     func status() -> EngineAgentStatus {
         switch SMAppService.agent(plistName: plistName).status {

@@ -331,7 +331,7 @@ private actor SocketRequestTransport {
 final class SocketEngineClient: EngineClient {
     static let defaultProtocolRange = SiloWireProtocolRange(max: 6, min: 6)
     static var defaultSocketPath: String {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".silo/engine.sock").path
+        AppIdentity.engineSocketPath()
     }
 
     private struct Subscription {
