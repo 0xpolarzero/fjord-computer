@@ -601,6 +601,21 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(PendingDesktopStartMatcher.match(pending, desktop: desktop, evidence: [evidence]) == evidence)
     }
 
+    @MainActor @Test func aFolderInsideAComputerIsNeverOfferedAsAMacProject() {
+        let store = InboxFixture.store([])
+        store.agents.enabled = true
+        store.claudeSessions = [
+            "local_mac": ClaudeSession(id: "local_mac", title: "Mac", folder: "/code/app", lastActivity: Date(), running: false),
+            "local_guest": ClaudeSession(id: "local_guest", title: "Guest", folder: "/home/silo/e2e-proj",
+                lastActivity: Date(), running: false, cliID: "cli-guest", sshHost: "ssh-computer-1"),
+        ]
+        #expect(store.knownFolders == ["/code/app"])
+        // A local session in a folder of the same path keeps it a Mac project.
+        store.claudeSessions["local_same"] = ClaudeSession(id: "local_same", title: "Same", folder: "/home/silo/e2e-proj",
+            lastActivity: Date(), running: false)
+        #expect(store.knownFolders.contains("/home/silo/e2e-proj"))
+    }
+
     @Test func desktopSessionDecodesItsActualSSHHostAlias() throws {
         let raw = Data(#"{"sessionId":"local_ssh","cliSessionId":"cli-ssh","cwd":"/workspace/repo","sshConfig":{"sshHost":"ssh-guest-1"}}"#.utf8)
         let session = try #require(Claude.decodeSession(raw))

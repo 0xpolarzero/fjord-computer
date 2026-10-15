@@ -389,7 +389,7 @@ extension Store {
     func refreshFolderNames() {
         let sessions = Set(claudeSessions.values.map(\.folderKey))
         // The projects (and their clones) follow the sessions' folders too.
-        codeFolders.sessionFoldersChanged(sessions)
+        codeFolders.sessionFoldersChanged(macSessionFolders)
         let folders = namedFolders(sessions: sessions)
         guard folders != namedFoldersSeen else { return }
         namedFoldersSeen = folders
@@ -398,9 +398,17 @@ extension Store {
         if names != folderNames { folderNames = names }
     }
 
+    /// The folders on this Mac that sessions are in. A session Desktop runs over SSH (a computer's guest) has a folder
+    /// that exists only there: it is never a Mac project, unless a local session is in a folder of the same path.
+    var macSessionFolders: Set<String> {
+        let sessions = Array(claudeSessions.values)
+        let local = Set(sessions.filter { $0.sshHost == nil }.map(\.folderKey))
+        return local.union(sessions.filter { $0.folderKey.isEmpty }.map(\.folderKey))
+    }
+
     var knownFolders: [String] {
         // The names to sort by are taken once each, not on every comparison.
-        let keyed = Set(claudeSessions.values.map(\.folderKey)).map { ($0, FolderNames.components($0).last?.lowercased() ?? "") }
+        let keyed = macSessionFolders.map { ($0, FolderNames.components($0).last?.lowercased() ?? "") }
         return keyed.sorted { a, b in
             if a.0.isEmpty != b.0.isEmpty { return !a.0.isEmpty }
             return a.1 != b.1 ? a.1 < b.1 : a.0 < b.0
