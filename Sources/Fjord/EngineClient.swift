@@ -36,6 +36,14 @@ enum ComputerRow: Identifiable, Equatable {
         }
     }
 
+    /// Something to know about the computer that is not a problem (a Mac imported without SecureToken).
+    var note: String? {
+        switch self {
+        case .linux: nil
+        case .macos(let computer): computer.note
+        }
+    }
+
     var resources: String {
         switch self {
         case .linux(let computer):
@@ -333,7 +341,7 @@ enum EngineErrorText {
         case "desktop_update_required": "This needs a newer Silo desktop. Use Update desktop, then try again."
         case "permission_denied": "Silo doesn't have permission to do that. Check this Mac's privacy settings, then try again."
         case "output_too_large": "The output was too large to return. Narrow the request or send it to a file."
-        case "credential_access_denied": "Silo's engine isn't allowed to use its saved GitHub sign-in. Open Keychain Access to allow it, or connect GitHub again."
+        case "credential_access_denied": "\(credentialAccessDenied) Use Allow access on the Computers page or in Settings."
         default: fallback
         }
     }
@@ -673,6 +681,11 @@ final class MockEngineClient: EngineClient {
     }
 
     private(set) var inventory: ComputerInventory
+    /// The engine's Keychain items as the mock reports them; `repair` makes the denied ones accessible unless `credentialRepairDeclines`.
+    var credentialsStatus = SiloWireCredentialsStatus(deniedCount: 0, items: [])
+    var credentialRepairDeclines = false
+    var credentialRepairFailure: EngineClientError?
+    private(set) var credentialRepairCount = 0
     var connectedDevices: [SiloWireDevice] = []
     var ownerInventories: [String: ComputerInventory] = [:]
     /// Other devices as engines of their own: a call naming one of them by `deviceId` runs on its mock with its own
@@ -1640,6 +1653,25 @@ final class MockEngineClient: EngineClient {
             let params = try mockDecode(call.params, as: SiloWireViewerConnectionParams.self)
             viewerCloseRequests.append(params.connectionId)
             return try mockResult(SiloNull(), as: Result.self)
+        case "engine.credentials.status":
+            return try mockResult(credentialsStatus, as: Result.self)
+        case "engine.credentials.repair":
+            credentialRepairCount += 1
+            if let failure = credentialRepairFailure { throw failure }
+            let declined = credentialRepairDeclines
+            let items = credentialsStatus.items.filter { $0.state == .denied }.map {
+                SiloWireCredentialRepairItem(computerId: $0.computerId, kind: $0.kind, label: $0.label,
+                                             outcome: declined ? .stillDenied : .repaired)
+            }
+            if !declined {
+                credentialsStatus.items = credentialsStatus.items.map { item in
+                    var item = item
+                    item.state = .accessible
+                    return item
+                }
+                credentialsStatus.deniedCount = 0
+            }
+            return try mockResult(SiloWireCredentialsRepairResult(items: items, status: credentialsStatus), as: Result.self)
         default:
             throw EngineClientError.unsupported("The mock doesn't implement \(call.name).")
         }
@@ -2028,6 +2060,19 @@ final class MockEngineClient: EngineClient {
         guard let index = inventory.linux.computers.firstIndex(where: { $0.id == id }) else { return }
         update(&inventory.linux.computers[index])
         publish(.computersChanged(ComputersChangedPayload(linux: inventory.linux)))
+    }
+
+    /// Sets the informational note of a macOS computer (a Mac imported without SecureToken).
+    func setComputerNote(_ note: String?, for id: String) { updateMacos(id) { $0.note = note } }
+
+    /// The engine refused after an update: a few saved items are blocked until the user allows them.
+    func denyCredentials() {
+        credentialsStatus = SiloWireCredentialsStatus(deniedCount: 3, items: [
+            SiloWireCredentialItem(kind: .githubSignIn, label: "GitHub sign-in", state: .denied),
+            SiloWireCredentialItem(kind: .secretsVault, label: "Secrets", state: .denied),
+            SiloWireCredentialItem(computerId: Self.devID, kind: .proxyCa,
+                                   label: "Network certificate of a macOS computer", state: .denied),
+        ])
     }
 
     private func updateMacos(_ id: String, _ update: (inout MacosComputer) -> Void) {

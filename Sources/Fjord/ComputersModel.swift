@@ -151,6 +151,8 @@ final class ComputersModel {
     private(set) var isLoading = false
     private(set) var error: String?
     var actionError: String?
+    /// The engine's Keychain access (see KeychainAccess.swift).
+    let keychain = KeychainAccessModel()
     private(set) var activeJob: OperationJobProgress?
     /// The device `activeJob` runs on (`nil`: This Mac).
     private(set) var activeJobDeviceId: String?
@@ -262,6 +264,12 @@ final class ComputersModel {
         stateRevision = 0
         hasSequence = false
         sequence = 0
+    }
+
+    /// Drops the errors the page shows that were only the Keychain refusal, once access is allowed.
+    func clearCredentialRefusal() {
+        if EngineErrorText.isCredentialAccessDenied(error) { error = nil }
+        if EngineErrorText.isCredentialAccessDenied(actionError) { actionError = nil }
     }
 
     func connect() async throws {

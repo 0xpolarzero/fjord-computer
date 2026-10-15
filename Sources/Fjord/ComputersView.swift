@@ -51,10 +51,13 @@ struct ComputersView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if let launcher = store.engineLauncher { EngineUpdateBanner(store: store, launcher: launcher) }
-                    if let error = model.error {
+                    KeychainAccessBanner(model: model)
+                    if let error = model.error, !EngineErrorText.isCredentialAccessDenied(error) {
                         ComputerNotice(text: error, tone: .danger)
                     }
-                    if let error = model.actionError { ComputerNotice(text: error, tone: .danger) }
+                    if let error = model.actionError, !EngineErrorText.isCredentialAccessDenied(error) {
+                        ComputerNotice(text: error, tone: .danger)
+                    }
                     ComputerOperationQueue(model: model)
                     if let job = model.activeJob {
                         ComputerJobCard(job: job, inventory: model.inventory(for: model.activeJobDeviceId),
@@ -379,6 +382,11 @@ private struct ComputerOverview: View {
                 }
                 if let version = osVersion {
                     SettingsNote(version).padding(.top, 8)
+                }
+                if let note = row.note {
+                    Label { Text(note).fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "info.circle") }
+                        .font(CDS.sans(11)).foregroundStyle(CDS.Text.muted).padding(.top, 8)
+                        .accessibilityElement(children: .combine)
                 }
                 if target.deviceId != nil {
                     SettingsNote("On \(model.ownerName(target.deviceId)). Every action runs on that Mac.").padding(.top, 8)

@@ -11,15 +11,17 @@ struct ComputerHostSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CDS.Settings.sectionGap) {
+            KeychainAccessBanner(model: model)
             computerDefaults.id(SettingsView.computerDefaultsID)
             connections.id(SettingsView.connectedMacsID)
-            if let error = model.actionError {
+            if let error = model.actionError, !EngineErrorText.isCredentialAccessDenied(error) {
                 ComputerNotice(text: error, tone: .danger)
             }
         }
         .task {
             do { try await model.connect() }
             catch { model.actionError = error.localizedDescription }
+            await model.refreshKeychainStatus()
             await model.loadSettings()
             if let count = model.engineSettings?.settings.automaticCheckpointRetentionCount, count > 0 {
                 checkpointRetentionCount = String(count)

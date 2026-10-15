@@ -111,12 +111,12 @@ extension SiloWireTemplateSummary {
 extension SiloWireMacosComputer {
     init(kind: ComputerKind, id: String, name: String, cpus: UInt64, memoryGiB: UInt64, diskGiB: UInt64,
          osVersion: String? = nil, state: MacosComputerState, progress: Double? = nil, detail: String? = nil,
-         displayOpen: Bool, installed: Bool, setupComplete: Bool, needsPersonalizing: Bool,
+         note: String? = nil, displayOpen: Bool, installed: Bool, setupComplete: Bool, needsPersonalizing: Bool,
          checkpoints: [ComputerCheckpoint], checkpointOperation: ComputerCheckpointOperation? = nil,
          pendingRestore: MacosPendingRestore? = nil) {
         self.init(checkpointOperation: checkpointOperation, checkpoints: checkpoints, cpus: cpus, detail: detail,
                   diskGiB: diskGiB, displayOpen: displayOpen, id: id, installed: installed, kind: kind,
-                  memoryGiB: memoryGiB, name: name, needsPersonalizing: needsPersonalizing, osVersion: osVersion,
+                  memoryGiB: memoryGiB, name: name, needsPersonalizing: needsPersonalizing, note: note, osVersion: osVersion,
                   pendingRestore: pendingRestore, progress: progress, setupComplete: setupComplete, state: state)
     }
 }

@@ -90,6 +90,8 @@ final class Store {
         await computers.replaceClient(client)
         do { try await computers.connect() }
         catch { computers.actionError = error.localizedDescription }
+        // Right after an engine update its saved items are typically refused until the user allows them.
+        await computers.refreshKeychainStatus()
     }
 
     // The inbox: categories of things (see InboxModel.swift, InboxStore.swift).

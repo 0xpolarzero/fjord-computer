@@ -165,7 +165,7 @@ import Testing
     }
 
     @Test func credentialAccessDeniedHasAClearMessage() {
-        let expected = "Silo's engine isn't allowed to use its saved GitHub sign-in. Open Keychain Access to allow it, or connect GitHub again."
+        let expected = "After this update, Silo's engine needs your permission to use its saved credentials. Use Allow access on the Computers page or in Settings."
         #expect(EngineErrorText.message(code: "credential_access_denied", fallback: "internal") == expected)
         #expect(OperationJobError(code: "credential_access_denied", message: "x").userMessage == expected)
         #expect(EngineClientError.coded(code: "credential_access_denied", message: "x").errorDescription == expected)

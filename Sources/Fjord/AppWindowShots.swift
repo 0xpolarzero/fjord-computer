@@ -84,6 +84,18 @@ enum AppWindowShots {
         Shot(name: "computers", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
         }),
+        Shot(name: "computers-keychain", destination: { _ in .computers }, prepare: { store in
+            store.setTool(.computers, on: true)
+            (store.engineClient as? MockEngineClient)?.denyCredentials()
+            Task { await store.computers.refreshKeychainStatus() }
+        }),
+        Shot(name: "computer-secure-token-note", destination: { _ in .computerDetail(.thisMac(MockEngineClient.devID)) }, prepare: { store in
+            store.setTool(.computers, on: true)
+            store.computers.selectedDetailSection = .overview
+            (store.engineClient as? MockEngineClient)?.setComputerNote(
+                "This imported computer has no SecureToken. It works normally, but it cannot turn on FileVault or change its password the SecureToken way.",
+                for: MockEngineClient.devID)
+        }),
         Shot(name: "computers-remote", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
             (store.engineClient as? MockEngineClient)?.connectDemoRemoteDevice()
