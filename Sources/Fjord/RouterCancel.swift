@@ -23,7 +23,10 @@ extension Store {
     func cancelDelivery(_ sent: RouterDecision.Delivered) async throws -> RouterDecision.Cancelled {
         guard let paths = routerFiles else { throw RouterTools.Failure("The Router is off") }
         if let computer = GuestRouterRuntime.shared.guestReference(for: sent.session) {
-            guard let client = GuestRouterRuntime.shared.guestClient(for: sent.session),
+            let connected: (any GuestClient)? = if let location = GuestRouterRuntime.shared.location(for: sent.session) {
+                await GuestRouterRuntime.shared.connectedGuestClient(for: location)
+            } else { nil }
+            guard let client = connected,
                   GuestRouterRuntime.shared.guestSessionID(for: sent.session) == sent.cli else {
                 throw RouterTools.Failure("Fjord's guest file client isn't connected for this session")
             }

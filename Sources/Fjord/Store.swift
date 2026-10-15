@@ -14,6 +14,7 @@ final class Store {
     @ObservationIgnored let engineLauncher: EngineLauncher?
     @ObservationIgnored let computers: ComputersModel
     @ObservationIgnored var routerPlacementShot = false
+    @ObservationIgnored private var engineConnectAttempt: Task<Void, Never>?
 
     init(engineClient: (any EngineClient)? = nil, engineLauncher: EngineLauncher? = nil) {
         let offlineContext = Store.isDemo || UnderTest.isRunning
@@ -24,7 +25,7 @@ final class Store {
         let selectedClient = engineClient ?? defaultClient
         self.engineClient = selectedClient
         self.hasEngineConnection = selectedClient is MockEngineClient || selectedClient is SocketEngineClient
-        self.engineLauncher = offlineContext ? nil : (engineLauncher ?? EngineLauncher(socketPath: socketPath))
+        self.engineLauncher = engineLauncher ?? (offlineContext ? nil : EngineLauncher(socketPath: socketPath))
         let computers = ComputersModel(client: selectedClient, initialInventory: (selectedClient as? MockEngineClient)?.inventory)
         self.computers = computers
         if selectedClient is SocketEngineClient {
@@ -48,6 +49,21 @@ final class Store {
         await engineLauncher.inspect()
         await attachConnectedEngine()
         await runEngineUpdate(automatic: true)
+    }
+
+    /// Connects to a running engine without the Computers page (never registers anything): the Router's guest delivery
+    /// needs it at launch and on first use. Concurrent callers share one attempt; an engine already attached is left alone.
+    func ensureEngineConnected() async {
+        if hasEngineConnection { return }
+        if let attempt = engineConnectAttempt { await attempt.value; return }
+        guard let engineLauncher else { return }
+        let attempt = Task { @MainActor [weak self] in
+            await engineLauncher.inspect()
+            await self?.attachConnectedEngine()
+        }
+        engineConnectAttempt = attempt
+        await attempt.value
+        engineConnectAttempt = nil
     }
 
     /// The Computers page's Update button, and the retry after a blocked update.

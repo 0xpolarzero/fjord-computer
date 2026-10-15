@@ -15,6 +15,8 @@ import Foundation
     private var clients: [String: any GuestClient] = [:]
     private var computers: [String: GuestReference] = [:]
     private var generatedClient: SiloGuestClient?
+    /// Test seam: builds the guest client for an engine client that isn't a socket one.
+    var clientFactory: ((any EngineClient) -> (any GuestClient)?)?
     private var watchers: [String: Task<Void, Never>] = [:]
     private var leaseChecks: [String: Task<Void, Never>] = [:]
     private weak var reconciliationStore: Store?
@@ -121,8 +123,12 @@ import Foundation
                    sshSettings: ClaudeSSHSettings = ClaudeSSHSettings()) async {
         self.store = store
         reconciliationSettings = sshSettings
-        await startRemovalReconciliation(store: store)
         let router = store.router
+        let hasGuestState = !(router.pendingGuestDisables + router.pendingGuestRemovals).isEmpty
+            || (store.routerOn && (!router.runsOnProjects.isEmpty || !router.pendingDesktopStarts.isEmpty
+                || !router.guestRelayDeliveries.isEmpty || !router.guestPendingForms.isEmpty))
+        if override == nil, hasGuestState { await store.ensureEngineConnected() }
+        await startRemovalReconciliation(store: store)
         var locations = router.pendingGuestDisables + router.pendingGuestRemovals
         if store.routerOn {
             locations += router.runsOnProjects.map { $0.placement.location }
@@ -469,11 +475,24 @@ import Foundation
         guard case .computer(let deviceId, let computerId) = location else { return nil }
         let computer = GuestReference(deviceId: deviceId, computerId: computerId)
         if let client = clients[computer.key] { return client }
-        guard let store, let engine = store.engineClient as? SocketEngineClient else { return nil }
-        let client = generatedClient ?? SiloGuestClient(engine: engine)
-        generatedClient = client
+        guard let store else { return nil }
+        let client: any GuestClient
+        if let made = clientFactory?(store.engineClient) { client = made }
+        else if let engine = store.engineClient as? SocketEngineClient {
+            let generated = generatedClient ?? SiloGuestClient(engine: engine)
+            generatedClient = generated
+            client = generated
+        } else { return nil }
         registerInstallationTarget(store: store, client: client, computer: computer)
         return client
+    }
+
+    /// Like `guestClient(for:)`, but connects the engine first when nothing has yet (the Computers page is no longer the only
+    /// thing that does), so a Send or Retry right after launch waits for it instead of failing.
+    func connectedGuestClient(for location: SessionLocation) async -> (any GuestClient)? {
+        if let client = guestClient(for: location) { return client }
+        await store?.ensureEngineConnected()
+        return guestClient(for: location)
     }
 
     func guestFolder(for desktopSessionID: String) -> String? {

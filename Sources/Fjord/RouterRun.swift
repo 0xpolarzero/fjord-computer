@@ -274,7 +274,7 @@ enum RouterSender {
                   let target = RelayInbox.header(of: text)?.target else {
                 throw RouterTools.Failure("The guest delivery isn't signed for a known computer session")
             }
-            let guestClient = tools.guestClient ?? GuestRouterRuntime.shared.guestClient(for: location)
+            let guestClient: (any GuestClient)? = if let injected = tools.guestClient { injected } else { await GuestRouterRuntime.shared.connectedGuestClient(for: location) }
             guard guestClient != nil else {
                 throw RouterTools.Failure("The guest file client isn't connected for this computer yet")
             }

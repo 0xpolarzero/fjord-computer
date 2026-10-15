@@ -1132,8 +1132,10 @@ final class RouterMCPServer: @unchecked Sendable {
         // aside (checked above on your words alone).
         let body = verbatim ? ready.text : RouterPointers.attach(tagged, to: ready.text)
         if let guestStart {
+            let connected: (any GuestClient)? = if let injected = self.guestClient { injected }
+                else { await guestRuntime.connectedGuestClient(for: guestStart.location) }
             guard case .computer(let deviceId, let computerId) = guestStart.location,
-                  let guestClient = self.guestClient ?? guestRuntime.guestClient(for: guestStart.location) else {
+                  let guestClient = connected else {
                 throw Failure("The guest file client isn't connected for this computer yet")
             }
             let computer = GuestReference(deviceId: deviceId, computerId: computerId)
@@ -1266,7 +1268,9 @@ final class RouterMCPServer: @unchecked Sendable {
         try live(ticket)
         let runsOn = store.runsOnProject(for: folder)
         if case .computer = runsOn.placement {
-            guard let guestClient = self.guestClient ?? guestRuntime.guestClient(for: runsOn.placement.location) else {
+            let connected: (any GuestClient)? = if let injected = self.guestClient { injected }
+                else { await guestRuntime.connectedGuestClient(for: runsOn.placement.location) }
+            guard let guestClient = connected else {
                 throw Failure("The guest file client isn't connected for this computer yet")
             }
             guard case .computer(let deviceId, let computerId, _) = runsOn.placement else { throw Failure("This project isn't on a computer") }
