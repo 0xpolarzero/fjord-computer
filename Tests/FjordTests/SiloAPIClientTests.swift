@@ -49,7 +49,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "controller", "name": "Fake",
-                                                                     "protocol": 1, "capabilities": ["guest.*", "events.*"]]])
+                                                                     "protocol": 6, "capabilities": ["guest.*", "events.*"]]])
             case "guest.account":
                 try? socket.write(["id": request.id, "result": ["home": "/home/g", "uid": 1000, "user": "g"]])
             case "guest.exec":
@@ -140,7 +140,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "controller", "name": "Fake",
-                                                                     "protocol": 1, "capabilities": ["guest.*"]]])
+                                                                     "protocol": 6, "capabilities": ["guest.*"]]])
             case "guest.exec.get":
                 try? socket.write(["id": request.id, "result": ["firstRetainedSeq": 0, "output": [], "state": "running"]])
             default:
@@ -179,7 +179,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "controller", "name": "Fake",
-                                                                     "protocol": 1, "capabilities": []]])
+                                                                     "protocol": 6, "capabilities": []]])
             default:
                 try? socket.write(["id": request.id, "error": ["code": "desktop_update_required", "message": "old"]])
             }
@@ -200,7 +200,7 @@ import Testing
         let server = try FakeSiloUnixServer()
         defer { server.stop() }
         let deliveries = SocketDeliveryRecorder()
-        let client = SocketEngineClient(path: server.path, protocolRange: SiloWireProtocolRange(max: 2, min: 1))
+        let client = SocketEngineClient(path: server.path, protocolRange: SiloWireProtocolRange(max: 7, min: 6))
 
         let subscription = try await client.eventsSubscribe(events: ["computers.*", "operations.*"]) { delivery in
             deliveries.append(delivery)
@@ -235,8 +235,8 @@ import Testing
         #expect(requests.map(\.method) == ["engine.handshake", "events.subscribe", "operations.job.get", "operations.job.get",
                                             "operations.job.acknowledge", "events.unsubscribe", "engine.disconnect"])
         #expect(Set(requests.map(\.id)).count == requests.count)
-        #expect(requests.first?.protocolMin == 1)
-        #expect(requests.first?.protocolMax == 2)
+        #expect(requests.first?.protocolMin == 6)
+        #expect(requests.first?.protocolMax == 7)
         #expect(Set(requests.filter { $0.method == "operations.job.get" }.compactMap(\.jobId)) == ["job:first", "job:second"])
         #expect(requests.first(where: { $0.method == "operations.job.acknowledge" })?.jobId == "job:first")
     }
@@ -247,7 +247,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["computers.*"]]])
+                                                                     "protocol": 6, "capabilities": ["computers.*"]]])
             case "events.subscribe":
                 let attempt = await scenario.nextSubscriptionAttempt()
                 if attempt == 1 {
@@ -284,7 +284,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+                                                                     "protocol": 6, "capabilities": ["operations.*"]]])
             case "engine.disconnect":
                 try? socket.write(["id": request.id, "result": NSNull()])
             default:
@@ -325,7 +325,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["computers.*"]]])
+                                                                     "protocol": 6, "capabilities": ["computers.*"]]])
             case "events.subscribe":
                 let attempt = await scenario.nextAttempt()
                 let isOperationsSubscription = request.events?.contains("operations.*") == true
@@ -403,7 +403,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+                                                                     "protocol": 6, "capabilities": ["operations.*"]]])
             case "operations.job.get":
                 await scenario.handle(request, socket: socket)
             default:
@@ -460,7 +460,7 @@ import Testing
             case "engine.handshake":
                 await finishHandshake.wait()
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+                                                                     "protocol": 6, "capabilities": ["operations.*"]]])
             case "operations.job.get":
                 try? socket.write(["id": request.id, "result": ["jobId": request.jobId ?? "job:123", "state": "running"]])
             default:
@@ -502,7 +502,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["computers.*"]]])
+                                                                     "protocol": 6, "capabilities": ["computers.*"]]])
             case "events.subscribe":
                 if await scenario.nextAttempt() == 1 {
                     try? socket.write(["id": request.id, "result": ["subscription": "sub-before-loss"]])
@@ -537,7 +537,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["computers.*", "operations.*"]]])
+                                                                     "protocol": 6, "capabilities": ["computers.*", "operations.*"]]])
             case "events.subscribe":
                 try? socket.write(["id": request.id, "result": ["subscription": "sub-sequences"]])
                 try? socket.write(Self.progressEvent(subscription: "sub-sequences", sequence: 1))
@@ -579,7 +579,7 @@ import Testing
             switch request.method {
             case "engine.handshake":
                 try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                     "protocol": 1, "capabilities": ["operations.*"]]])
+                                                                     "protocol": 6, "capabilities": ["operations.*"]]])
             case "events.subscribe":
                 try? socket.write(["id": request.id, "result": ["subscription": "sub-null"]])
                 try? socket.write(["event": "operations.job.finished", "subscription": "sub-null",
@@ -628,7 +628,7 @@ import Testing
             case "engine.handshake":
                 try? socket.writeFragmented(["id": request.id,
                                              "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                         "protocol": 1, "capabilities": ["operations.*"]]],
+                                                         "protocol": 6, "capabilities": ["operations.*"]]],
                                             chunks: [1, 1, 1, 1, 2, 1, 3])
             case "operations.job.get":
                 try? socket.writeFragmented(["id": request.id,

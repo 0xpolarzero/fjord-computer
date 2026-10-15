@@ -275,7 +275,7 @@ private actor FakeSiloDefaultResponses {
         switch request.method {
         case "engine.handshake":
             try? socket.write(["id": request.id, "result": ["deviceId": "device-1", "name": "Fake Silo",
-                                                                 "protocol": 1, "capabilities": ["computers.*", "operations.*"]]])
+                                                                 "protocol": 6, "capabilities": ["computers.*", "operations.*"]]])
         case "events.subscribe":
             subscriptionCount += 1
             let subscription = "sub-\(subscriptionCount)"
