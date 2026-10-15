@@ -47,7 +47,7 @@ private final class LocalGitFixture {
         seed = root.appendingPathComponent("seed")
         clone = root.appendingPathComponent("clone")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        _ = try git(["init", "--bare", origin.path])
+        _ = try git(["init", "--bare", "--initial-branch=main", origin.path])
         _ = try git(["init", "--initial-branch=main", seed.path])
         _ = try git(["-C", seed.path, "config", "user.name", "Fjord Git Tests"])
         _ = try git(["-C", seed.path, "config", "user.email", "fjord-git-tests@example.invalid"])
@@ -81,6 +81,9 @@ private final class LocalGitFixture {
         process.arguments = ["git"] + arguments
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_TERMINAL_PROMPT"] = "0"
+        // Nothing of the machine's own git setup (default branch, identity, hooks, templates) may shape the fixture.
+        environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
         process.environment = environment
         let stdout = Pipe()
         let stderr = Pipe()
