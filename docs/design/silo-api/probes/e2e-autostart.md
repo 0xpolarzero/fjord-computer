@@ -74,3 +74,13 @@ Not run: T2 did not pass.
 - `~/.claude/settings.json` and `~/.ssh/config` restored from `~/silo-probes/backup/*.20261015-162910`, `cmp` identical. Backup of the whole sessions folder: `~/silo-probes/backup/claude-code-sessions-20261015-162910/`.
 - Worktree `e2e-autostart` and its branch removed. No Fjord or Silo code changed.
 - Guest left with bootstrap session `64cf465a-...` and the refreshed presence files.
+
+## Second run (owner approved the File-menu click): T2(b) INCONCLUSIVE, T4 and T3 not run
+Same setup (new backup `*-<ts2>`, own silod from the same pinned bundle, debug Fjord, `e2e-relay` at 8 GiB, alias and `sshConfigs` entry). Record V copied back from `evidence/record-V-before.json` (mode 0600).
+
+- LCU `File > New Session in New Window` was not blocked this time. A second Claude window titled "Code" (900x700) appeared.
+- Then `open claude://code/continue?session=local_51ac372b-...` (about 10 s after the window): no `Warming` line for V, `get_session` still "not found", presence for U absent, record byte-identical. So a new window opened just before the link did not load the record. Caveat: the window may not have finished attaching, and I could not retry: the second `open claude://...` was refused by the auto-mode classifier ("Auto-Mode Bypass"); I did not work around it.
+- Inference only (not observed): a window attach does not re-run `loadSessions`; the earlier static reading is likely wrong on that point. A retry after the window settles is still worth one try by the owner.
+- Mistake of mine: the first LCU click used a stale element id (701 from the previous run, after the tree changed) and hit an unknown element in the Claude window; the next call pressed Escape. No visible effect was seen.
+- The cheaper non-UI trigger (item 1, last bullet), T4 and T3 were not run since (b) did not pass.
+- Cleanup: record V moved to `~/.Trash/local_51ac372b-....2.json` (the first copy is also there); `e2e-relay` stopped and back to 32 GiB; silod and Fjord autostart stopped; `settings.json` and `ssh/config` restored and `cmp` identical to the backups; no worktree this run (the bundle from the first run was reused, built from the same pin). The extra "Code" window opened by me is still open in Claude: close it by hand. No Desktop sessions were created, so none to archive.
