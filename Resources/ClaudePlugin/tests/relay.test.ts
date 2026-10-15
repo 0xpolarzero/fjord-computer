@@ -1180,6 +1180,26 @@ describe('stopping a turn and interrupting it', () => {
     expect(w.order).toEqual(['abort t2', 'submit'])
   })
 
+  test('a v4 interrupt delivered whose ack was lost is refused as already delivered on a retry once another turn runs, never as turn changed', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    await settle()
+    const signed = await sign(BODY, { interrupt: true, expectTurn: 't1' })
+    expect(await put($, w, NONCE, signed)).toBe('ok interrupted t1\n')
+    await settle()
+    // The ack is lost; the words started turn t2.
+    delete w.written[`/inbox/${TARGET}/${NONCE}.ack`]
+    delete w.inbox[`${TARGET}/${NONCE}.ack`]
+    await $.turn.start({ text: BODY, turnId: 't2' })
+    await settle()
+    w.inbox[`${TARGET}/${NONCE}.msg`] = signed
+    await look($, w)
+    await settle()
+    expect(w.written[`/inbox/${TARGET}/${NONCE}.ack`]).toBe('refused: already delivered\n')
+    expect(w.order).toEqual(['abort t1', 'submit'])
+  })
+
   test('a v4 interrupt of an idle session that named a turn is refused; its turn is inside the signature', async ($, on) => {
     const w = world(on)
     await look($, w)

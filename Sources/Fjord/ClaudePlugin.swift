@@ -496,6 +496,9 @@ const claim = ($: EngineInterface, nonce: string, ts: number, now: number) =>
     return true
   })
 
+/** Whether a nonce was claimed already (nothing is claimed). */
+const claimed = ($: EngineInterface, nonce: string) => exclusive(async () => (await $.store.get(NONCE + nonce)) !== undefined)
+
 /** A delivery this copy submitted, by its nonce: its words and when, the turn it started once one did (and whether that
  * turn holds words of the person's own too, or is still starting), and whether that turn is over or was taken back before
  * it began. Kept for the window an abort is taken in, the latest few at most. */
@@ -708,8 +711,10 @@ export async function accept(
   const unfit = apply && signed.interrupt ? unsubmittable(body) : undefined
   if (unfit) return { ok: false, reason: `not submitted: ${unfit}` }
   // An interrupt judged on a turn (v4) acts on that turn only: when another runs, or none, nothing is submitted and the nonce
-  // stays unclaimed, so a retry of the same message is refused the same way while that holds.
+  // stays unclaimed, so a retry of the same message is refused the same way while that holds. A retry of one that was claimed
+  // already (delivered, its ack lost) is told so first: `turn changed` would read as never delivered.
   const expectTurn = apply && signed.interrupt && signed.expectTurn !== undefined && signed.expectTurn !== '-' ? signed.expectTurn : undefined
+  if (expectTurn !== undefined && (await claimed($, signed.nonce))) return { ok: false, reason: 'already delivered' }
   if (expectTurn !== undefined && running !== expectTurn) return { ok: false, reason: 'turn changed' }
   if (!(await claim($, signed.nonce, ts, now))) return { ok: false, reason: 'already delivered' }
   // An interrupt stops the turn under way first (the person's words then start the next one at once). When the stop fails
