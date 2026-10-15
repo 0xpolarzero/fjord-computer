@@ -372,8 +372,8 @@ struct RouterCardLine: View {
                     HStack(spacing: 6) {
                         KindTag(kind: card.kind)
                         if !narrow {
-                            ProjectLabel(name: project.name, color: project.color)
-                                .font(Theme.Typography.meta).foregroundStyle(Theme.tertiary).lineLimit(1).fixedSize()
+                            ProjectLabel(name: project.name, color: project.color, maxWidth: 160)
+                                .font(Theme.Typography.meta).foregroundStyle(Theme.tertiary).layoutPriority(1)
                         }
                         Text(RouterText.inline(card.text)).font(Theme.Typography.meta).foregroundStyle(Theme.secondary)
                             .lineLimit(1).truncationMode(.tail)

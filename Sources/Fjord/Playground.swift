@@ -302,6 +302,8 @@ struct Shot {
     var routerWindow: RouterWindowShot?
     /// The category editor's page instead of the playground (see `CategoriesDemo`).
     var categories: CategoriesShot?
+    /// The Router cards all in a guest project with a long label ("name · SSH host · silo"), to see it give way.
+    var longProjectLabel = false
 
     /// The same shot on each of these edges, named `<edge>-<state>`.
     static func edges(_ state: String, on edges: [DockEdge] = .all, _ configure: (inout Shot) -> Void = { _ in }) -> [Shot] {
@@ -385,6 +387,9 @@ enum PlaygroundShots {
     private static let routerShots: [Shot] = {
         var shots = Shot.edges("rest-router") { $0.scenario = .router }
         shots += Shot.edges("peek-router") { $0.scenario = .router; $0.section = .router }
+        shots += Shot.edges("peek-router-long-label", on: .rightAndTop) {
+            $0.scenario = .router; $0.section = .router; $0.longProjectLabel = true
+        }
         let window = { (name: String, configure: (inout Shot) -> Void) -> Shot in
             var shot = Shot(name: "right-router-window\(name)", scenario: .router, routerWindow: RouterWindowShot())
             configure(&shot)
@@ -458,6 +463,11 @@ enum PlaygroundShots {
     private static func open(_ shot: Shot) -> NSWindow {
         let store = Store()
         Demo.populate(store, shot.scenario)
+        if shot.longProjectLabel {
+            for i in store.router.cards.indices {
+                store.router.cards[i].folder = "/Users/demo/e2e-proj-with-a-very-long-name \u{00B7} SSH some-long-host-name \u{00B7} silo"
+            }
+        }
         if let router = shot.routerWindow { return openRouterWindow(router, store: store, environment: shot.environment) }
         if let page = shot.categories { return CategoriesDemo.window(page, store: store) }
         let ui = UIState(persists: false, edge: shot.edge)
