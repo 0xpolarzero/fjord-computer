@@ -871,7 +871,12 @@ final class ComputersModel {
             activeJob = progress
             activeJobDeviceId = eventOwner(deviceId)
         case .jobFinished(let result, let deviceId):
-            recordFinished(result, deviceId: eventOwner(deviceId))
+            let owner = eventOwner(deviceId)
+            if result.isChunked && result.error == nil {
+                resolveChunkedOutcome(result.jobId, deviceId: owner)
+            } else {
+                recordFinished(result, deviceId: owner)
+            }
         case .guestFilesChanged:
             break
         case .viewerPage(let page):
@@ -888,6 +893,27 @@ final class ComputersModel {
         guard var commands = viewerScripts[connectionId] else { return }
         commands.removeAll { $0.id == commandId }
         viewerScripts[connectionId] = commands.isEmpty ? nil : commands
+    }
+
+    /// The event said the outcome is too large to send, so it says nothing about success: read it with
+    /// `operations.job.get` first. If that cannot be read, the job is shown as failed rather than as done.
+    private func resolveChunkedOutcome(_ jobId: String, deviceId: String?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var finished: OperationJobFinished
+            do {
+                var snapshot = try await self.client.operationsJobGet(jobId: jobId, deviceId: deviceId)
+                while snapshot.state != .finished {
+                    try await Task.sleep(for: .milliseconds(250))
+                    snapshot = try await self.client.operationsJobGet(jobId: jobId, deviceId: deviceId)
+                }
+                finished = snapshot.finishedEvent
+            } catch {
+                finished = OperationJobFinished(jobId: jobId, error: OperationJobError(
+                    code: "internal", message: "The result of this operation could not be read: \(error.localizedDescription)"))
+            }
+            self.recordFinished(finished, deviceId: deviceId)
+        }
     }
 
     private func recordFinished(_ result: OperationJobFinished, deviceId: String?) {

@@ -470,8 +470,22 @@ final class SocketEngineClient: EngineClient {
 
     func operationsJobGet(jobId: String, deviceId: String?) async throws -> OperationJobSnapshot {
         let result = try await invoke(SiloGeneratedMethods.operationsJobGet(SiloWireGetJobParams(deviceId: deviceId, jobId: jobId)))
+        var outcome = result.outcome
+        if outcome == nil, let first = result.outcomeChunk {
+            // A retained outcome too large for one response comes as slices of its JSON; read them all.
+            var bytes = Data(first.data.utf8)
+            var chunk = first
+            while let next = chunk.nextOffsetBytes, next > chunk.offsetBytes, next < chunk.totalBytes {
+                let more = try await invoke(SiloGeneratedMethods.operationsJobGet(
+                    SiloWireGetJobParams(deviceId: deviceId, jobId: jobId, offsetBytes: next)))
+                guard let following = more.outcomeChunk else { break }
+                bytes.append(Data(following.data.utf8))
+                chunk = following
+            }
+            outcome = try JSONDecoder().decode(SiloWireJobOutcome.self, from: bytes)
+        }
         return OperationJobSnapshot(jobId: result.jobId, state: OperationJobState(rawValue: result.state.rawValue) ?? .running,
-                                     outcome: result.outcome.map {
+                                     outcome: outcome.map {
                                          OperationJobOutcome(result: $0.result, error: $0.error.map(Self.projectError))
                                      })
     }
@@ -846,7 +860,8 @@ final class SocketEngineClient: EngineClient {
         case .operationsJobFinished:
             guard let value = try? decoder.decode(SiloWireJobFinished.self, from: data) else { return nil }
             return .jobFinished(OperationJobFinished(jobId: value.jobId, result: value.result,
-                                                      error: value.error.map(projectError)), deviceId: envelope.deviceId)
+                                                      error: value.error.map(projectError),
+                                                      outcomeChunked: value.outcomeChunked), deviceId: envelope.deviceId)
         case .guestFilesChanged:
             guard let value = try? decoder.decode(SiloWireGuestFilesChangedPayload.self, from: data) else { return nil }
             return .guestFilesChanged(deviceId: envelope.deviceId, payload: value)

@@ -16,3 +16,7 @@ Matching required plugin presence (live, key id, inbox capability) joined to the
 
 ## Verification
 `swift build` and `scripts/test.sh`: 1920 tests passed.
+
+## Follow-ups (done)
+- Plugin naming: debug and E2E builds (`AppIdentity`) use plugin and marketplace `fjord-dev`, guest plugin `fjord-guest-dev` (guest folder `plugin-dev`), hook script `fjord-dev-form.sh`, and sshConfigs ids `fjord-dev-<device>-<computer>`. The installed app keeps `fjord`, `fjord-guest`, `fjord-form.sh`, `fjord-<device>-<computer>`. Tests: DevPluginNamesTests.
+- Chunked outcome: `OperationJobFinished.outcomeChunked`; `ComputersModel` reads the outcome with `operations.job.get` before recording a chunked finish, and `SocketEngineClient.operationsJobGet` reassembles `outcomeChunk` slices. Tests: ComputerJobReceiptTests.

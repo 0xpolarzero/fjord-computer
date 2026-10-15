@@ -355,6 +355,11 @@ struct OperationJobFinished: Codable, Equatable, Sendable {
     var jobId: String
     var result: JSONValue? = nil
     var error: OperationJobError? = nil
+    /// The engine kept the complete outcome and sent none of it: `result` and `error` here say nothing about success.
+    /// Read it with `operations.job.get` before deciding (`SiloWireJobFinished.outcomeChunked`).
+    var outcomeChunked: Bool? = nil
+
+    var isChunked: Bool { outcomeChunked == true }
 }
 
 struct OperationQueueEntry: Codable, Equatable, Identifiable {
@@ -715,6 +720,8 @@ final class MockEngineClient: EngineClient {
     private(set) var computersListCallCount = 0
     private(set) var operationsListCallCount = 0
     private(set) var jobGetCallCount = 0
+    /// Publishes the next finished event as `outcomeChunked: true` with neither result nor error (the real outcome stays readable).
+    var chunkNextFinishedEvent = false
     private(set) var cancelRequests: [String] = []
     var suspendNextCancelRequest = false
     private var cancelRequestContinuation: CheckedContinuation<Void, Never>?
@@ -1987,7 +1994,11 @@ final class MockEngineClient: EngineClient {
         finished[jobId] = event
         if currentProgress?.jobId == jobId { currentProgress = nil }
         if dropNextFinishedEvent { dropNextFinishedEvent = false }
-        else { publish(.jobFinished(event)) }
+        else if chunkNextFinishedEvent {
+            // The event carries no outcome, as for a retained one too large to send: only `operations.job.get` has it.
+            chunkNextFinishedEvent = false
+            publish(.jobFinished(OperationJobFinished(jobId: jobId, outcomeChunked: true)))
+        } else { publish(.jobFinished(event)) }
     }
 
     private func scheduleCheckpointFinish(_ jobId: String, computerId: String, after duration: Duration) {
