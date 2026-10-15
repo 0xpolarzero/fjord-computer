@@ -102,9 +102,10 @@ extension Store {
     }
 
     /// Does `action` now and records it as an applied change with Revert, in the history. Nil (nothing recorded) when it
-    /// can't be done any more, or changes nothing (muting a muted project).
+    /// can't be done any more, or changes nothing (muting a muted project). `run`: the Router's run that did it, whose line
+    /// the change joins (as `done` says, else as a change of Fjord) rather than an entry of its own.
     @discardableResult
-    func act(_ action: CardAction, now: Date = Date()) -> FjordChange? {
+    func act(_ action: CardAction, now: Date = Date(), into run: UUID? = nil, as done: ((FjordChange) -> RouterDecision.Done)? = nil) -> FjordChange? {
         if case .mute(let project, _, let muted) = action, isFolderMuted(project) == muted { return nil }
         do { try applyCardAction(action) } catch { return nil }
         let change = FjordChange(date: now, title: action.title, patch: .cardAction(action))
@@ -112,7 +113,7 @@ extension Store {
         state.changes.append(change)
         RouterFeed.prune(&state)
         router = state
-        logChange(change)
+        logChange(change, into: run, as: done?(change))
         return change
     }
 

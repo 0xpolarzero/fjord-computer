@@ -41,7 +41,21 @@ struct RouterTrace: Codable, Equatable {
         var request: String?
     }
 
-    enum Kind: String, Codable { case decided, picked, corrected, cancelled, reasked }
+    enum Kind: String, Codable { case decided, picked, corrected, cancelled, reasked, reverted }
+
+    /// What the checks call read and made of it (`RouterActionChecks`), for a message it was asked for.
+    struct Checks: Codable, Equatable {
+        /// The yes of each check, by `dismiss:<card id>` and `stop:<session id>`.
+        var p: [String: Double] = [:]
+        var urgent = 0.0
+        var instead = 0.0
+        /// The sessions that could be stopped when it was asked.
+        var stoppable: [String] = []
+        /// The decision: `act`, `ask` or `route`, why, and the ask card's actions (their wire forms).
+        var decision = ""
+        var why = ""
+        var options: [String]?
+    }
 
     var kind: Kind
     var id: UUID
@@ -57,6 +71,8 @@ struct RouterTrace: Codable, Equatable {
     var action: String?
     var target: String?
     var inputs: Inputs?
+    /// `decided`: the checks and what was decided on them, when they were asked.
+    var checks: Checks?
     /// `picked`: the button and its place on the card (0 first); `corrected`: also what was suggested.
     var index: Int?
     var from: String?
@@ -138,5 +154,22 @@ extension RouterTrace.Inputs {
         sureness = RouteFusion.pick(RouteFusion.probabilities(x), features: x, signals: s, facts: f)?.sure
         self.sure = sure
         self.card = card
+    }
+}
+
+extension RouterTrace.Checks {
+    init(_ reading: RouterActionReading, _ decision: RouterActionDecision) {
+        for c in reading.checks {
+            switch c.kind {
+            case .dismiss: p["dismiss:\(c.card ?? "")"] = c.p
+            case .stop: p["stop:\(c.session)"] = c.p
+            }
+        }
+        urgent = reading.urgent
+        instead = reading.instead
+        stoppable = reading.stoppable
+        self.decision = decision.kind.rawValue
+        why = decision.why
+        options = decision.kind == .ask ? decision.options.map(\.wire) : nil
     }
 }

@@ -615,6 +615,8 @@ final class Store {
     }()
     /// The entries of the ask-back cards still up: kept when the history is pruned.
     @ObservationIgnored var decisionsInUse: () -> Set<UUID> = { [] }
+    /// A Router run's change was taken back with Revert (the run's entry): the dispatcher traces it as the outcome of the action.
+    @ObservationIgnored var routerRunReverted: (UUID) -> Void = { _ in }
     /// Where the Router's files go, in a test (see `routerFiles`).
     @ObservationIgnored var routerPaths: RouterPaths?
     /// The executable the hook runs; this one unless a test says otherwise.

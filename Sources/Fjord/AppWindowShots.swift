@@ -578,6 +578,15 @@ enum AppWindowShots {
         Shot(name: "router-canvas-pending-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             pending(model, store)
         }, appearance: .darkAqua),
+        // The same ask when the checks are in doubt: its buttons are verbs on their targets (stop and send, archive, send to…).
+        Shot(name: "router-canvas-ask-typed", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            typedAsk(store)
+            pending(model, store)
+        }, appearance: .aqua),
+        Shot(name: "router-canvas-ask-typed-dark", destination: { _ in .router }, size: canvasSize, compose: { model, store in
+            typedAsk(store)
+            pending(model, store)
+        }, appearance: .darkAqua),
         Shot(name: "router-canvas-pending-pill", destination: { _ in .router }, size: canvasSize, compose: { model, store in
             pending(model, store, asks: false)
         }, appearance: .aqua),
@@ -694,6 +703,22 @@ enum AppWindowShots {
         model.canvas.sizes = [folders[0].key: CGSize(width: 560, height: 260),
                               folders[1].key: CGSize(width: CanvasMetrics.minFrameWidth, height: 0)]
         model.canvas.scroll(folders[0].key).offset = 70
+    }
+
+    /// The demo's ask with typed options (`RouterActionChecks`): the checks name a stop, an archive and a send.
+    private static func typedAsk(_ store: Store) {
+        guard let ask = store.routerDispatcher.askBacks.first else { return }
+        var acts: [RouterAct] = [.interrupt(session: "local_demo-ci"), .stop(session: "local_demo-ci")]
+        if let card = store.routerShownOpenCards.first(where: { $0.kind == .done }) { acts.append(.archive(card: card.id)) }
+        acts += [.say(session: "local_demo-ci"), .say(session: "local_demo-transfer")]
+        var typed = ask
+        typed.message = "stop the CI run and use the staging config"
+        typed.options = acts.compactMap { store.routerDispatcher.option($0.target, store: store, verb: true) }.prefix(4).map { $0 }
+        typed.suggestion = typed.options.first?.target
+        if let i = store.router.decisions.firstIndex(where: { $0.id == ask.id }) {
+            store.router.decisions[i].trigger = .you(typed.message)
+        }
+        store.routerDispatcher.preview(ask: typed, progress: store.routerDispatcher.progress)
     }
 
     private static func pending(_ model: RouterModel, _ store: Store, asks: Bool = true) {

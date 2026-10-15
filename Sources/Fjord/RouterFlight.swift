@@ -287,7 +287,7 @@ struct FlightFramesKey: PreferenceKey {
     static func went(_ entry: RouterDecision) -> Bool {
         entry.done.contains {
             switch $0 {
-            case .sent, .started, .preparedGuest, .answered, .changed, .resolved: true
+            case .sent, .started, .preparedGuest, .answered, .changed, .resolved, .archived, .stopped, .interrupted: true
             case .asked, .failed, .cancelled: false
             }
         }

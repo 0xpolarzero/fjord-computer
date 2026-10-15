@@ -42,6 +42,14 @@ import Testing
         var forked: [SessionFork.Request] = []
         /// The dispatcher holds its store weakly: the test's stand-ins keep it.
         var store: Store?
+        /// The checks call (archive, stop): what it reads (nil: Jev can't be asked), and the messages it was asked for.
+        var reading: RouterActionReading?
+        var checked: [String] = []
+        /// What a stop and an interrupt answer, and what they were asked.
+        var stopOutcome: StopOutcome = .stopped("turn-1")
+        var stopped: [String] = []
+        var interruptOutcome: DeliveryOutcome = .delivered(ack: "ok interrupted turn-1", interrupted: "turn-1")
+        var interrupted: [(session: String, text: String)] = []
 
         func install(_ d: RouterDispatcher) {
             d.onFinish = { [unowned self] in finished.append($0) }
@@ -95,6 +103,18 @@ import Testing
                                                      body: request.message, original: request.message, rephrased: false,
                                                      session: "local_fork", newSessionIn: "lookout")
                 },
+                checks: { [unowned self] _, message in
+                    checked.append(message)
+                    return reading
+                },
+                stop: { [unowned self] _, session in
+                    stopped.append(session)
+                    return stopOutcome
+                },
+                interrupt: { [unowned self] _, session, text in
+                    interrupted.append((session, text))
+                    return interruptOutcome
+                },
                 answerPlan: { [unowned self] _, card, decision, snapshot in
                     guard snapshot.holds(store!) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
                     planned.append((card, decision))
@@ -107,7 +127,7 @@ import Testing
         }
     }
 
-    private func setup() -> (Store, RouterDispatcher, Fakes) {
+    func setup() -> (Store, RouterDispatcher, Fakes) {
         let s = InboxFixture.store([])
         s.categories = [InboxStore.ci]
         s.router.enabled = true
@@ -141,11 +161,11 @@ import Testing
         return out
     }
 
-    private func finish(_ d: RouterDispatcher, _ f: Fakes, _ id: UUID?) async {
+    func finish(_ d: RouterDispatcher, _ f: Fakes, _ id: UUID?) async {
         await waitUntil { id.map { f.finished.contains($0) } ?? true }
     }
 
-    private func decision(_ s: Store, _ id: UUID?) -> RouterDecision? { s.router.decisions.first { $0.id == id } }
+    func decision(_ s: Store, _ id: UUID?) -> RouterDecision? { s.router.decisions.first { $0.id == id } }
 
     // MARK: Jev while you type
 
@@ -640,7 +660,7 @@ import Testing
 
     // MARK: Trace
 
-    private func traceLines(_ d: RouterDispatcher) -> [RouterTrace] {
+    func traceLines(_ d: RouterDispatcher) -> [RouterTrace] {
         d.traceLog.flush()
         guard let url = d.traceLog.url, let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         let decoder = JSONDecoder()

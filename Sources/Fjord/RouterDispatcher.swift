@@ -208,6 +208,14 @@ struct RouterAskBack: Identifiable, Equatable {
         var fork: @MainActor (RouterTools, SessionFork.Request) async throws -> Delivery = { _, _ in
             throw RouterTools.Failure("The Router isn't ready")
         }
+        /// The checks call for a message about to be routed (`RouterActionChecks`): nil when it can't be asked (no Jev).
+        var checks: @MainActor (RouterTools, _ message: String) async throws -> RouterActionReading? = { _, _ in nil }
+        /// Stops a session's running turn (`Store.stopTurn`), through a gate that refuses once the run is over.
+        var stop: @MainActor (RouterTools, _ session: String) async -> StopOutcome = { _, _ in .failed("The Router isn't ready") }
+        /// Stops a session's running turn and sends it `text` as the next message (`Store.interrupt`).
+        var interrupt: @MainActor (RouterTools, _ session: String, _ text: String) async -> DeliveryOutcome = { _, _, _ in
+            .failed("The Router isn't ready")
+        }
         /// A plan decided for a card (approved, or sent back with the message): what was done.
         /// Only while the card still holds the plan it was judged on (`FormSnapshot`).
         var answerPlan: @MainActor (RouterTools, _ card: String, PendingForm.PlanDecision, FormSnapshot) async throws -> String = { _, _, _, _ in
@@ -270,6 +278,7 @@ struct RouterAskBack: Identifiable, Equatable {
         effects = Effects.live(self)
         // An entry whose ask-back card is still up is not pruned from the history (its pick needs the record).
         store.decisionsInUse = { [weak self] in Set(self?.askBacks.map(\.id) ?? []) }
+        store.routerRunReverted = { [weak self] id in self?.reverted(id) }
     }
 
     private struct Job {
@@ -616,7 +625,7 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// A routing decided: what it was decided on and what it does, as a trace line.
     private func trace(_ job: Job, path: String, action: String, target: String?, inputs: RouterTrace.Inputs? = nil,
-                       kind: RouterTrace.Kind = .decided) {
+                       checks: RouterTrace.Checks? = nil, kind: RouterTrace.Kind = .decided) {
         let text = job.text
         let pills = job.context.pills.compactMap { range -> String? in
             let chars = Array(text)
@@ -630,7 +639,7 @@ struct RouterAskBack: Identifiable, Equatable {
         traceLog.append(RouterTrace(kind: kind, id: job.id, message: RouterTools.redacted(text),
                                     pills: pills.isEmpty ? nil : pills, pinned: job.context.target, shown: job.context.shown,
                                     notTo: job.context.notTo, replyTo: job.context.replyTo, path: path, action: does,
-                                    target: target, inputs: inputs))
+                                    target: target, inputs: inputs, checks: checks))
     }
 
     /// Where it goes is yours (the card you replied to, the project you tagged to start in).
@@ -1166,6 +1175,9 @@ struct RouterAskBack: Identifiable, Equatable {
     /// Acts on a target: a card or session gets the message, a project a new session, an intent a run.
     private func route(_ job: Job, to target: String) async throws {
         guard let store else { return }
+        // What the checks name (archive, stop, stop and send, open a session), picked on an ask.
+        let act = RouterAct(target: target)
+        if act.isCheckAction || act.isOpen { return try await perform(job, act, inputs: nil, checks: nil, decided: false) }
         if target.hasPrefix("answer:") {
             let id = String(target.dropFirst("answer:".count))
             guard let card = store.router.cards.first(where: { $0.id == id }) else { throw RouterTools.Failure("That card is gone") }
@@ -1175,6 +1187,82 @@ struct RouterAskBack: Identifiable, Equatable {
         if target.hasPrefix("new:") { return try await start(job, folder: String(target.dropFirst("new:".count))) }
         if let intent = RouterRun.Intent(rawValue: target) { return try await think(job, intent) }
         throw RouterTools.Failure("Nowhere to send that")
+    }
+
+    // MARK: Actions of the checks
+
+    /// What a Revert on a run's change was: traced as the outcome of the action the checks named.
+    fileprivate func reverted(_ id: UUID) {
+        guard let entry = store?.router.decisions.first(where: { $0.id == id }), let target = entry.decision.targetID,
+              RouterAct(target: target).isCheckAction else { return }
+        traceLog.append(RouterTrace(kind: .reverted, id: id, target: target))
+    }
+
+    /// Does an action the checks named, or one picked on an ask: archives the card at once (with Revert in the history),
+    /// stops the session's turn, stops it and sends your words, or opens the session. Each is recorded on the run's line;
+    /// a stop or an interrupt that can't be done says why there and asks where the words go instead (`couldntAct`).
+    /// `decided`: the checks chose it (traced here, with what they read); a pick was traced as one.
+    private func perform(_ job: Job, _ act: RouterAct, inputs: RouterTrace.Inputs?, checks: RouterTrace.Checks?, decided: Bool) async throws {
+        guard let store else { return }
+        try Task.checkCancellation()
+        if decided {
+            trace(job, path: "checks", action: act.kindWord, target: act.target, inputs: inputs, checks: checks)
+            store.updateDecision(job.id) {
+                $0.decision.label = act.kindWord
+                $0.decision.target = describe(act.target, store: store)
+                $0.decision.targetID = act.target
+            }
+        }
+        func title(_ session: String) -> String { store.claudeSessions[session]?.title ?? "the session" }
+        switch act {
+        case .archive(let id):
+            guard let card = store.router.cards.first(where: { $0.id == id }), card.isOpen else {
+                throw RouterTools.Failure("That card isn't open any more")
+            }
+            stage(job, "archiving")
+            try job.tools.live(job.tools.ticket())
+            let shown = UntrustedText.clean(card.title, limit: 60)
+            guard store.act(.archive(card: id, title: shown, project: UntrustedText.clean(store.routerProject(card).name, limit: 40)),
+                            into: job.id, as: { .archived(title: shown, change: $0.id) }) != nil else {
+                throw RouterTools.Failure("“\(shown)” isn't open any more")
+            }
+        case .stop(let id):
+            let name = title(id), project = store.routerSessionProject(id).name
+            let since = store.runningTurn(sessionID: id)?.startedAt.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+            stage(job, "stopping")
+            switch await effects.stop(job.tools, id) {
+            case .stopped: note(job, .stopped(title: name, project: project, since: since), session: id)
+            case .idle, .notRunning: couldntAct(job, session: id, "“\(RouterDecision.clip(name, 40))” wasn't running")
+            case .unsupported(let why), .failed(let why): couldntAct(job, session: id, why, stopping: name)
+            }
+        case .interrupt(let id):
+            let name = title(id)
+            stage(job, "preparing")
+            let delivery = try await effects.prepare(job.tools, id)
+            try Task.checkCancellation()
+            stage(job, "stopping it and sending")
+            switch await effects.interrupt(job.tools, id, delivery.body) {
+            case .delivered(_, let interrupted):
+                note(job, .interrupted(title: name, text: delivery.body, stopped: interrupted != nil), session: id)
+            case .unsupported(let why), .refused(let why), .failed(let why): couldntAct(job, session: id, why, stopping: name)
+            }
+        case .open(let id):
+            store.openAgent(id)
+            store.updateDecision(job.id) {
+                $0.reply = "Opened “\(RouterDecision.clip(title(id), 40))”: nothing was sent."
+                $0.outcome = .done
+            }
+        default:
+            try await route(job, to: act.target)
+        }
+    }
+
+    /// A stop that couldn't be done: why, on the line, and an ask where the words go instead (queued to the session, or open it).
+    private func couldntAct(_ job: Job, session: String, _ why: String, stopping name: String? = nil) {
+        let reason = name.map { "Couldn't stop “\(RouterDecision.clip($0, 40))”: \(why)" } ?? why
+        note(job, .failed(RouterDecision.clip(reason, 160)), session: session)
+        let found = Classification(ranked: [], sure: false, assisted: true)
+        askBack(job, found, path: "stop-failed", note: RouterDecision.clip(why, 160), acts: [.say(session: session), .open(session: session)])
     }
 
     // MARK: Jev
@@ -1194,6 +1282,12 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         let narrowed = noClone ? job.context.projects : world?.clones ?? job.context.projects
         let inWorld = Self.inWorld(world, unattended: unattended, store: store)
+        // The checks (archive, stop) are asked beside the route, at send time only: not when a pick was shown over the composer
+        // for these words (you went with it), not for an inbox action's message, which only ever goes to a session.
+        let checking: Task<RouterActionReading?, Never>? = unattended || job.context.shown != nil ? nil : Task { [effects, tools = job.tools, text = job.text] in
+            (try? await effects.checks(tools, text)) ?? nil
+        }
+        defer { checking?.cancel() }
         // The pick shown over the composer for these words is the decision: sent as shown, not asked again.
         var found: Classification
         if let shown = job.context.shown, let carried = job.context.jev, carried.assisted, carried.sure, carried.top?.target == shown {
@@ -1265,14 +1359,28 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         // Hidden, addressed or gone while Jev was asked: you pick among what is there now.
         if found.sure, let top = found.top, !eligible(top.target, store: store) { found.sure = false }
+        // The checks, read with the route's outcome: an action, an ask with the actions on it, or the route as it is.
+        var checksTrace: RouterTrace.Checks?
+        if let checking, found.assisted, !noClone, let reading = await checking.value {
+            try Task.checkCancellation()
+            let decided = RouterActionChecks.decideAction(RouterActionChecks.info(found: found, reading: reading, store: store))
+            checksTrace = RouterTrace.Checks(reading, decided)
+            switch decided.kind {
+            case .act:
+                if let act = decided.act { return try await perform(job, act, inputs: found.trace, checks: checksTrace, decided: true) }
+            case .ask:
+                return askBack(job, found, path: "checks", chooseFolder: false, acts: decided.options, checks: checksTrace)
+            case .route: break
+            }
+        }
         if found.sure, let top = found.top {
             // Where your own words send it: yours, as a pin is, so a follow-up may go there.
             if named == top.target { chosen(job) }
             trace(job, path: found.live ? "live" : found.assisted ? "jev" : "words", action: "send", target: top.target,
-                  inputs: found.trace)
+                  inputs: found.trace, checks: checksTrace)
             return try await route(job, to: top.target)
         }
-        askBack(job, found, note: noClone ? world?.note : nil, chooseFolder: noClone)
+        askBack(job, found, note: noClone ? world?.note : nil, chooseFolder: noClone, checks: checksTrace)
     }
 
     /// Jev's routing of a draft while you type: the same call a send makes, kept by its words and projects for
@@ -1347,6 +1455,11 @@ struct RouterAskBack: Identifiable, Equatable {
 
     /// Whether a target can still be sent to: an open card, a session not archived, a known project, or an intent.
     func eligible(_ target: String, store: Store) -> Bool {
+        switch RouterAct(target: target) {
+        case .archive(let id): return store.routerShownOpenCards.contains { $0.id == id }
+        case .stop(let id), .interrupt(let id), .open(let id): return store.claudeSessions[id].map { !$0.isArchived } ?? false
+        default: break
+        }
         if target.hasPrefix("answer:") { return store.routerShownOpenCards.contains { $0.id == String(target.dropFirst(7)) } }
         if target.hasPrefix("session:") { return store.claudeSessions[String(target.dropFirst(8))].map { !$0.isArchived } ?? false }
         // A project Fjord knows: a session's folder, or a repo in your code folders (a clone with no session yet).
@@ -1395,27 +1508,35 @@ struct RouterAskBack: Identifiable, Equatable {
     /// `suggestion`: what a pick corrects, when it isn't Jev's top (a wrong send asked again); `path` for the trace likewise.
     /// `note`: why it asks, when it isn't Jev's doubt; `chooseFolder`: "Choose folder…" is offered last.
     private func askBack(_ job: Job, _ ranked: Classification, suggestion: String? = nil, path: String? = nil, note: String? = nil,
-                         chooseFolder: Bool = false, whole: Bool = false) {
+                         chooseFolder: Bool = false, whole: Bool = false, acts: [RouterAct]? = nil, checks: RouterTrace.Checks? = nil) {
         guard let store else { return }
         let found = ranked
         var options: [RouterAskBack.Option] = []
         var seen = Set<String>()
         // Four: on real moments the fourth holds the answer 3–10% more often (evals/router/explore/selective.py).
         let room = chooseFolder || whole ? 3 : 4
-        for target in (found.card ?? []) + found.ranked.map(\.target) where target != "unclear" && options.count < room {
-            guard var option = option(target, store: store, tools: job.tools), seen.insert(option.id).inserted else { continue }
-            if whole { option.title = "Send the whole message to " + option.title }
-            options.append(option)
+        if let acts {
+            // The checks' ask: typed actions, each a verb on its target (`RouterActionChecks.decideAction` chose and ordered them).
+            for act in acts where options.count < room {
+                guard let option = option(act.target, store: store, tools: job.tools, verb: true), seen.insert(option.id).inserted else { continue }
+                options.append(option)
+            }
+        } else {
+            for target in (found.card ?? []) + found.ranked.map(\.target) where target != "unclear" && options.count < room {
+                guard var option = option(target, store: store, tools: job.tools), seen.insert(option.id).inserted else { continue }
+                if whole { option.title = "Send the whole message to " + option.title }
+                options.append(option)
+            }
         }
         if chooseFolder, let choose = option(RouterAskBack.chooseFolder, store: store) { options.append(choose) }
         if whole, let split = option(RouterAskBack.split, store: store) { options.append(split) }
         var ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
-                                suggestion: suggestion ?? found.top?.target, at: Date(), note: note)
+                                suggestion: suggestion ?? (acts != nil ? options.first?.target : found.top?.target), at: Date(), note: note)
         ask.whole = whole
         var inputs = found.trace
         inputs?.card = options.map(\.target)
         trace(job, path: path ?? (found.assisted ? "jev" : "words"), action: "ask", target: found.top?.target, inputs: inputs,
-              kind: path == "elsewhere" ? .reasked : .decided)
+              checks: checks, kind: path == "elsewhere" ? .reasked : .decided)
         askBacks.append(ask)
         store.updateDecision(job.id) {
             $0.add(.asked(options.map(\.title)))
@@ -1426,7 +1547,11 @@ struct RouterAskBack: Identifiable, Equatable {
     }
 
     /// A target as a button.
-    func option(_ target: String, store: Store, tools: RouterTools? = nil) -> RouterAskBack.Option? {
+    func option(_ target: String, store: Store, tools: RouterTools? = nil, verb: Bool = false) -> RouterAskBack.Option? {
+        // The checks' actions are always worded as verbs; an ask built on them words its other buttons so too (`verb`).
+        let act = RouterAct(target: target)
+        if act.isCheckAction || act.isOpen { return typedOption(act, store: store) }
+        if verb, let typed = typedOption(act, store: store) { return typed }
         if target.hasPrefix("answer:") {
             guard let card = store.router.cards.first(where: { $0.id == String(target.dropFirst(7)) }),
                   RouterPage.shows(card, tasks: store.routerTasks) else { return nil }
@@ -1450,8 +1575,52 @@ struct RouterAskBack: Identifiable, Equatable {
         }
     }
 
+    /// An action as a button: a verb on its target ("Stop “CI”", "Send to “docs”", "Archive “docs”").
+    private func typedOption(_ act: RouterAct, store: Store) -> RouterAskBack.Option? {
+        func name(_ text: String) -> String { "“\(RouterDecision.clip(text, 40))”" }
+        func card(_ id: String) -> RouterCard? {
+            store.router.cards.first(where: { $0.id == id }).flatMap { $0.isOpen && RouterPage.shows($0, tasks: store.routerTasks) ? $0 : nil }
+        }
+        func session(_ id: String) -> ClaudeSession? { store.claudeSessions[id].flatMap { $0.isArchived ? nil : $0 } }
+        switch act {
+        case .archive(let id):
+            guard let c = card(id) else { return nil }
+            return .init(target: act.target, title: "Archive " + name(c.title), detail: "\(c.kind.label) · \(store.routerSessionProject(c.sessionID).name)")
+        case .stop(let id):
+            guard let s = session(id) else { return nil }
+            return .init(target: act.target, title: "Stop " + name(s.title), detail: store.routerSessionProject(id).name + " · working")
+        case .interrupt(let id):
+            guard let s = session(id) else { return nil }
+            return .init(target: act.target, title: "Stop " + name(s.title) + " and send this", detail: store.routerSessionProject(id).name + " · working")
+        case .say(let id):
+            guard let s = session(id) else { return nil }
+            return .init(target: act.target, title: "Send to " + name(s.title),
+                         detail: store.routerSessionProject(id).name + (s.running ? " · after its turn" : ""))
+        case .answer(let id):
+            guard let c = card(id) else { return nil }
+            let title: String
+            switch c.kind {
+            case .question, .asks: title = "Answer " + name(c.title) + "’s question"
+            case .plan: title = "Answer " + name(c.title) + "’s plan"
+            case .approval: title = "Answer " + name(c.title) + "’s request"
+            case .done, .stuck, .waiting, .finish: title = "Send to " + name(c.title)
+            }
+            return .init(target: act.target, title: title, detail: "\(c.kind.label) · \(store.routerSessionProject(c.sessionID).name)")
+        case .start(let folder):
+            return .init(target: act.target, title: "New session in " + store.folderName(folder), detail: "")
+        case .changeFjord, .compound: return .init(target: act.target, title: "Change Fjord", detail: "Categories, groups, settings")
+        case .askFjord: return .init(target: act.target, title: "Ask Fjord", detail: "A question about now")
+        case .open(let id):
+            guard let s = session(id) else { return nil }
+            return .init(target: act.target, title: "Open the session", detail: s.title)
+        case .other: return nil
+        }
+    }
+
     /// A target in words, for the log ("session “Fix build” in lookout").
     func describe(_ target: String, store: Store) -> String {
+        let act = RouterAct(target: target)
+        if act.isCheckAction || act.isOpen, let option = typedOption(act, store: store) { return option.title.prefix(1).lowercased() + option.title.dropFirst() }
         guard let option = option(target, store: store) else { return target }
         if target.hasPrefix("answer:") { return "card “\(option.title)” (\(option.detail))" }
         if target.hasPrefix("session:") { return "session “\(option.title)” in \(option.detail)" }
@@ -1630,6 +1799,24 @@ extension RouterDispatcher.Effects {
                 let answer = object(try await tools.forkSession(store, request, ticket: tools.ticket()))
                 let project = store.claudeSessions[request.session].map { store.folderName($0.folderKey) } ?? ""
                 return try started(answer, tools, project: project, settings: nil)
+            },
+            checks: { [weak dispatcher] tools, message in
+                guard let dispatcher, let store = dispatcher.storeForEffects, let ask = dispatcher.jevForEffects(tools) else { return nil }
+                return try await RouterActionChecks.read(store, message: message, tagged: tools.tagged, ask: ask)
+            },
+            stop: { [weak dispatcher] tools, session in
+                guard let dispatcher, let store = dispatcher.storeForEffects else { return .failed("Fjord isn't ready") }
+                let ticket = tools.ticket()
+                return await store.stopTurn(sessionID: session, gate: { [weak tools] in
+                    tools.flatMap { (try? $0.live(ticket)) == nil ? "Stopped; nothing was done" : nil }
+                })
+            },
+            interrupt: { [weak dispatcher] tools, session, text in
+                guard let dispatcher, let store = dispatcher.storeForEffects else { return .failed("Fjord isn't ready") }
+                let ticket = tools.ticket()
+                return await store.interrupt(sessionID: session, text: text, gate: { [weak tools] in
+                    tools.flatMap { (try? $0.live(ticket)) == nil ? "Stopped; nothing was done" : nil }
+                })
             },
             answerPlan: { [weak dispatcher] tools, card, decision, snapshot in
                 guard let dispatcher else { throw RouterTools.Failure("Fjord isn't ready") }

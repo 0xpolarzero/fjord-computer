@@ -39,6 +39,14 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     }
 
     enum Done: Codable, Equatable {
+        /// Your words went to a session (or started one): what `lastTold` reads.
+        var sendsWords: Bool {
+            switch self {
+            case .sent, .started, .interrupted: true
+            default: false
+            }
+        }
+
         /// A message sent to a session, with what you wrote when it was rephrased.
         case sent(to: String, text: String, original: String?)
         case started(session: String?, project: String, model: String?, effort: String?)
@@ -54,6 +62,12 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case failed(String)
         /// A message sent here taken back (`RouterDispatcher.cancel`): how far it had gone.
         case cancelled(Cancelled)
+        /// A card archived at once on the words (`RouterActionChecks`), its change (with Revert) and the card's title.
+        case archived(title: String, change: UUID)
+        /// A session's running turn stopped on the words: the session's title and project, and when the turn began.
+        case stopped(title: String, project: String, since: Date?)
+        /// A running turn stopped and the words sent as the session's next message (`stopped`: one was running).
+        case interrupted(title: String, text: String, stopped: Bool)
     }
 
     /// How a cancel went, as the session's plugin answered it.
@@ -199,7 +213,10 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     /// Adds `done` and the links it implies.
     mutating func add(_ item: Done, session: String? = nil, card: String? = nil) {
         done.append(item)
-        if case .changed(let id) = item, !links.changes.contains(id) { links.changes.append(id) }
+        switch item {
+        case .changed(let id), .archived(_, let id): if !links.changes.contains(id) { links.changes.append(id) }
+        default: break
+        }
         if let session, !links.sessions.contains(session) { links.sessions.append(session) }
         if let card, !links.cards.contains(card) { links.cards.append(card) }
     }
@@ -232,6 +249,11 @@ struct RouterDecision: Codable, Identifiable, Equatable {
             case .resolved(let card, let message): "closed \(card) by \(forModel ? "the user\'s" : "your") message: \(Self.clip(message, 80))"
             case .failed(let reason): "failed: \(reason)"
             case .cancelled(let how): how.words
+            case .archived(let title, _): "archived “\(Self.clip(title, 60))”"
+            case .stopped(let title, let project, let since):
+                "stopped “\(Self.clip(title, 60))” (\(project)" + (since.map { ", since \(Self.clock($0))" } ?? "") + ")"
+            case .interrupted(let title, let text, let stopped):
+                (stopped ? "interrupted" : "sent to") + " “\(Self.clip(title, 60))”" + (stopped ? " and sent: " : ": ") + Self.clip(text, 80)
             }
         }
     }
@@ -256,7 +278,18 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .resolved: return "addressed a card" + more
         case .failed: return "failed" + more
         case .cancelled: return "cancelled" + more
+        case .archived: return "archived" + more
+        case .stopped: return "stopped" + more
+        case .interrupted(_, _, let stopped): return (stopped ? "interrupted" : "sent") + more
         }
+    }
+
+    /// "09:41": when a stopped turn began.
+    static func clock(_ date: Date) -> String {
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "HH:mm"
+        return format.string(from: date)
     }
 
     var symbol: String {
@@ -275,6 +308,9 @@ struct RouterDecision: Codable, Identifiable, Equatable {
         case .resolved: return "checkmark"
         case .failed: return "exclamationmark.triangle"
         case .cancelled: return "xmark.circle"
+        case .archived: return "archivebox"
+        case .stopped: return "stop.circle"
+        case .interrupted: return "paperplane"
         case nil: return "text.bubble"
         }
     }
@@ -390,9 +426,9 @@ extension Store {
     }
 
     /// A change made in Fjord: part of the run under way, else an entry of its own.
-    func logChange(_ change: FjordChange, into run: UUID? = nil) {
+    func logChange(_ change: FjordChange, into run: UUID? = nil, as done: RouterDecision.Done? = nil) {
         if let id = run, router.decisions.contains(where: { $0.id == id }) {
-            updateDecision(id) { $0.add(.changed(change.id)) }
+            updateDecision(id) { $0.add(done ?? .changed(change.id)) }
         } else {
             logDecision(RouterDecision(at: change.date, trigger: .system, decision: RouterDecision.Decided(intent: change.title),
                                        done: [.changed(change.id)], outcome: .done, links: .init(changes: [change.id])))
@@ -422,7 +458,10 @@ extension Store {
         let all = router.decisions[i].links.changes.allSatisfy { id in
             router.changes.contains { $0.id == id && $0.isReverted }
         }
-        if all { updateDecision(router.decisions[i].id) { $0.outcome = .reverted } }
+        if all {
+            updateDecision(router.decisions[i].id) { $0.outcome = .reverted }
+            routerRunReverted(router.decisions[i].id)
+        }
     }
 
     /// Something you did on a card from the page (answered its form, approved its plan, marked it handled).

@@ -58,7 +58,6 @@ extension RouterTools {
     /// How many of the latest sessions get the next-message check.
     static let nextLatest = 3
 
-    private static let waitsOnYou: Set<RouterCard.Kind> = [.question, .plan, .asks, .approval]
 
     /// What Jev routes among: the sessions (working, then the 20 most recent others), the cards of sessions not among them,
     /// a new session per project, and the intents. `projects`: folders you tagged; only theirs then.
@@ -528,7 +527,7 @@ extension Store {
         var out: [String: [String]] = [:]
         for entry in router.decisions {
             guard case .you(let text) = entry.trigger, entry.generated != true, let session = entry.links.sessions.last,
-                  entry.done.contains(where: { if case .sent = $0 { true } else if case .started = $0 { true } else { false } })
+                  entry.done.contains(where: \.sendsWords)
             else { continue }
             out[session, default: []].append(text)
         }
@@ -540,7 +539,7 @@ extension Store {
         var out: [String: (text: String, at: Date)] = [:]
         for entry in router.decisions {
             guard case .you(let text) = entry.trigger, entry.generated != true, let session = entry.links.sessions.last,
-                  entry.done.contains(where: { if case .sent = $0 { true } else if case .started = $0 { true } else { false } })
+                  entry.done.contains(where: \.sendsWords)
             else { continue }
             out[session] = (text, entry.at)
         }

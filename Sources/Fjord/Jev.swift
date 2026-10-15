@@ -77,17 +77,36 @@ struct JevClient {
         func score(sure: Double) -> Double? { if case .score(let s, let c) = self, c >= sure { s } else { nil } }
     }
 
+    /// The order the questions of the calls made in this task are written in on the wire (the keys not listed follow, sorted).
+    /// A dictionary has none: the Router's checks (`RouterActionChecks`) were measured in the order they are asked.
+    @TaskLocal static var questionOrder: [String]?
+
     /// Asks every question about `state` in one call.
     func ask(_ questions: [String: Question], about state: Any) async throws -> [String: Answer] {
         let (body, keys, ordered) = try Self.request(questions)
-        let data = try await post(["model": "jev-latest", "state": state, "questions": body], ordered: ordered)
+        let (wire, all) = Self.wire(body: body, state: state, ordered: ordered)
+        let data = try await post(wire, ordered: all)
         return try Self.answers(data, questions: questions, keys: keys)
     }
 
     /// The request's bytes as `ask` posts them (the routing trace keeps them, so evals can replay real traffic exactly).
     static func requestData(_ questions: [String: Question], about state: Any) throws -> Data {
         let (body, _, ordered) = try request(questions)
-        return try encode(["model": "jev-latest", "state": state, "questions": body], ordered: ordered)
+        let (wire, all) = Self.wire(body: body, state: state, ordered: ordered)
+        return try encode(wire, ordered: all)
+    }
+
+    /// The request body, its questions written in `questionOrder` when one is set.
+    private static func wire(body: [String: Any], state: Any, ordered: [String: Data]) -> ([String: Any], [String: Data]) {
+        let plain: [String: Any] = ["model": "jev-latest", "state": state, "questions": body]
+        guard let order = questionOrder else { return (plain, ordered) }
+        let listed = order.filter { body[$0] != nil }
+        let keys = listed + body.keys.filter { !listed.contains($0) }.sorted()
+        let placeholder = "\u{1}ordered-questions\u{1}"
+        guard let object = try? orderedObject(keys.map { ($0, body[$0] ?? NSNull()) }) else { return (plain, ordered) }
+        var all = ordered
+        all[placeholder] = object
+        return (["model": "jev-latest", "state": state, "questions": placeholder], all)
     }
 
     private static func request(_ questions: [String: Question]) throws
