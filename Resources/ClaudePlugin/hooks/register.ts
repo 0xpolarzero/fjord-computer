@@ -322,6 +322,8 @@ export const forget = () => {
   quiet.clear()
   running = undefined
   runningSince = 0
+  inFlight.clear()
+  deliveries = Promise.resolve()
 }
 
 /** Stops what a turn's tools are doing, and keeps their notifications out from now on. `record` is the turn's record taken
@@ -534,6 +536,9 @@ export async function accept(
  * silence the inbox for good; two looks at once never happen otherwise (each message gets exactly one ack). */
 let pollingSince = 0
 const POLL_STUCK_MS = 5000
+/** The inbox files being delivered (not yet acked), and the deliveries' order. */
+const inFlight = new Set<string>()
+let deliveries: Promise<void> = Promise.resolve()
 
 /** What follows "ok" in a delivery's ack: how an interrupt went ("interrupted <turn id>", or "idle" when nothing ran), then what
  * the settings did. */
@@ -562,8 +567,21 @@ export async function poll($: EngineInterface) {
         await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, `${reply}\n`)
         continue
       }
-      const outcome = await accept($, text, true).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
-      await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? `ok${acked(outcome)}\n` : `refused: ${outcome.reason}\n`)
+      // A delivery can take long (an interrupt waits for its words to be accepted): it runs apart from the look, one after
+      // another so the words keep their order, and its message is skipped by every look until its own ack is written.
+      if (inFlight.has(name)) continue
+      inFlight.add(name)
+      const deliver = async () => {
+        try {
+          const outcome = await accept($, text, true).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
+          await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? `ok${acked(outcome)}\n` : `refused: ${outcome.reason}\n`)
+        } catch {
+          // The ack couldn't be written: the next look takes the message again (its nonce is claimed, so it is refused as a replay).
+        } finally {
+          inFlight.delete(name)
+        }
+      }
+      deliveries = deliveries.then(deliver)
     }
   } catch {
     // No folder yet (nothing was ever sent here), or it can't be read: nothing to do until the next look.

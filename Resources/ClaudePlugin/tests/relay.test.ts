@@ -64,6 +64,8 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     finish: {} as Record<string, () => void>,
     /** A prompt.submit hook beneath that drops what it's given. */
     dropSubmit: false,
+    /** Holds prompt.submit beneath until let go. */
+    holdSubmit: undefined as Promise<void> | undefined,
     /** Holds turn.start beneath until let go. */
     holdStart: undefined as Promise<void> | undefined,
     registry: { '4242.json': { pid: 4242, sessionId: TARGET, startedAt: 111 } } as Record<string, Record<string, unknown> | string>,
@@ -111,7 +113,8 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     if (w.commandFails[e.command]) throw new Error(w.commandFails[e.command])
     return { ok: true }
   })
-  on('prompt.submit', ($, e) => {
+  on('prompt.submit', async ($, e) => {
+    await w.holdSubmit
     if (w.dropSubmit) return { drop: 'a hook beneath said no' }
     w.order.push('submit')
     w.submitted.push({ text: e.text, asUser: e.origin?.kind === 'plugin' ? e.origin.asUser : undefined })
@@ -1000,6 +1003,31 @@ describe('stopping a turn and interrupting it', () => {
     await $.turn.start({ text: 'typed', turnId: 't1' })
     w.dropSubmit = true
     expect(await put($, w, NONCE, await sign(BODY, { interrupt: true }))).toBe('refused: not submitted: a hook beneath said no\n')
+  })
+
+  test('an interrupt whose submission takes longer than the stuck limit gets one ack, its own, and a stop meanwhile is handled', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    let release = () => {}
+    w.holdSubmit = new Promise<void>((resolve) => (release = resolve))
+    w.inbox[`${TARGET}/${NONCE}.msg`] = await sign(BODY, { interrupt: true })
+    await look($, w)
+    // Well past POLL_STUCK_MS, with the submission still waiting: every look in between passes the message by.
+    for (let i = 0; i < 14; i++) await look($, w)
+    expect(w.written[`/inbox/${TARGET}/${NONCE}.ack`]).toBeUndefined()
+    w.inbox[`${TARGET}/${STOP_NONCE}.msg`] = await signStop('t1')
+    await look($, w)
+    expect(w.written[`/inbox/${TARGET}/${STOP_NONCE}.ack`]).toMatch(/^ok /)
+    const writes: string[] = []
+    const base = w.inbox
+    w.inbox = new Proxy(base, { set: (t, k, v) => (writes.push(String(k)), Reflect.set(t, k, v)) })
+    release()
+    await settle()
+    await settle()
+    expect(w.written[`/inbox/${TARGET}/${NONCE}.ack`]).toBe('ok interrupted t1\n')
+    expect(writes.filter((k) => k.endsWith(`${NONCE}.ack`))).toHaveLength(1)
+    expect(w.submitted).toEqual([{ text: BODY, asUser: true }])
   })
 
   test('a subagent belongs to the turn its parent does: an older agent’s child is not cut with a newer turn', async ($, on) => {
