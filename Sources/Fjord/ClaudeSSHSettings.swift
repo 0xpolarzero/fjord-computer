@@ -100,10 +100,15 @@ struct ClaudeSSHSettings {
         var ownerName: String
         var alias: String
 
-        var id: String { "fjord-\(deviceId ?? "local")-\(computerId)" }
+        var id: String { ClaudeSSHSettings.entryID(deviceId: deviceId, computerId: computerId) }
         var displayName: String { "\(computerName) · \(ownerName)" }
 
         var json: [String: String] { ["id": id, "name": displayName, "sshHost": alias] }
+    }
+
+    /// `fjord-<device>-<computer>`; debug and E2E builds (`AppIdentity`) use `fjord-dev-`, so they never touch the installed app's entries.
+    static func entryID(deviceId: String?, computerId: String, development: Bool = AppIdentity.isDevelopment()) -> String {
+        "\(development ? "fjord-dev" : "fjord")-\(deviceId ?? "local")-\(computerId)"
     }
 
     var claudeDir: URL
@@ -131,7 +136,7 @@ struct ClaudeSSHSettings {
     }
 
     func remove(deviceId: String?, computerId: String) throws {
-        let id = "fjord-\(deviceId ?? "local")-\(computerId)"
+        let id = Self.entryID(deviceId: deviceId, computerId: computerId)
         try modify { root in
             var entries = try sshConfigs(root)
             let kept = entries.filter { $0["id"] as? String != id }

@@ -56,18 +56,18 @@ final class FakeClaudeCLI: @unchecked Sendable {
         case ["plugin", "marketplace", "list"]:
             return .init(status: 0, out: json(marketplaces.map { ["name": $0.key, "source": "directory", "path": $0.value] }), err: "")
         case ["plugin", "marketplace", "add"]:
-            marketplaces["fjord"] = a[3]
+            marketplaces[ClaudePlugin.name] = a[3]
         case ["plugin", "marketplace", "remove"]:
             marketplaces[a[3]] = nil
-        case ["plugin", "install", "fjord@fjord"]:
-            guard let folder = marketplaces["fjord"] else { return .init(status: 1, out: "", err: "no marketplace") }
-            plugins["fjord@fjord"] = (folder, folderVersion, true)
-        case ["plugin", "update", "fjord@fjord"]:
-            if updateRefreshes { plugins["fjord@fjord"]?.version = folderVersion }
-        case ["plugin", "enable", "fjord@fjord"]:
-            plugins["fjord@fjord"]?.enabled = true
-        case ["plugin", "uninstall", "fjord@fjord"]:
-            plugins["fjord@fjord"] = nil
+        case ["plugin", "install", ClaudePlugin.id]:
+            guard let folder = marketplaces[ClaudePlugin.name] else { return .init(status: 1, out: "", err: "no marketplace") }
+            plugins[ClaudePlugin.id] = (folder, folderVersion, true)
+        case ["plugin", "update", ClaudePlugin.id]:
+            if updateRefreshes { plugins[ClaudePlugin.id]?.version = folderVersion }
+        case ["plugin", "enable", ClaudePlugin.id]:
+            plugins[ClaudePlugin.id]?.enabled = true
+        case ["plugin", "uninstall", ClaudePlugin.id]:
+            plugins[ClaudePlugin.id] = nil
         default:
             return .init(status: 1, out: "", err: "unknown command \(line)")
         }
@@ -114,9 +114,9 @@ enum PluginFixture {
         func read(_ path: String) throws -> String { try String(contentsOf: Self.source.appendingPathComponent(path), encoding: .utf8) }
         #expect(try read("hooks/register.ts") == ClaudePlugin.register)
         #expect(try read("hooks/hooks.json") == ClaudePlugin.hooksJSON)
-        #expect(try read(".claude-plugin/marketplace.json") == ClaudePlugin.marketplaceJSON)
+        #expect(try read(".claude-plugin/marketplace.json") == ClaudePlugin.marketplaceTemplate)
         let repo = try #require(try JSONSerialization.jsonObject(with: Data(read(".claude-plugin/plugin.json").utf8)) as? NSDictionary)
-        let written = try #require(try JSONSerialization.jsonObject(with: Data(ClaudePlugin.pluginJSON(version: "0.0.0-dev").utf8)) as? NSDictionary)
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(ClaudePlugin.pluginJSON(version: "0.0.0-dev", name: ClaudePlugin.pluginName(development: false)).utf8)) as? NSDictionary)
         #expect(written.isEqual(repo))
     }
 
@@ -135,7 +135,7 @@ enum PluginFixture {
             #expect(fm.fileExists(atPath: folder.appendingPathComponent(path).path), "\(path)")
         }
         let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(".claude-plugin/plugin.json"))) as? [String: Any]
-        #expect(manifest?["version"] as? String == "1.0.0-rabc" && manifest?["name"] as? String == "fjord")
+        #expect(manifest?["version"] as? String == "1.0.0-rabc" && manifest?["name"] as? String == ClaudePlugin.name)
         let config = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("config.json"))) as? [String: String]
         #expect(config == ["keyPath": keyFile.path, "presenceDir": presence.path, "sessionsDir": dir.path("sessions").path,
                            "inboxDir": dir.path("relay").path])
@@ -363,7 +363,7 @@ enum PluginFixture {
         #expect(try await i.status(version: version) == .notInstalled)
         try await i.install(version: version)
         let folder = dir.path("claude-plugin").path
-        #expect(cli.changes == ["plugin marketplace add \(folder) --scope user", "plugin install fjord@fjord --scope user"])
+        #expect(cli.changes == ["plugin marketplace add \(folder) --scope user", "plugin install \(ClaudePlugin.id) --scope user"])
         #expect(try await i.status(version: version) == .installed)
         try await i.install(version: version)
         #expect(cli.changes.count == 2)
@@ -379,10 +379,10 @@ enum PluginFixture {
         #expect(try await i.status(version: "1.0.1-rdef") == .outdated)
         #expect(try await i.installedVersion() == version)
         cli.folderVersion = "1.0.1-rdef"
-        cli.plugins["fjord@fjord"]?.enabled = false
+        cli.plugins[ClaudePlugin.id]?.enabled = false
         #expect(try await i.status(version: "1.0.1-rdef") == .outdated)
         try await i.install(version: "1.0.1-rdef")
-        #expect(Array(cli.changes.suffix(1)) == ["plugin enable fjord@fjord --scope user"])
+        #expect(Array(cli.changes.suffix(1)) == ["plugin enable \(ClaudePlugin.id) --scope user"])
         #expect(try await i.status(version: "1.0.1-rdef") == .installed)
     }
 
@@ -394,7 +394,7 @@ enum PluginFixture {
         cli.folderVersion = "1.0.0-rnew"
         #expect(try await i.status(version: "1.0.0-rnew") == .outdated)
         try await i.install(version: "1.0.0-rnew")
-        #expect(Array(cli.changes.suffix(1)) == ["plugin update fjord@fjord --scope user"])
+        #expect(Array(cli.changes.suffix(1)) == ["plugin update \(ClaudePlugin.id) --scope user"])
         #expect(try await i.installedVersion() == "1.0.0-rnew")
         #expect(try await i.status(version: "1.0.0-rnew") == .installed)
     }
@@ -423,14 +423,14 @@ enum PluginFixture {
     @Test func aMovedFolderIsInstalledAfresh() async throws {
         let dir = TempDir(), cli = FakeClaudeCLI()
         cli.folderVersion = version
-        cli.marketplaces["fjord"] = "/Old/Fjord/claude-plugin"
-        cli.plugins["fjord@fjord"] = ("/Old/Fjord/claude-plugin", version, true)
+        cli.marketplaces[ClaudePlugin.name] = "/Old/Fjord/claude-plugin"
+        cli.plugins[ClaudePlugin.id] = ("/Old/Fjord/claude-plugin", version, true)
         let i = installer(dir, cli)
         #expect(try await i.status(version: version) == .outdated)
         try await i.install(version: version)
         let folder = dir.path("claude-plugin").path
-        #expect(cli.changes == ["plugin uninstall fjord@fjord --scope user", "plugin marketplace remove fjord",
-                                "plugin marketplace add \(folder) --scope user", "plugin install fjord@fjord --scope user"])
+        #expect(cli.changes == ["plugin uninstall \(ClaudePlugin.id) --scope user", "plugin marketplace remove \(ClaudePlugin.name)",
+                                "plugin marketplace add \(folder) --scope user", "plugin install \(ClaudePlugin.id) --scope user"])
     }
 
     @Test func uninstallingTakesOutOnlyWhatIsThere() async throws {
@@ -439,7 +439,7 @@ enum PluginFixture {
         let i = installer(dir, cli)
         try await i.install(version: version)
         try await i.uninstall()
-        #expect(Array(cli.changes.suffix(2)) == ["plugin uninstall fjord@fjord --scope user", "plugin marketplace remove fjord"])
+        #expect(Array(cli.changes.suffix(2)) == ["plugin uninstall \(ClaudePlugin.id) --scope user", "plugin marketplace remove \(ClaudePlugin.name)"])
         try await i.uninstall()
         #expect(cli.changes.count == 4)
     }
@@ -447,7 +447,7 @@ enum PluginFixture {
     @Test func theCLIsOwnWordsSayWhyItFailed() async throws {
         let dir = TempDir(), cli = FakeClaudeCLI()
         cli.failing = "plugin install"
-        await #expect(throws: ClaudePluginInstaller.Failure(message: "`claude plugin install fjord@fjord --scope user` failed: boom: plugin install")) {
+        await #expect(throws: ClaudePluginInstaller.Failure(message: "`claude plugin install \(ClaudePlugin.id) --scope user` failed: boom: plugin install")) {
             try await installer(dir, cli).install(version: version)
         }
         let none = installer(dir, cli, binary: nil)
@@ -608,7 +608,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         migrated.startRouter()
         await migrated.routerHookWork?.value
         #expect(migrated.routerPluginStatus == .installed)
-        #expect(cli.changes.contains("plugin install fjord@fjord --scope user"))
+        #expect(cli.changes.contains("plugin install \(ClaudePlugin.id) --scope user"))
         let installs = cli.changes.count
         // Up to date at the next launch: nothing to do.
         let same = store(dir, cli)
@@ -621,7 +621,7 @@ final class OSAllocatedUnfairLockBox: @unchecked Sendable {
         updated.router.enabled = true
         updated.startRouter()
         await updated.routerHookWork?.value
-        #expect(cli.changes.last == "plugin update fjord@fjord --scope user")
+        #expect(cli.changes.last == "plugin update \(ClaudePlugin.id) --scope user")
         let manifest = try String(contentsOf: dir.path("support/claude-plugin/.claude-plugin/plugin.json"), encoding: .utf8)
         #expect(manifest.contains(ClaudePlugin.version(app: "1.1.0")))
     }

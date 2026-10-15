@@ -180,8 +180,8 @@ private struct AccountPausingGuestClient: GuestClient {
         // The guest plugin has a name of its own, so Desktop's hookless --plugin-dir copy of the Mac's `fjord` cannot shadow it.
         let manifest = String(decoding: try #require(files[GuestRouterPaths.join(installed.paths.plugin, ".claude-plugin/plugin.json")]), as: UTF8.self)
         let market = String(decoding: try #require(files[GuestRouterPaths.join(installed.paths.plugin, ".claude-plugin/marketplace.json")]), as: UTF8.self)
-        #expect(manifest.contains("\"name\" : \"fjord-guest\""))
-        #expect(market.contains("\"name\": \"fjord-guest\"") && !market.contains("\"name\": \"fjord\""))
+        #expect(manifest.contains("\"name\" : \"\(ClaudePlugin.guestName)\""))
+        #expect(market.contains("\"name\": \"\(ClaudePlugin.guestName)\"") && !market.contains("\"name\": \"fjord\""))
         #expect(await guest.execRecords().map(\.argv).contains([account.claudeExecutable, "plugin", "uninstall", "fjord@fjord", "--scope", "user"]))
         #expect(await guest.execRecords().map(\.argv).contains([account.claudeExecutable, "plugin", "marketplace", "remove", "fjord"]))
         #expect(FileManager.default.fileExists(atPath: installed.paths.hook) == false)

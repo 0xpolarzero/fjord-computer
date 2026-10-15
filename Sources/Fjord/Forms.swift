@@ -603,7 +603,9 @@ struct FormHookInstaller {
     }
 
     var claudeDir: URL
-    var script: URL { claudeDir.appendingPathComponent("hooks/fjord-form.sh") }
+    /// `fjord-form.sh` for the installed app, `fjord-dev-form.sh` for debug and E2E builds (`AppIdentity`).
+    static func scriptName(development: Bool) -> String { development ? "fjord-dev-form.sh" : "fjord-form.sh" }
+    var script: URL { claudeDir.appendingPathComponent("hooks/" + Self.scriptName(development: AppIdentity.isDevelopment())) }
     var settings: URL { claudeDir.appendingPathComponent("settings.json") }
     var backup: URL { claudeDir.appendingPathComponent("settings.json.fjord-backup") }
     /// What the settings run: the script's path, quoted for the shell if it has to be.

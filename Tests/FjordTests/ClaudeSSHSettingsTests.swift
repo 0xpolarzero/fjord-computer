@@ -25,7 +25,7 @@ import Testing
         let entries = try #require(root["sshConfigs"] as? [[String: Any]])
         #expect(entries.count == 2)
         #expect(entries[0]["id"] as? String == "personal")
-        #expect(entries[1]["id"] as? String == "fjord-owner-1-computer-1")
+        #expect(entries[1]["id"] as? String == ClaudeSSHSettings.entryID(deviceId: "owner-1", computerId: "computer-1"))
         #expect(entries[1]["name"] as? String == "dev · Ari")
         #expect(entries[1]["sshHost"] as? String == "ssh-fjord-1")
         #expect(entries[1]["startDirectory"] == nil)
@@ -45,7 +45,7 @@ import Testing
         try writer.install(record("computer-2", alias: "ssh-other"))
         try writer.remove(deviceId: "owner-1", computerId: "computer-1")
         entries = try #require(try settings(home)["sshConfigs"] as? [[String: Any]])
-        #expect(entries.map { $0["id"] as? String } == ["fjord-owner-1-computer-2"])
+        #expect(entries.map { $0["id"] as? String } == [ClaudeSSHSettings.entryID(deviceId: "owner-1", computerId: "computer-2")])
     }
 
     @Test func refusesInvalidJSONAndMalformedSSHConfigShapesWithoutChangingBytes() throws {

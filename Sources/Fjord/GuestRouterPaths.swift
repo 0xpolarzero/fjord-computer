@@ -21,7 +21,7 @@ struct GuestRouterPaths: Equatable, Sendable {
         self.home = home
         root = Self.join(home, ".local/share/fjord/router")
         forms = Self.join(root, "forms")
-        plugin = Self.join(root, "plugin")
+        plugin = Self.join(root, AppIdentity.isDevelopment() ? "plugin-dev" : "plugin")
         key = Self.join(root, "relay.key")
         presence = Self.join(root, "presence")
         inbox = Self.join(root, "relay")
@@ -29,7 +29,7 @@ struct GuestRouterPaths: Equatable, Sendable {
         registry = Self.join(claudeDir, "sessions")
         projects = Self.join(claudeDir, "projects")
         settings = Self.join(claudeDir, "settings.json")
-        hook = Self.join(root, "fjord-form.sh")
+        hook = Self.join(root, FormHookInstaller.scriptName(development: AppIdentity.isDevelopment()))
         formModule = Self.join(root, "form-hook.mjs")
     }
 

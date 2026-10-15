@@ -82,7 +82,7 @@ import Testing
         let settings = try #require(try JSONSerialization.jsonObject(
             with: Data(contentsOf: ClaudeSSHSettings(home: tempHome).settings)) as? [String: Any])
         let entries = try #require(settings["sshConfigs"] as? [[String: String]])
-        #expect(entries.map { $0["id"] } == ["fjord-\(deviceID)-\(computerID)"])
+        #expect(entries.map { $0["id"] } == [ClaudeSSHSettings.entryID(deviceId: deviceID, computerId: computerID)])
         #expect(entries.first?["sshHost"] == alias)
         let paths = try GuestRouterPaths(home: account.home)
         #expect(await guest.filesSnapshot(for: remote)[paths.hook] != nil)

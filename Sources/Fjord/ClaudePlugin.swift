@@ -10,9 +10,13 @@ import Security
 /// The sources are kept in the repository under `Resources/ClaudePlugin` (where `claude plugin test` runs their tests) and
 /// embedded here, so the app writes them without bundling resources; a test keeps the two the same.
 enum ClaudePlugin {
-    static let name = "fjord"
+    /// Debug and E2E builds (`AppIdentity`) have names of their own, so a dev build never re-points the installed app's
+    /// marketplace or plugin in Claude Code.
+    static func pluginName(development: Bool) -> String { development ? "fjord-dev" : "fjord" }
+    static func guestPluginName(development: Bool) -> String { development ? "fjord-guest-dev" : "fjord-guest" }
+    static var name: String { pluginName(development: AppIdentity.isDevelopment()) }
     /// `<plugin>@<marketplace>`: the folder is its own marketplace, of the same name.
-    static let id = "fjord@fjord"
+    static var id: String { "\(name)@\(name)" }
     static let description = "Delivers what you send from Fjord's Router to this session as your own words."
 
     /// The version Claude Code records: the app's, and the sources' own digest, so a change in either is a new version.
@@ -25,8 +29,8 @@ enum ClaudePlugin {
     /// The guest's copy has a name of its own. Claude Desktop copies the Mac's local `fjord` plugin into an SSH session as
     /// a `--plugin-dir` without its hooks, and a `--plugin-dir` plugin overrides an installed one of the same name: a guest
     /// plugin called `fjord` would never run its module (live check, probes/guest-plugin.md).
-    static let guestName = "fjord-guest"
-    static let guestID = "fjord-guest@fjord-guest"
+    static var guestName: String { guestPluginName(development: AppIdentity.isDevelopment()) }
+    static var guestID: String { "\(guestName)@\(guestName)" }
     /// What the guest installer used to install (same name as the Mac's plugin); it is uninstalled when found.
     static let legacyGuestID = "fjord@fjord"
     static let legacyGuestMarketplace = "fjord"
@@ -706,11 +710,20 @@ export const register: Register = (on) => {
 
 """#
 
-    static var guestMarketplaceJSON: String {
-        marketplaceJSON.replacingOccurrences(of: #""name": "fjord""#, with: #""name": "\#(guestName)""#)
+    static var guestMarketplaceJSON: String { guestMarketplaceJSON(development: AppIdentity.isDevelopment()) }
+
+    static func guestMarketplaceJSON(development: Bool) -> String {
+        marketplaceTemplate.replacingOccurrences(of: #""name": "fjord""#, with: #""name": "\#(guestPluginName(development: development))""#)
     }
 
-    static let marketplaceJSON = #"""
+    static var marketplaceJSON: String { marketplaceJSON(development: AppIdentity.isDevelopment()) }
+
+    static func marketplaceJSON(development: Bool) -> String {
+        marketplaceTemplate.replacingOccurrences(of: #""name": "fjord""#, with: #""name": "\#(pluginName(development: development))""#)
+    }
+
+    /// The installed app's marketplace, as `Resources/ClaudePlugin/.claude-plugin/marketplace.json` holds it.
+    static let marketplaceTemplate = #"""
 {
   "name": "fjord",
   "owner": { "name": "Fjord" },

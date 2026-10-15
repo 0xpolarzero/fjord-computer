@@ -160,8 +160,8 @@ import Testing
 
     @Test func pathsWithSpacesAreQuoted() {
         let installer = FormHookInstaller(claudeDir: URL(fileURLWithPath: "/Users/a b/.claude"))
-        #expect(installer.command == "'/Users/a b/.claude/hooks/fjord-form.sh'")
-        #expect(FormHookInstaller(claudeDir: URL(fileURLWithPath: "/Users/ab/.claude")).command == "/Users/ab/.claude/hooks/fjord-form.sh")
+        #expect(installer.command == "'/Users/a b/.claude/hooks/\(FormHookInstaller.scriptName(development: AppIdentity.isDevelopment()))'")
+        #expect(FormHookInstaller(claudeDir: URL(fileURLWithPath: "/Users/ab/.claude")).command == "/Users/ab/.claude/hooks/\(FormHookInstaller.scriptName(development: AppIdentity.isDevelopment()))")
         #expect(installer.scriptText(executable: "/A/it's/Fjord").contains("exec '/A/it'\\''s/Fjord' --form-hook"))
     }
 
