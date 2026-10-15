@@ -1527,7 +1527,7 @@ struct CardDetails: View {
             HStack(spacing: 8) {
                 KindTag(kind: card.kind)
                 TriageChips(triage: card.triage)
-                ProjectLabel(name: project.name, color: project.color)
+                ProjectLabel(name: project.name, color: project.color, maxWidth: 240)
                     .cdsText((12, 16), .regular, CDS.Text.muted).lineLimit(1)
                 if let origin = card.origin { OriginTag(origin: origin) }
             }
@@ -2160,8 +2160,8 @@ struct WorkingCard: View, Equatable {
                         Spacer(minLength: 4)
                         // Its folder, as the cards that need you name it; narrower, it goes first, then what it left running.
                         if columnWidth >= 560 {
-                            ProjectLabel(name: project.name, color: project.color)
-                                .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).fixedSize().layoutPriority(1)
+                            ProjectLabel(name: project.name, color: project.color, maxWidth: 240)
+                                .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).layoutPriority(1)
                         }
                         if !row.tasks.isEmpty, columnWidth >= 480 { running.fixedSize().layoutPriority(1) }
                         if let start {
@@ -2702,8 +2702,8 @@ struct CardView: View, Equatable {
     private var lead: some View { CardLead(store: store, sessionID: card.sessionID) }
 
     private func projectLabel(_ project: RouterProject) -> some View {
-        ProjectLabel(name: project.name, color: project.color)
-            .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).fixedSize()
+        ProjectLabel(name: project.name, color: project.color, maxWidth: 240)
+            .cdsText((12, 16), .regular, CDS.Text.secondary).lineLimit(1).layoutPriority(1)
     }
 
     /// The card's full content: its brief over its form or plan (capped, scrolling inside), else over what it said.

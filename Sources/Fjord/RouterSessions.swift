@@ -179,6 +179,8 @@ struct SessionGlyph: View {
 struct ProjectLabel: View {
     let name: String
     let color: Color?
+    /// The widest it draws; a longer label is cut in its middle.
+    var maxWidth: CGFloat = .infinity
 
     var body: some View {
         HStack(spacing: 4) {
@@ -187,8 +189,11 @@ struct ProjectLabel: View {
             } else {
                 Image(systemName: "text.bubble").font(.system(size: 9, weight: .medium))
             }
-            Text(name)
+            // A long label (a guest project's "name · SSH host · silo", a path) gives way in its middle. Callers must not
+            // `fixedSize` it: that gives it its full ideal width and it overflows the card.
+            Text(name).lineLimit(1).truncationMode(.middle)
         }
+        .frame(maxWidth: maxWidth, alignment: .leading)
     }
 }
 

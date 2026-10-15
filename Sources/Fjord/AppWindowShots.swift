@@ -61,6 +61,9 @@ enum AppWindowShots {
         var appearance: NSAppearance.Name?
         /// Opens the ⌘K palette over the window.
         var palette: PaletteShot?
+        /// Replaces the whole window with this view (the list's scroll view isn't drawn by an offscreen capture, so a card
+        /// is shown on its own at the window's width).
+        var standalone: ((Store, RouterModel) -> AnyView)?
     }
 
     /// How a shot opens the palette: with a query typed, on the first row's actions page, on fixture items rather than the
@@ -276,6 +279,11 @@ enum AppWindowShots {
             manyNeeds(store)
             model.pane = .history
         }),
+        // A card whose project label is far too long (a guest project's "name · SSH host · silo"): it truncates inside the card.
+        Shot(name: "router-long-project", destination: { _ in .router }, size: CGSize(width: 1000, height: 420),
+             compose: { _, store in longProjects(store) }, standalone: longProjectCards),
+        Shot(name: "router-long-project-narrow", destination: { _ in .router }, size: CGSize(width: 520, height: 420),
+             compose: { _, store in longProjects(store) }, standalone: longProjectCards),
         // Every section folded to its line, what it holds said on it.
         Shot(name: "router-folded", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             Demo.routerTriage(store)
@@ -628,6 +636,30 @@ enum AppWindowShots {
     }
 
     /// Every open card six times over, so the zones would take the page.
+    private static func longProjects(_ store: Store) {
+        store.router.cards = store.router.cards.map {
+            var c = $0
+            if c.isOpen { c.folder = "/Users/demo/e2e-proj-with-a-very-long-guest-project-name · SSH e2e-relay-with-a-long-host-name · silo" }
+            return c
+        }
+    }
+
+    /// Every open card on its own, at the width of the window (the page's column and gutter around them).
+    private static func longProjectCards(_ store: Store, _ model: RouterModel) -> AnyView {
+        let cards = store.router.cards.filter(\.isOpen)
+        return AnyView(
+            VStack(spacing: 6) {
+                ForEach(cards) { card in
+                    CardView(store: store, model: model, card: card, expanded: false, form: nil, project: store.routerProject(card))
+                }
+            }
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color.white)
+            .overlay(alignment: .trailing) { Rectangle().fill(Color.red.opacity(0.5)).frame(width: 1) }
+        )
+    }
+
     private static func manyNeeds(_ store: Store) {
         let open = store.router.cards.filter(\.isOpen)
         store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
@@ -671,6 +703,15 @@ enum AppWindowShots {
             palette.open()
             if !open.query.isEmpty { palette.setQuery(open.query) }
             if open.actions { palette.showActions() }
+        }
+        if let standalone = shot.standalone {
+            let controller = NSHostingController(rootView: standalone(store, routerModel).column(shot.size.width))
+            controller.sizingOptions = []
+            let window = ShotWindow(contentRect: NSRect(origin: .zero, size: shot.size), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentViewController = controller
+            window.setContentSize(shot.size)
+            ShotRun.show(window)
+            return window
         }
         let root = AppRootView(store: store, navigator: navigator, routerModel: routerModel, hub: hub, palette: palette,
                                checksClaudeCode: false,
