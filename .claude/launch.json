@@ -4,14 +4,50 @@
     {
       "name": "fjord-design",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4817", "--directory", "docs/design/fjord"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4817",
+        "--directory",
+        "docs/design/fjord"
+      ],
       "port": 4817
+    },
+    {
+      "name": "router-viz",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4818",
+        "--directory",
+        "docs/design/router-viz"
+      ],
+      "port": 4818
     },
     {
       "name": "router-flight",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4820", "--directory", "docs/design/router-flight"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4820",
+        "--directory",
+        "docs/design/router-flight"
+      ],
       "port": 4820
+    },
+    {
+      "name": "router-viz-demo",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4819",
+        "--directory",
+        "docs/design/router-viz/demo"
+      ],
+      "port": 4819
     }
   ]
 }

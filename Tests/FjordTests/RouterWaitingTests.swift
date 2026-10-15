@@ -36,6 +36,11 @@ import Testing
 
     private func settle() async { for _ in 0..<20 { await Task.yield() } }
 
+    /// Lets the tasks the store started finish, as many yields as a loaded runner takes, bounded.
+    private func settle(until done: () -> Bool) async {
+        for _ in 0..<2000 where !done() { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+
     private let ciWatch = RouterTriage.Watch(target: .ci(thing: "pr:o/app#1"), label: "CI on o/app#1", ref: "o/app#1")
 
     @Test func ciGoingGreenMakesTheSessionReadyAndSaysSo() async {
@@ -351,7 +356,7 @@ import Testing
         var reads = 0
         s.routerTriager.reader = { _ in reads += 1; return "Opened o/app#1; waiting for its CI." }
         s.resolveWaits()
-        await settle()
+        await settle(until: { s.routerTriager.unwatched["a#t3"] != nil })
         s.resolveWaits()
         await settle()
         s.resolveWaits()
