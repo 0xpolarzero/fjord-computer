@@ -380,7 +380,6 @@ struct DigestPage: View {
     /// No brief yet: the Router off, the first one being written, or nothing going on.
     @ViewBuilder private var empty: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Brief").font(CDS.sans(20, .semibold)).foregroundStyle(CDS.Text.primary)
             Group {
                 if !store.router.enabled {
                     Text("Turn the Router on and the Brief will tell you what your sessions need, project by project.")
@@ -400,7 +399,6 @@ struct DigestPage: View {
     private func lead(_ digest: RouterDigest, items: [String: CanvasItem], page: RouterPage, fresh: Set<String>) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 10) {
-                Text("Brief").font(CDS.sans(20, .semibold)).foregroundStyle(CDS.Text.primary)
                 Spacer()
                 if store.routerDigester.writing {
                     ProgressView().controlSize(.mini)

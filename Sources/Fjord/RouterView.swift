@@ -528,7 +528,7 @@ final class RouterModel {
     /// Where the folds are kept: the app's preferences for the window's model, none for shots and tests.
     @ObservationIgnored private let defaults: UserDefaults?
 
-    /// Now as a list (the default) or a canvas (a beta, picked in the top bar), kept as the folds are.
+    /// Now as the Brief (the default), a canvas or a list, picked in the top bar, kept as the folds are.
     var layout: RouterLayout {
         didSet {
             guard layout != oldValue else { return }
@@ -545,7 +545,7 @@ final class RouterModel {
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
         folded = RouterZone.folds(in: defaults)
-        layout = defaults?.string(forKey: RouterLayout.key).flatMap(RouterLayout.init(rawValue:)) ?? .list
+        layout = defaults?.string(forKey: RouterLayout.key).flatMap(RouterLayout.init(rawValue:)) ?? .brief
         canvas = RouterCanvasState(defaults: defaults)
     }
     /// A fold of yours, or while a search is on, of the search's (`shownFolds`).

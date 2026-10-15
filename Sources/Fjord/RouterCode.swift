@@ -116,7 +116,7 @@ struct RouterMain: View {
                 .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 14))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 24)
-            // List or Canvas, the canvas a beta (RouterCanvasBeta.swift).
+            // Brief, Canvas or List (RouterCanvasBeta.swift).
             RouterLayoutSwitch(model: model).padding(.trailing, 12)
             // The palette's trigger, where the Router's own search field was.
             PaletteTrigger()

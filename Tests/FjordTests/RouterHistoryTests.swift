@@ -147,6 +147,7 @@ import Testing
     @Test func itOpensAtTheBottomFollowsWhileThereAndHoldsWhileScrolledUp() async throws {
         let store = store()
         let model = RouterModel()
+        model.layout = .list
         let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
             .frame(width: 1100, height: 900))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: .borderless, backing: .buffered,
@@ -213,6 +214,7 @@ import Testing
     @Test func yourScrollGoesOnAfterAScrollAskedForDuringIt() async throws {
         let store = store()
         let model = RouterModel()
+        model.layout = .list
         let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
             .frame(width: 1100, height: 900))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: .borderless, backing: .buffered,
@@ -267,6 +269,7 @@ import Testing
     @Test func aMessageAskedForBeforeThePageShowsIsWhereItOpensAndOnlyThatOnce() async {
         let store = store()
         let model = RouterModel()
+        model.layout = .list
         // An action's chip, clicked before the page is drawn: a message far up the log.
         let message = store.router.decisions[store.router.decisions.count - 200].id
         model.show(message: message)
@@ -299,6 +302,7 @@ import Testing
     @Test func aLineAskedForBeforeThePageShowsIsWhereItOpensAndOnlyThatOnce() async {
         let store = store()
         let model = RouterModel()
+        model.layout = .list
         // A banner clicked before the page is drawn: a line far up the history, outside the newest drawn.
         model.reveal(store.routerHistory[store.routerHistory.count - 160].id, highlight: false)
         func render() -> (NSHostingView<some View>, NSWindow) {
@@ -334,6 +338,7 @@ import Testing
         let open = store.router.cards.filter(\.isOpen)
         store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
         let model = RouterModel()
+        model.layout = .list
         // The last of Needs you, far below what it shows, asked for before the page is drawn.
         guard let last = store.routerZones.needs.last else { Issue.record("no cards"); return }
         model.reveal(last.id, highlight: false)
@@ -369,6 +374,7 @@ import Testing
         let open = store.router.cards.filter(\.isOpen)
         store.router.cards += (1...5).flatMap { n in open.map { var c = $0; c.id += "#copy\(n)"; return c } }
         let model = RouterModel()
+        model.layout = .list
         let hosting = NSHostingView(rootView: RouterCodeView(store: store, model: model, checksClaudeCode: false)
             .frame(width: 1100, height: 900))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 900), styleMask: .borderless, backing: .buffered,

@@ -266,7 +266,7 @@ struct RouterPageView: View {
     static let nowShare: CGFloat = 0.55
 
     var body: some View {
-        // The canvas (a beta, RouterCanvas.swift) takes the whole page when it is picked, the history a panel over it.
+        // The canvas (RouterCanvas.swift) takes the whole page when it is picked, the history a panel over it.
         Group {
             if model.layout == .canvas {
                 CanvasPage(store: store, model: model)

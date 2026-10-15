@@ -849,6 +849,8 @@ enum AppWindowShots {
         shot.prepare?(store)
         let navigator = AppNavigator(start: shot.destination(store), defaults: nil)
         let routerModel = RouterModel()
+        // The list unless the shot picks the Brief or the canvas (most shots are of the list's cards).
+        routerModel.layout = .list
         shot.compose?(routerModel, store)
         let hub = HubState()
         let palette = PaletteModel(store: store, navigator: navigator, routerModel: routerModel, hub: hub,

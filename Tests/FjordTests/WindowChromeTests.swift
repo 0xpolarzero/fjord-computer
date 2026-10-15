@@ -108,6 +108,7 @@ import Testing
         store.interceptOpen = { _ in }
         store.settings.toolsPicked = true
         let model = RouterModel()
+        model.layout = .list
         let root = AppRootView(store: store, navigator: AppNavigator(start: .router, defaults: nil), routerModel: model,
                                hub: HubState(), checksClaudeCode: false, sidebar: SidebarState(defaults: nil, collapsed: true))
         // The window's narrowest: the page beside the rail is narrow, one side at a time.
@@ -160,6 +161,7 @@ import Testing
         store.interceptOpen = { _ in }
         store.settings.toolsPicked = true
         let model = RouterModel()
+        model.layout = .list
         model.show(pane)
         let root = AppRootView(store: store, navigator: AppNavigator(start: .router, defaults: nil), routerModel: model,
                                hub: HubState(), checksClaudeCode: false, sidebar: SidebarState(defaults: nil, collapsed: true))

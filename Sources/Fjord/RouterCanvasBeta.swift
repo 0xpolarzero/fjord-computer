@@ -1,15 +1,13 @@
 import SwiftUI
 
-// The canvas is a beta you try from the Router's top bar (List / Canvas, tagged Beta); Now is the list until you pick
-// Canvas. The list is the Router's own and is drawn as it always was; what the canvas needs of its own lives here and in
-// the other RouterCanvas files.
+// Now is drawn as the Brief, a canvas or a list, picked in the Router's top bar (Brief by default). What the canvas needs of
+// its own lives here and in the other RouterCanvas files.
 
 extension RouterModel {
     /// Canvas picked, as the top bar's switch does (shots and tests).
     func pickCanvas() {
         layout = .canvas
     }
-
 
     /// The Brief picked (shots).
     func pickBrief() {
@@ -74,8 +72,8 @@ struct CanvasPage: View {
     }
 }
 
-/// List or Canvas, in the top bar: how Now is drawn. The pane switch's pill (`PaneSwitch`), its two
-/// segments icons named in their tips, Canvas's tip saying it is a beta, and a Beta tag beside the pill.
+/// Brief, Canvas or List, in the top bar: how Now is drawn. The pane switch's pill (`PaneSwitch`), its segments icons named
+/// in their tips.
 struct RouterLayoutSwitch: View {
     let model: RouterModel
     @State private var hovered: RouterLayout?
@@ -83,11 +81,11 @@ struct RouterLayoutSwitch: View {
     var body: some View {
         HStack(spacing: 6) {
             HStack(spacing: 0) {
-                segment(.list, "List", icon: "list.bullet", help: "Now as sections, one under the other")
-                segment(.canvas, "Canvas", icon: "square.on.square.dashed",
-                        help: "Beta: each project a frame on an infinite canvas; pan, pinch, drag a frame to move it, double-click to fit")
                 segment(.brief, "Brief", icon: "text.alignleft",
-                        help: "Prototype: what's going on, written for you; hover a highlight for its card, click to answer it")
+                        help: "What's going on, written for you; hover a highlight for its card, click to answer it")
+                segment(.canvas, "Canvas", icon: "square.on.square.dashed",
+                        help: "Each project a frame on an infinite canvas; pan, pinch, drag a frame to move it, double-click to fit")
+                segment(.list, "List", icon: "list.bullet", help: "Now as sections, one under the other")
             }
             .padding(1)
             .frame(height: ZoneChip.height)
@@ -95,7 +93,6 @@ struct RouterLayoutSwitch: View {
             .fixedSize()
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Show Now as")
-            BetaTag()
         }
     }
 
@@ -118,22 +115,8 @@ struct RouterLayoutSwitch: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 ? layout : (hovered == layout ? nil : hovered) }
-        .accessibilityLabel(layout == .canvas ? "Canvas, beta" : title)
+        .accessibilityLabel(title)
         .accessibilityAddTraits(picked ? .isSelected : [])
         .tip(title, help)
-    }
-}
-
-/// "Beta", as the app's tags are (Claude's Badge, xs) in the accent's tint.
-struct BetaTag: View {
-    var body: some View {
-        Text("Beta")
-            .font(CDS.sans(CDS.Badge.font, .medium))
-            .foregroundStyle(CDS.BadgeTint.accentText)
-            .padding(.horizontal, CDS.Badge.padX)
-            .frame(height: CDS.Badge.height)
-            .background(RoundedRectangle(cornerRadius: CDS.Badge.radius, style: .continuous).fill(CDS.BadgeTint.accentFill))
-            .fixedSize()
-            .accessibilityHidden(true)
     }
 }

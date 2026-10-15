@@ -8,11 +8,11 @@ enum RouterPane: String {
     case now, history
 }
 
-/// How Now is drawn: the list of sections, or the canvas (each project a frame, its sessions grouped and joined to their
-/// group by lines), a beta picked in the Router's top bar; the list by default. Kept across launches with the window's other
-/// preferences.
+/// How Now is drawn: the Brief (written summaries, the default), the canvas (each project a frame, its sessions grouped and
+/// joined to their group by lines) or the list of sections, picked in the Router's top bar. Kept across launches with the
+/// window's other preferences.
 enum RouterLayout: String {
-    case list, canvas, brief
+    case brief, canvas, list
 
     static let key = "routerLayout"
 }

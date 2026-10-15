@@ -29,8 +29,8 @@ import Testing
     @Test func theLayoutAndTheFramesFoldsAreKeptInTheWindowsPreferences() throws {
         let defaults = try #require(UserDefaults(suiteName: "RouterCanvasLayoutTests-\(UUID().uuidString)"))
         let model = RouterModel(defaults: defaults)
-        // The list by default.
-        #expect(model.layout == .list)
+        // The Brief by default.
+        #expect(model.layout == .brief)
         model.layout = .canvas
         let folder = try #require(make(RouterPage(), done: [card("d", "s", "/code/app", kind: .done, addressed: true)]).first)
         #expect(model.canvas.folded(folder))
@@ -41,7 +41,7 @@ import Testing
         again.layout = .list
         #expect(RouterModel(defaults: defaults).layout == .list)
         // Shots and tests keep nothing.
-        #expect(RouterModel().layout == .list)
+        #expect(RouterModel().layout == .brief)
     }
 
     @Test func itemsGoToTheirFolderAndGroupScratchTooAndMutedFoldersAreLeftOut() throws {

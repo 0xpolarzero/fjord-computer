@@ -38,6 +38,7 @@ import Testing
     @Test func nowAndHistoryAreEachOneScrollSideBySideOrOneAtATime() async {
         for width in [1100, 900] as [CGFloat] {
             let model = RouterModel()
+            model.layout = .list
             let store = demo(copies: 6)
             for zone in RouterZone.allCases { model.setFolded(zone, false) }
             let (hosting, window) = mount(store, model, width: width)
@@ -75,6 +76,7 @@ import Testing
     @Test func nowAndHistoryRunUnderTheTopBarAndTheComposer() async {
         guard #available(macOS 26, *) else { return }
         let model = RouterModel()
+        model.layout = .list
         let store = demo(copies: 6)
         for zone in RouterZone.allCases { model.setFolded(zone, false) }
         let (hosting, window) = mount(store, model, width: 1100, height: 900)
@@ -95,6 +97,7 @@ import Testing
     /// The composer grows a line at a time with what is typed and is back to one line once it is cleared.
     @Test func theComposerGrowsWithItsLinesAndShrinksBack() async throws {
         let model = RouterModel()
+        model.layout = .list
         let (hosting, window) = mount(demo(), model)
         defer { window.contentView = nil; window.orderOut(nil) }
         func field() -> NSScrollView? {
