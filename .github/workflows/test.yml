@@ -16,17 +16,25 @@ jobs:
       - uses: actions/checkout@v5
 
       # Bounded: a test that hangs can't hold the runner (the slowest full run takes a few minutes).
+      # A hang leaves no trace of what it was stuck on (the output stops where the last test finished), and a
+      # timed-out step's processes are gone before any later step runs. So a watchdog in this step samples the
+      # test process's threads at 17 minutes, which names the hung test, and then fails the run.
       - name: Test
         timeout-minutes: 20
-        run: ./scripts/test.sh
-
-      # A run that hits the timeout leaves no trace of what it was stuck on (its output stops where the last test finished):
-      # sample the test process's threads before the job ends, so the log names the hung test.
-      - name: Where the test process is stuck
-        if: cancelled() || failure()
         run: |
-          for pid in $(pgrep -f swiftpm-testing || true); do
-            echo "::group::sample $pid"
-            sample "$pid" 5 -file /dev/stdout || true
-            echo "::endgroup::"
+          ./scripts/test.sh &
+          suite=$!
+          for _ in $(seq 1020); do
+            kill -0 "$suite" 2>/dev/null || break
+            sleep 1
           done
+          if kill -0 "$suite" 2>/dev/null; then
+            echo "::error::The test run is still going after 17 minutes; sampling where it is stuck."
+            for pid in $(pgrep -f swiftpm-testing || true); do
+              echo "::group::sample $pid"
+              sample "$pid" 5 -file /dev/stdout || true
+              echo "::endgroup::"
+            done
+            exit 1
+          fi
+          wait "$suite"
