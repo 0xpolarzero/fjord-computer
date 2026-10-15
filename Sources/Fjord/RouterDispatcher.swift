@@ -782,9 +782,15 @@ struct RouterAskBack: Identifiable, Equatable {
             if form.isPlan {
                 // A plan is approved or sent back, never sent as text it stays pending under.
                 stage(job, "reading your decision")
-                let decision = await Self.planDecision(form, message: said, ask: jev(job.tools))
+                let read = await Self.planDecision(form, message: said, ask: jev(job.tools))
                 try Task.checkCancellation()
                 try linked(job.context)
+                // Jev couldn't be asked: nothing is read into your words, the plan stays waiting for you.
+                guard let decision = read else {
+                    note(job, .failed("Couldn't read your answer to “\(RouterDecision.clip(c.title, 40))” (Jev didn't answer): its plan is still waiting"),
+                         session: session, card: c.id)
+                    return
+                }
                 if snapshot.holds(store) {
                     stage(job, decision.approve ? "approving" : "sending it back")
                     _ = try await effects.answerPlan(job.tools, c.id, decision, snapshot)
@@ -948,10 +954,17 @@ struct RouterAskBack: Identifiable, Equatable {
             let away = { (target: String) in target != wrong && Self.session(of: target, store: store) != sent.session }
             found.ranked = found.ranked.filter { away($0.target) }
             found.card = found.card?.filter(away)
+            // A compound message's Fjord part already ran: it goes whole to a session (or is split), never to a run again.
+            let whole = entry.fjordPartDone == true
+            if whole {
+                found.ranked = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) == nil }
+                found.card = found.card?.filter { RouterRun.Intent(rawValue: $0) == nil }
+            }
             // Nothing left for an action's message (the repo's one clone was where it went): a folder of your choosing.
             let none = unattended && found.ranked.isEmpty && (found.card ?? []).isEmpty
             try linked(job.context)
-            askBack(job, found, suggestion: wrong, path: "elsewhere", note: noClone ? world?.note : nil, chooseFolder: noClone || none)
+            askBack(job, found, suggestion: wrong, path: "elsewhere", note: noClone ? world?.note : nil, chooseFolder: noClone || none,
+                    whole: whole)
         }
     }
 
@@ -1156,6 +1169,8 @@ struct RouterAskBack: Identifiable, Equatable {
         found.sure = false
         found.ranked = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) == nil }
         found.card = found.card?.filter { RouterRun.Intent(rawValue: $0) == nil }
+        // Kept on the entry: its send elsewhere asks the same question again, never rerunning the Fjord part.
+        store.updateDecision(job.id) { $0.fjordPartDone = true }
         askBack(job, found, path: "compound", whole: true)
     }
 

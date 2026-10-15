@@ -168,6 +168,9 @@ struct RouterDecision: Codable, Identifiable, Equatable {
     /// The decision whose compound message this one is a session part of (`RouterDispatcher.think`): it waited for your pick,
     /// and is yours like any message you sent. Nil for anything else.
     var splitFrom: UUID?
+    /// A compound message whose Fjord part the Router's run did (its ask offers the whole message to sessions): sent elsewhere
+    /// again, it is asked the same way and never run a second time.
+    var fjordPartDone: Bool?
     /// No longer set: parts of a compound message wait for your pick and are then your decisions, linked by `splitFrom`.
     /// Kept so entries from before still decode.
     var generated: Bool?

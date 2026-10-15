@@ -54,6 +54,8 @@ extension RouterCapability {
         .init(id: "reopen-card", intent: .changeFjord,
               outcome: "reopen a Router card the user archived (\"reopen the docs card\")",
               tools: [], roleSentence: nil),
+        // The Brief and the cards are read before a change too ("the docs card" is named by what the board shows).
+        .init(id: "change-board", intent: .changeFjord, outcome: nil, tools: ["board"], roleSentence: nil),
         .init(id: "question-board", intent: .question, outcome: nil, tools: ["board", "get_settings"],
               roleSentence: "The Brief is the short written summary of what needs the user, per project: you can read it through `board`.",
               reads: "cards, working sessions, the Brief, settings"),

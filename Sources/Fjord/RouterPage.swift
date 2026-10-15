@@ -279,8 +279,7 @@ struct RouterPageView: View {
         // "Split…" on a compound message's ask: the message is back in the composer to write its parts.
         .onChange(of: store.routerDispatcher.splitRequest) { _, request in
             guard let request else { return }
-            model.replyTo = nil
-            model.draft = request.text
+            model.restore(request.text)
             model.composerFocused = true
             store.routerDispatcher.splitRequest = nil
         }

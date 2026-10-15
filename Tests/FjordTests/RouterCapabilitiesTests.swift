@@ -26,7 +26,9 @@ struct RouterCapabilitiesTests {
         #expect(text.contains("archive a Router card") && text.contains("reopen a Router card") && text.contains("as seen"))
         #expect(!text.contains("mute or unmute a project") && !text.contains("stop a running session"))
         let tools = RouterCapability.toolNames(.changeFjord, triage: true)
-        for gone in ["mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session", "board"] { #expect(!tools.contains(gone), "\(gone)") }
+        for gone in ["mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session"] { #expect(!tools.contains(gone), "\(gone)") }
+        // The Brief (the role says it is read through `board`) is readable in a change run too, as in a question run.
+        #expect(tools.contains("board") && RouterCapability.toolNames(.compound, triage: true).contains("board"))
         let specs = Set(RouterTools.specs.compactMap { $0["name"] as? String })
         for gone in ["mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session"] { #expect(!specs.contains(gone), "\(gone)") }
         for intent in RouterRun.Intent.allCases {
@@ -56,8 +58,8 @@ struct RouterCapabilitiesTests {
         for triage in [true, false] {
             let all = FjordTools.names.subtracting(triage ? [] : FjordTools.triageNames)
             let reads = readNames.union(["board"]).subtracting(triage ? [] : FjordTools.triageNames)
-            #expect(RouterRun.toolNames(.changeFjord, triage: triage) == all)
-            #expect(RouterRun.toolNames(.compound, triage: triage) == all)
+            #expect(RouterRun.toolNames(.changeFjord, triage: triage) == all.union(["board"]))
+            #expect(RouterRun.toolNames(.compound, triage: triage) == all.union(["board"]))
             #expect(RouterRun.toolNames(.question, triage: triage) == reads)
         }
     }

@@ -1895,7 +1895,7 @@ import Testing
             await finish(d, f, id)
         }
         #expect(f.planned.map(\.decision.approve) == [true, true, true] && asked == 3)
-        // Jev down or unsure: sent back with the message, never approved by the word alone.
+        // Jev unsure: sent back with the message, never approved by the word alone.
         d.asker = { _, _ in asked += 1; return ["approves": .noul(0.1)] }
         let id = d.submit("approve?", context: RouterContext(replyTo: "local_a#w1"))
         await finish(d, f, id)
@@ -1925,12 +1925,20 @@ import Testing
         #expect(f.sent.isEmpty && f.prepared.isEmpty && f.answered.isEmpty, "a plan is decided, never also sent as text")
     }
 
-    @Test func aPlanWithoutJevIsSentBackWithTheMessage() async {
-        let (s, d, f) = setup()
-        holdForm(s, plan: "1. Do it")
-        let id = d.submit("sounds fine to me", context: RouterContext(replyTo: "local_a#w1"))
-        await finish(d, f, id)
-        #expect(f.planned.map(\.decision) == [.init(approve: false, feedback: "sounds fine to me")] && f.sent.isEmpty)
+    @Test func aPlanWhenJevCantBeAskedStaysWaitingAndTheHistorySaysSo() async {
+        // No asker, a failure, a timeout-like failure: no judgment is not a "no", so "Go ahead!" never goes back as feedback.
+        for asker in [nil, { (_: [String: JevClient.Question], _: [String: String]) async throws -> [String: JevClient.Answer] in
+            throw JevClient.Failure.transport("offline")
+        }] as [JevAsker?] {
+            let (s, d, f) = setup()
+            holdForm(s, plan: "1. Do it")
+            d.asker = asker
+            let id = d.submit("Go ahead!", context: RouterContext(replyTo: "local_a#w1"))
+            await finish(d, f, id)
+            #expect(f.planned.isEmpty && f.sent.isEmpty && f.prepared.isEmpty && f.answered.isEmpty)
+            #expect(s.router.cards[0].isOpen, "its plan is still waiting")
+            #expect(decision(s, id)?.done.contains { if case .failed(let why) = $0 { why.contains("still waiting") } else { false } } == true)
+        }
     }
 
     @Test func aFormAnsweredInYourOwnWordsGetsJevsPickPerQuestion() async {
@@ -2348,14 +2356,14 @@ import Testing
             #expect(!read.contains(change), "a question can't \(change)")
         }
         let all = RouterRun.toolNames(.changeFjord, triage: true)
-        #expect(all == FjordTools.names && all.contains("set_setting") && all.contains("list_categories"))
+        #expect(all == FjordTools.names.union(["board"]) && all.contains("set_setting") && all.contains("list_categories"))
         #expect(RouterRun.toolNames(.compound, triage: true) == all)
         for intent in RouterRun.Intent.allCases {
             let served = RouterRun.specs(intent, triage: true).compactMap { $0["name"] as? String }
             #expect(Set(served) == RouterRun.toolNames(intent, triage: true), "\(intent) serves what it may call")
         }
-        // With Triage off, none of its tools: only the settings (and the board, for a question).
-        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting"])
+        // With Triage off, none of its tools: only the settings and the board.
+        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting", "board"])
         #expect(RouterRun.toolNames(.question, triage: false) == ["get_settings", "board"])
         // Nothing of the sessions: no way to send, start or answer from a run.
         for intent in RouterRun.Intent.allCases {

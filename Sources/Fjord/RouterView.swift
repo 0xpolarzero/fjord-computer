@@ -470,6 +470,23 @@ final class RouterModel {
         var sentAt: Date? = nil
     }
 
+    /// "Split…": the compound message back in the composer. No armed reply, edit or pinned/predicted target goes with it (a send
+    /// would fork or go to that one with these words). A draft you had not sent stays: the message follows it, below.
+    func restore(_ text: String) {
+        replyTo = nil
+        editing = nil
+        live.reset()
+        let words = text.replacingOccurrences(of: MentionText.markString, with: "")
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pointers = []
+            draft = words
+        } else {
+            draft += "\n\n" + words
+        }
+        caretRequest = (draft as NSString).length
+        focusRequest &+= 1
+    }
+
     /// "Edit and resend": the message in the composer, which takes the keyboard; no reply or pin goes with it (picking one
     /// later ends the edit: the draft then goes there as a message of its own). Its pills come back as the "@name" they were
     /// sent as; an attachment character in it (pasted before the composer left them out) goes, as a paste's does.
