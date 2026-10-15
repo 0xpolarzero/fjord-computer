@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 // The palette's source for Triage: inbox items (archive included), found by title, number or URL, with the actions a row has in
-// the inbox; the categories; the Triage runs; and the link between a thing and the session or run that was started for it
+// the inbox; the categories; and the link between a thing and the session that was started for it
 // (docs/design/palette/DESIGN.md, Sources). Nothing with Triage off.
 
 /// Made once per palette open, on the main actor, in one pass over the entries: the dictionaries it needs are built before it,
@@ -27,7 +27,7 @@ enum PaletteTriageSource {
 
         // Inbox items, and which of them need you.
         let entries = store.entries
-        output.items.reserveCapacity(entries.count + categories.count + links.runs.count)
+        output.items.reserveCapacity(entries.count + categories.count)
         var candidates: [(index: Int, date: Date)] = []
         for entry in entries {
             let category = byID[entry.categoryID]
@@ -43,9 +43,6 @@ enum PaletteTriageSource {
 
         for category in categories {
             output.items.append(categoryItem(category, section: sections[store.sectionID(of: category) ?? UUID()], context: context))
-        }
-        for run in links.runs.values {
-            output.items.append(runItem(run, number: store.things[run.thingID]?.number, store: store, context: context))
         }
         return output
     }
@@ -69,26 +66,17 @@ enum PaletteTriageSource {
         }
     }
 
-    /// What was started for each thing: the latest session and the latest Triage run its category actions began, and the
-    /// runs themselves. A waiting Router card that watches a thing's CI links its session to it too. Built once.
+    /// What was started for each thing: the latest session its category actions began. A waiting Router card that watches a thing's CI links its session to it too. Built once.
     private struct Links {
         var session: [String: String] = [:]
-        var run: [String: UUID] = [:]
-        let runs: [UUID: ComputerRunRecord]
 
         @MainActor init(_ store: Store) {
             let ledger = store.actionLedger
-            runs = ledger.computerRuns
             var sessionAt: [String: Date] = [:]
-            var runAt: [String: Date] = [:]
             for action in ledger.runs.values where action.state != .baselined {
                 if let id = action.sessionID, sessionAt[action.thing].map({ action.at > $0 }) ?? true {
                     sessionAt[action.thing] = action.at
                     session[action.thing] = id
-                }
-                if let id = action.computerRunID, runs[id] != nil, runAt[action.thing].map({ action.at > $0 }) ?? true {
-                    runAt[action.thing] = action.at
-                    run[action.thing] = id
                 }
             }
             for card in store.router.cards where card.kind == .waiting && card.isOpen {
@@ -164,10 +152,6 @@ enum PaletteTriageSource {
 
         if let session = links.session[id], store.claudeSessions[session] != nil {
             actions.append(sessionAction(session, context: context))
-        }
-        if let run = links.run[id] {
-            let go = context.go
-            actions.append(PaletteAction(id: "run", title: "Show the Triage run", symbol: "desktopcomputer") { go(.computerRun(run)) })
         }
 
         if !entry.isDone {
@@ -262,23 +246,5 @@ enum PaletteTriageSource {
                            keywords: [section, "category", "inbox"].compactMap { $0 },
                            icon: .symbol(category.symbol, tint: category.color.swatch), weight: category.hidden ? 0.8 : 1,
                            actions: actions)
-    }
-
-    // MARK: Triage runs
-
-    private static func runItem(_ run: ComputerRunRecord, number: Int?, store: Store, context: PaletteContext) -> PaletteItem {
-        let go = context.go
-        let id = run.id
-        var words = [run.repo, run.branch, run.computerName, "Triage run", "computer"]
-        if let number { words += ["#\(number)", "\(run.repo)#\(number)"] }
-        if let title = store.things[run.thingID]?.title { words.append(title) }
-        var actions = [PaletteAction(id: "show", title: "Show", symbol: "desktopcomputer") { go(.computerRun(id)) }]
-        if let url = run.pullRequestURL {
-            actions.append(PaletteAction(id: "pr", title: "Open the PR", symbol: "arrow.up.right.square") { Link.open(url) })
-        }
-        let dot: PaletteDot? = run.phase.isEngineOwnedActive ? .running : (run.phase == .failed || run.phase == .unconfirmed ? .attention : nil)
-        return PaletteItem(id: "run:" + id.uuidString, kind: .computerRun, title: run.taskTitle,
-                           subtitle: "\(run.computerName) · \(run.phase.title)", keywords: words,
-                           icon: .symbol("desktopcomputer"), dot: dot, date: run.updatedAt, actions: actions)
     }
 }

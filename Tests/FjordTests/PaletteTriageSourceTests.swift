@@ -210,20 +210,12 @@ import Testing
         #expect(entry.actions.contains { $0.title == "Open in Router" })
     }
 
-    @Test func aSessionAndARunStartedForAThingAreActionsOfIt() throws {
+    @Test func aSessionStartedForAThingIsAnActionOfIt() throws {
         let store = store([InboxFixture.pr(9)])
         store.setTool(.router, on: true)
         store.claudeSessions["s1"] = ClaudeSession(id: "s1", title: "Fix 9", folder: nil, lastActivity: Date())
-        let settings = RunInComputerSettings(deviceID: nil, computerID: "c1", computerName: "linux-1", workspaceRoot: "/workspace",
-                                             promptTemplate: "Fix {title}", model: "sonnet", effort: "high",
-                                             permissionMode: .default, allowedTools: [], recordProof: false)
-        var record = ComputerRunRecord(id: UUID(), categoryID: UUID(), actionID: UUID(), thingID: "pr:a/one#9", triggerKey: "enter",
-                                       settings: settings, repo: "a/one", repositoryPath: "/workspace/one", branch: "fjord/fix-9",
-                                       taskTitle: "Fix 9", prompt: "Fix 9")
-        record.pullRequestURL = URL(string: "https://github.com/a/one/pull/99")
-        store.actionLedger.computerRuns[record.id] = record
         store.actionLedger.runs["k"] = ActionRun(category: UUID(), thing: "pr:a/one#9", action: UUID(), trigger: "enter",
-                                                 state: .done, at: Date(), sessionID: "s1", computerRunID: record.id)
+                                                 state: .done, at: Date(), sessionID: "s1")
 
         let visits = Visits()
         let output = PaletteTriageSource.make(context(store, visits: visits))
@@ -234,18 +226,6 @@ import Testing
         try #require(entry.actions.first { $0.title == "Open its session" }).run()
         #expect(opened == ["Open in Claude · Fix 9"])
         #expect(visits.calls.isEmpty)
-        try #require(entry.actions.first { $0.title == "Show the Triage run" }).run()
-        #expect(visits.calls.last?.destination == .computerRun(record.id))
-
-        let run = try #require(item("run:" + record.id.uuidString, in: output))
-        #expect(run.kind == .computerRun)
-        #expect(run.title == "Fix 9")
-        #expect(run.subtitle == "linux-1 · \(record.phase.title)")
-        for word in ["a/one", "fjord/fix-9", "#9"] { #expect(run.keywords.contains(word), "missing \(word)") }
-        #expect(run.date == record.updatedAt)
-        #expect(run.actions.map(\.title) == ["Show", "Open the PR"])
-        run.actions[0].run()
-        #expect(visits.calls.last?.destination == .computerRun(record.id))
     }
 
     @Test func openingItsSessionSelectsItsCardOrRevealsItsWorkingRow() throws {

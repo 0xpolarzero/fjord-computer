@@ -12,7 +12,6 @@ enum AppDestination: Hashable {
     case computers
     /// A computer of This Mac or of a connected device; ids are owner-local, so the owner is part of the place.
     case computerDetail(GuestReference)
-    case computerRun(UUID)
     case settings
     case categories
     case snippets
@@ -25,7 +24,6 @@ enum AppDestination: Hashable {
         case .router: "router"
         case .computers: "computers"
         case .computerDetail(let target): "computer-detail:" + target.key
-        case .computerRun(let id): "computer-run:" + id.uuidString
         case .settings: "settings"
         case .categories: "categories"
         case .snippets: "snippets"
@@ -41,10 +39,7 @@ enum AppDestination: Hashable {
         case "categories": self = .categories
         case "snippets": self = .snippets
         default:
-            if token.hasPrefix("computer-run:") {
-                guard let id = UUID(uuidString: String(token.dropFirst("computer-run:".count))) else { return nil }
-                self = .computerRun(id)
-            } else if token.hasPrefix("computer-detail:") {
+            if token.hasPrefix("computer-detail:") {
                 let key = String(token.dropFirst("computer-detail:".count))
                 guard let separator = key.firstIndex(of: "/") else { return nil }
                 let owner = String(key[..<separator])
@@ -78,7 +73,7 @@ enum AppDestination: Hashable {
     /// (there while either is on).
     var tool: Tool? {
         switch self {
-        case .category, .done, .categories, .computerRun: .triage
+        case .category, .done, .categories: .triage
         case .router: .router
         case .computers, .computerDetail: .computers
         case .settings, .snippets: nil

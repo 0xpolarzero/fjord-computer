@@ -31,7 +31,7 @@ enum PalettePlacesSource {
         case .settings: ("Settings", "gearshape", ["preferences", "options", "configuration"])
         case .categories: ("Inbox categories", "tray.2", ["inbox", "rules", "groups", "sections", "triage"])
         // A category is a Triage item's; a computer, a run or the rest of them are reached from their own rows.
-        case .category, .computerDetail, .computerRun: nil
+        case .category, .computerDetail: nil
         }
     }
 

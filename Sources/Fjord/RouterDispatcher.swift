@@ -515,6 +515,7 @@ struct RouterAskBack: Identifiable, Equatable {
         tools.decision = id
         tools.beginTurn(text, pills: pills)
         tools.tagged = RouterPointers.context(mentions, store: store!)
+        tools.checkpointBeforeGuestStart = action
         if action { tools.deliveryCheck = { [weak store = self.store] in store?.toolsLinked == true ? nil : Self.unlinkedWords } }
         configure?(tools)
         return tools

@@ -32,8 +32,6 @@ enum PaletteFixture {
                  age: 26 * 3600),
             item("entry:3", .entry, "CI: Release workflow failed on main", "fjord · Release", icon: .symbol("xmark.octagon"),
                  dot: .attention, age: 3 * 86_400),
-            item("computerRun:1", .computerRun, "Reproduce the reconnect failure", "dev · Running", icon: .symbol("desktopcomputer"),
-                 dot: .running, age: 5 * 60),
             item("project:1", .project, "lookout", "~/code/projects/lookout", icon: .symbol("folder.fill", tint: .orange),
                  age: 12 * 86_400),
             item("category:1", .category, "Reviews requested", "Inbox category", icon: .symbol("eye", tint: CDS.Text.accent)),

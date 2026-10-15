@@ -19,7 +19,6 @@ enum ActionKind: Codable, Hashable {
     /// sends it to a session working in the thing's repo or starts one in a local clone (`ActionPrompt`).
     case askRouter(prompt: ActionPrompt)
     case comment(String)
-    case runInComputer(settings: RunInComputerSettings)
     /// Re-run the failed jobs of the failing workflow runs.
     case rerun
 
@@ -29,7 +28,7 @@ enum ActionKind: Codable, Hashable {
     // Written as the synthesized form was, so what is saved reads back. A `session(folder, prompt:)` saved before the Router
     // was the only way in is read as `askRouter` with the same prompt (the Router picks the folder now). A prompt saved before
     // prompts had pills is read with its placeholders made pills (`ActionPrompt.migrated`).
-    private enum Key: String, CodingKey { case askRouter, session, comment, runInComputer, rerun }
+    private enum Key: String, CodingKey { case askRouter, session, comment, rerun }
     private enum Field: String, CodingKey { case _0 }
 
     init(from decoder: Decoder) throws {
@@ -39,9 +38,6 @@ enum ActionKind: Codable, Hashable {
             self = .askRouter(prompt: ActionPrompt(from: inner))
         } else if c.contains(.comment) {
             self = .comment(try c.nestedContainer(keyedBy: Field.self, forKey: .comment).decode(String.self, forKey: ._0))
-        } else if c.contains(.runInComputer) {
-            self = .runInComputer(settings: try c.nestedContainer(keyedBy: Field.self, forKey: .runInComputer)
-                .decode(RunInComputerSettings.self, forKey: ._0))
         } else if c.contains(.rerun) {
             self = .rerun
         } else {
@@ -58,9 +54,6 @@ enum ActionKind: Codable, Hashable {
         case .comment(let text):
             var inner = c.nestedContainer(keyedBy: Field.self, forKey: .comment)
             try inner.encode(text, forKey: ._0)
-        case .runInComputer(let settings):
-            var inner = c.nestedContainer(keyedBy: Field.self, forKey: .runInComputer)
-            try inner.encode(settings, forKey: ._0)
         case .rerun:
             _ = c.nestedContainer(keyedBy: Field.self, forKey: .rerun)
         }
@@ -80,7 +73,6 @@ struct CategoryAction: Codable, Hashable, Identifiable {
         switch kind {
         case .askRouter: "Send to the Router"
         case .comment: "Comment on GitHub"
-        case .runInComputer: "Run in a computer"
         case .rerun: "Re-run failed checks"
         }
     }
@@ -89,7 +81,6 @@ struct CategoryAction: Codable, Hashable, Identifiable {
         switch kind {
         case .askRouter: "sparkles"
         case .comment: "text.bubble"
-        case .runInComputer: "desktopcomputer"
         case .rerun: "arrow.clockwise"
         }
     }
@@ -98,7 +89,6 @@ struct CategoryAction: Codable, Hashable, Identifiable {
         switch self.kind {
         case .askRouter: true
         case .comment: kind != .workflow
-        case .runInComputer: true
         case .rerun: kind != .issue
         }
     }
@@ -112,7 +102,11 @@ struct ActionList: Codable, Hashable {
     var isEmpty: Bool { items.isEmpty }
 
     init(_ items: [CategoryAction] = []) { self.items = items }
-    init(from decoder: Decoder) throws { items = try decoder.singleValueContainer().decode([CategoryAction].self) }
+    /// Read one by one: an action of a kind this build no longer has (the headless "Run in a computer") is dropped, and the
+    /// rest of the category stays.
+    init(from decoder: Decoder) throws {
+        items = try decoder.singleValueContainer().decode([Lossy<CategoryAction>].self).compactMap(\.value)
+    }
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         try c.encode(items)
@@ -146,8 +140,6 @@ struct ActionRun: Codable, Hashable {
     /// The entry in the Router's history (its decision log id) the run left: what the Router made of its message follows
     /// it (`Store.followActionRun`).
     var message: UUID?
-    /// The durable Engine-owned computer run started for this Triage action.
-    var computerRunID: UUID? = nil
     /// For `enter`: when the thing was first seen out of the category since (nil while it is in).
     var left: Date?
 }
@@ -164,8 +156,6 @@ struct ActionLedger: Codable, Equatable {
 
     var baselines: [UUID: Baseline] = [:]
     var runs: [String: ActionRun] = [:]
-    /// Durable computer runs keyed by the id linked from their action records.
-    var computerRuns: [UUID: ComputerRunRecord] = [:]
     /// PRs read again with every latest review (`InboxSync.reviewsShape`) since the last plan: the reviews they had all
     /// along, back now, are taken as old, once. Kept by an earlier build, every review of the PR; this one keeps
     /// `restoredReviewIDs` instead.
@@ -757,7 +747,7 @@ enum InboxActions {
 
     /// What a row says about an action: the state of its latest run, or that it is waiting.
     struct Chip: Equatable, Identifiable {
-        enum Target: Equatable { case session(String), url(URL), router, computerRun(UUID) }
+        enum Target: Equatable { case session(String), url(URL), router }
         var id: UUID
         var label: String
         var tint: FactTint
@@ -807,20 +797,19 @@ enum InboxActions {
             return Chip(id: action.id, label: "session started", tint: .neutral, target: run.sessionID.map { .session($0) },
                         help: "Its first message goes once the Claude app runs the session. Open the session in Claude")
         case .running, .baselined:
-            if case .runInComputer = action.kind,
-               let id = run.computerRunID, let computerRun = ledger.computerRuns[id] {
-                return Chip(id: action.id, label: computerRun.phase.title, tint: .neutral,
-                            target: .computerRun(id), help: computerRun.detail.isEmpty ? "Open the computer run result" : computerRun.detail)
-            }
-            return Chip(id: action.id, label: "running…", tint: .neutral,
-                        target: run.computerRunID.map { .computerRun($0) }, help: action.title)
+            return Chip(id: action.id, label: "running…", tint: .neutral, target: nil, help: action.title)
         case .failed:
             let reason = run.detail.count > 48 ? String(run.detail.prefix(47)) + "…" : run.detail
-            return Chip(id: action.id, label: "failed: \(reason)", tint: .danger,
-                        target: run.computerRunID.map { .computerRun($0) }, help: "\(action.title) failed: \(run.detail)")
+            return Chip(id: action.id, label: "failed: \(reason)", tint: .danger, target: nil,
+                        help: "\(action.title) failed: \(run.detail)")
         case .done:
             switch action.kind {
             case .askRouter:
+                if run.detail == readyInClaudeWords {
+                    return Chip(id: action.id, label: "ready in Claude: press Send", tint: .attention, target: .router,
+                                help: "The session in the computer is prepared in Claude with its prompt. Press Send there to start it. "
+                                    + "Open the Router", message: run.message)
+                }
                 if let session = run.sessionID, run.detail.hasPrefix("sent to ") {
                     let label = run.detail.count > 48 ? String(run.detail.prefix(47)) + "…" : run.detail
                     return Chip(id: action.id, label: label, tint: .neutral, target: .session(session),
@@ -835,11 +824,6 @@ enum InboxActions {
             case .comment:
                 return Chip(id: action.id, label: "commented", tint: .neutral, target: run.url.map { .url($0) },
                             help: "Open the comment on GitHub")
-            case .runInComputer:
-                let phase = run.computerRunID.flatMap { ledger.computerRuns[$0]?.phase }
-                let label = phase?.title ?? (run.detail.isEmpty ? "run complete" : run.detail)
-                return Chip(id: action.id, label: label, tint: .neutral,
-                            target: run.computerRunID.map { .computerRun($0) }, help: "Open the computer run result")
             case .rerun:
                 return Chip(id: action.id, label: run.detail.isEmpty ? "re-ran" : run.detail, tint: .neutral, target: nil,
                             help: "Failed checks were re-run \(ago(run.at, now: now))")
@@ -871,14 +855,6 @@ protocol ActionPerformer: AnyObject {
     func rerun(repo: String, run: FailedRun) async throws -> Int
     /// The local clones of a repo among the known project folders.
     func clones(of repo: String) -> [String]
-    /// Runs one already-claimed action on its selected computer. The ledger record is persisted before this call.
-    func runInComputer(settings: RunInComputerSettings, runID: UUID, thing: Thing) async throws -> ComputerRunRecord
-}
-
-extension ActionPerformer {
-    func runInComputer(settings: RunInComputerSettings, runID: UUID, thing: Thing) async throws -> ComputerRunRecord {
-        throw ActionFailure("Run in a computer is unavailable.")
-    }
 }
 
 struct ActionFailure: LocalizedError {
@@ -890,8 +866,7 @@ struct ActionFailure: LocalizedError {
 extension InboxActions {
     /// Does one job; the run that records it.
     @MainActor
-    static func perform(_ job: Job, with performer: ActionPerformer, computerRunID: UUID? = nil,
-                        now: Date = Date()) async -> ActionRun {
+    static func perform(_ job: Job, with performer: ActionPerformer, now: Date = Date()) async -> ActionRun {
         let thing = job.entry.thing
         var run = ActionRun(category: job.category.id, thing: thing.id, action: job.action.id, trigger: job.keys.first ?? "enter",
                             state: .done, at: now)
@@ -913,14 +888,6 @@ extension InboxActions {
                 guard !body.isEmpty else { throw ActionFailure("the comment is empty") }
                 run.url = try await performer.comment(repo: thing.repo, number: number, body: body)
                 run.detail = "commented"
-            case .runInComputer(let settings):
-                guard let computerRunID else { throw ActionFailure("The computer run was not durably claimed.") }
-                run.computerRunID = computerRunID
-                let result = try await performer.runInComputer(settings: settings, runID: computerRunID, thing: thing)
-                run.detail = result.detail
-                if result.phase == .result { run.state = .done }
-                else if result.phase == .unconfirmed || result.phase.isEngineOwnedActive { run.state = .running }
-                else { run.state = .failed }
             case .rerun:
                 let failed = try await performer.failedRuns(for: thing)
                 guard !failed.isEmpty else { throw ActionFailure("no failed run to re-run") }
@@ -929,11 +896,7 @@ extension InboxActions {
                 run.detail = jobs == 0 ? "re-ran" : "re-ran \(jobs) job\(jobs == 1 ? "" : "s")"
             }
         } catch {
-            if let failure = error as? ComputerRunFailure, case .unconfirmed = failure {
-                run.state = .running
-            } else {
-                run.state = .failed
-            }
+            run.state = .failed
             run.detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         run.at = now
@@ -971,14 +934,6 @@ extension InboxActions {
             let body = substitute(text, thing: thing)
             lines.append("Comments on \(reference(thing)):")
             lines.append(body.isEmpty ? "(empty: this would fail)" : body)
-        case .runInComputer(let settings):
-            lines.append("Runs \(reference(thing)) in \(settings.computerName.isEmpty ? "the selected computer" : settings.computerName).")
-            if let path = try? settings.repositoryPath(repo: thing.repo) { lines.append("Guest clone: \(path)") }
-            lines.append("Automatic checkpoint: \(ComputerRunCheckpointLabel.make(task: thing.title))")
-            lines.append("Proof video: \(settings.recordProof ? "requested" : "off")")
-            lines.append("Prompt sent to Claude:")
-            lines.append(ComputerRunPrompt.render(settings.promptTemplate, thing: thing))
-            lines.append(ComputerRunGate.productionBlocker)
         case .rerun:
             if let performer, let failed = try? await performer.failedRuns(for: thing) {
                 lines.append(failed.isEmpty ? "No failed run: nothing would be re-run."
@@ -1099,38 +1054,9 @@ extension Store {
                 // match then.
                 let rules = before.baselines[job.category.id]?.rules
                 var running = before
-                var computerRunID: UUID?
-                if case .runInComputer(let settings) = job.action.kind {
-                    do {
-                        try settings.validate()
-                        guard let repo = InboxActions.trustedRepo(job.entry.thing.repo), repo == job.entry.thing.repo else {
-                            throw ComputerRunFailure.workspace("The GitHub repository name is invalid.")
-                        }
-                        let id = UUID()
-                        let prompt = ComputerRunPrompt.render(settings.promptTemplate, thing: job.entry.thing)
-                        guard !prompt.isEmpty else { throw ComputerRunFailure.result("The rendered task prompt is empty.") }
-                        let path = try settings.repositoryPath(repo: repo)
-                        let taskTitle = UntrustedText.clean(job.entry.thing.title, limit: 200)
-                        let record = ComputerRunRecord(id: id, categoryID: job.category.id, actionID: job.action.id,
-                            thingID: job.entry.id, triggerKey: job.keys.first ?? "enter", settings: settings, repo: repo,
-                            repositoryPath: path, branch: ComputerRunPrompt.branch(task: taskTitle, runID: id),
-                            taskTitle: taskTitle, prompt: prompt, now: now)
-                        running.computerRuns[id] = record
-                        computerRunID = id
-                    } catch {
-                        var failed = ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id,
-                                               trigger: job.keys.first ?? "enter", state: .failed, at: now,
-                                               detail: error.localizedDescription)
-                        for key in job.keys { failed.trigger = key; running.set(failed) }
-                        actionLedger = running
-                        _ = await actionsWritten()
-                        continue
-                    }
-                }
                 for key in job.keys {
                     var run = ActionRun(category: job.category.id, thing: job.entry.id, action: job.action.id,
                                         trigger: key, state: .running, at: now)
-                    run.computerRunID = computerRunID
                     running.set(run)
                 }
                 actionLedger = running
@@ -1167,7 +1093,7 @@ extension Store {
                 }
                 let dropped = job.keys.filter { !checked.keys.contains($0) }
                 if !dropped.isEmpty { actionLedger = undone(dropped) }
-                let result = await InboxActions.perform(checked, with: performer, computerRunID: computerRunID, now: now)
+                let result = await InboxActions.perform(checked, with: performer, now: now)
                 var next = actionLedger
                 for key in checked.keys {
                     var run = result
@@ -1312,7 +1238,6 @@ extension Store {
     /// since it was planned, it isn't run; it is held back from the next plan on), and once routing is ready
     /// (`routingReady`): until then it stays due, and runs once it is.
     private func runnable(_ job: InboxActions.Job) -> Bool {
-        if case .runInComputer = job.action.kind, !computersOn { return false }
         guard job.action.kind.sendsToRouter else { return true }
         guard toolsLinked else { return false }
         if !routingReady { actionsAwaitRouting = true }
@@ -1349,7 +1274,6 @@ extension Store {
         switch target {
         case .session(let id): openAgent(id)
         case .router: break  // the chip opens the window on the Router (it has the environment for it)
-        case .computerRun: break  // the chip opens the run result destination in the app window
         case .url(let url):
             if let interceptOpen { interceptOpen("Open on GitHub · comment") } else { Link.open(url) }
         }
@@ -1387,37 +1311,14 @@ extension Store {
             ledger.baselines = [:]
         }
         if keepingAside || !lost.isEmpty { actionsDisk.keepAside(data) }
-        // Ordinary running actions are not retried after quit. A computer run keeps its durable Engine-owned record so
-        // launch can reattach without submitting another exec. A pending rollback reserves the same target and its saved
-        // job id is polled without submitting another restore.
-        var computerRunsToResume: [UUID] = []
-        var rollbacksToResume: [UUID] = []
-        for (id, computerRun) in ledger.computerRuns {
-            let target = GuestReference(deviceId: computerRun.deviceID, computerId: computerRun.computerID)
-            if computerRun.phase.isEngineOwnedActive || computerRun.phase == .unconfirmed {
-                ComputerRunCoordinator.reserveRestoredTarget(target)
-                computerRunsToResume.append(id)
-            }
-            if computerRun.rollbackOperationID != nil && computerRun.rolledBackAt == nil {
-                ComputerRunCoordinator.reserveRestoredTarget(target)
-                if computerRun.rollbackJobID != nil { rollbacksToResume.append(id) }
-            }
-        }
+        // Ordinary running actions are not retried after quit.
         for (key, run) in ledger.runs where run.state == .running {
-            if let id = run.computerRunID, let computerRun = ledger.computerRuns[id],
-               computerRun.phase.isEngineOwnedActive || computerRun.phase == .unconfirmed { continue }
             var r = run
             r.state = .failed
             r.detail = "interrupted"
             ledger.runs[key] = r
         }
         actionLedger = ledger
-        for id in computerRunsToResume {
-            Task { @MainActor [weak self] in await self?.resumeComputerRun(id) }
-        }
-        for id in rollbacksToResume {
-            Task { @MainActor [weak self] in await self?.resumeComputerRunRollback(id) }
-        }
     }
 
 
@@ -1488,7 +1389,7 @@ private struct LossyLedger: Decodable {
     var lost: [String] = []
 
     private enum CodingKeys: String, CodingKey {
-        case baselines, runs, computerRuns, restoredReviews, restoredReviewIDs, restoredBefore, awaitedRatings
+        case baselines, runs, restoredReviews, restoredReviewIDs, restoredBefore, awaitedRatings
     }
 
     init(from decoder: Decoder) throws {
@@ -1503,13 +1404,6 @@ private struct LossyLedger: Decodable {
             if ledger.runs.count < all.count { lost.append("\(all.count - ledger.runs.count) of runs") }
         } catch {
             lost.append("runs")
-        }
-        do {
-            let all = try c.decodeIfPresent([UUID: Lossy<ComputerRunRecord>].self, forKey: .computerRuns) ?? [:]
-            ledger.computerRuns = all.compactMapValues(\.value)
-            if ledger.computerRuns.count < all.count { lost.append("computer runs") }
-        } catch {
-            lost.append("computer runs")
         }
         // What is still to come (reviews back, ratings awaited) is kept across a restart: without it, what was there is new.
         do { ledger.restoredReviews = try c.decodeIfPresent(Set<String>.self, forKey: .restoredReviews) } catch {
@@ -1565,35 +1459,6 @@ final class StoreActionPerformer: ActionPerformer {
     init(store: Store) { self.store = store }
 
     func clones(of repo: String) -> [String] { store.localClones(of: repo) }
-
-    func runInComputer(settings: RunInComputerSettings, runID: UUID, thing: Thing) async throws -> ComputerRunRecord {
-        guard let record = store.actionLedger.computerRuns[runID] else {
-            throw ActionFailure("The computer run record was not saved.")
-        }
-        let guest: any GuestClient
-        if let registered = GuestRouterRuntime.shared.guestClient(for: record.location) {
-            guest = registered
-        } else if let socket = store.engineClient as? SocketEngineClient {
-            guest = SiloGuestClient(engine: socket)
-        } else {
-            throw ActionFailure("No guest client is available for this computer.")
-        }
-        let targetStore = store
-        let coordinator = ComputerRunCoordinator(engine: store.engineClient, guest: guest,
-            authorization: .blocked(ComputerRunGate.productionBlocker),
-            shouldContinue: { [weak targetStore] in
-                targetStore?.computerRunIsCurrent(record, settings: settings) ?? false
-            }, cancellationRequested: { [weak targetStore] in
-                targetStore?.actionLedger.computerRuns[record.id]?.cancellationRequested == true
-            }, progressWriter: { [weak targetStore] source, detail, updatedAt in
-                guard let targetStore else { return false }
-                return await targetStore.saveComputerRunProgress(source, detail: detail, updatedAt: updatedAt)
-            })
-        return try await coordinator.run(record, settings: settings, thing: thing) { [weak targetStore] updated in
-            guard let targetStore else { return false }
-            return await targetStore.saveComputerRun(updated)
-        }
-    }
 
     func sendToRouter(_ message: ActionMessage) async throws -> UUID {
         // Only while Triage and the Router are both on: the dispatcher checks again before each step that reaches a session

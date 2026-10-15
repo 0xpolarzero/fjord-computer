@@ -14,10 +14,7 @@ fi
 APP="build/Fjord.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-scripts/build-guest-recorder.sh
 cp "$BIN" "$APP/Contents/MacOS/Fjord"
-[ -d Resources/GuestRuns ] && cp -R Resources/GuestRuns "$APP/Contents/Resources/"
-cp build/GuestRuns/GuestRecorder.app.zip "$APP/Contents/Resources/GuestRuns/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 # The layered icon, compiled from the Icon Composer document: light, dark, tinted and clear on macOS 26, its light tile on
 # earlier systems (CFBundleIconName picks the catalog over the .icns, which stays for whatever reads the file alone).

@@ -275,7 +275,7 @@ struct ComputerAgentToolsPanel: View {
                     }
                 }
                 if let error = model.agentToolsError[target.key] { ComputerNotice(text: error, tone: .danger) }
-                Text("Router sessions and Triage runs in this computer need Node.js and Claude Code. Fjord checks them first and sets them up if they're missing.")
+                Text("Router sessions in this computer need Node.js and Claude Code. Fjord checks them first and sets them up if they're missing.")
                     .font(CDS.sans(10)).foregroundStyle(CDS.Text.muted)
             }
         }

@@ -162,6 +162,8 @@ struct ActionMessage: Equatable {
 extension InboxActions {
     /// What a run's chip says while the Router waits for your pick.
     static let waitingWords = "waiting on you in the Router"
+    /// A session in a computer, prepared in the Claude app with its prompt: it starts when you press Send there.
+    static let readyInClaudeWords = "ready in Claude"
 
     /// What the Router made of an action's message, for its run: still routing (`.running`, no words), waiting for your pick
     /// on an ask, sent to a session ("sent to <its title>"), a session started ("session started"), or failed and why.
@@ -193,7 +195,7 @@ extension InboxActions {
             if let failed, sent == nil { return (.failed, failed, started) }
             return (.done, "session started", started)
         }
-        if guestPrepared { return failed.map { (.failed, $0, nil) } ?? (.done, "ready in Claude", nil) }
+        if guestPrepared { return failed.map { (.failed, $0, nil) } ?? (.done, readyInClaudeWords, nil) }
         if let sent {
             let session = entry.links.sessions.last
             return (.done, "sent to " + (session.flatMap(title) ?? sent), session)

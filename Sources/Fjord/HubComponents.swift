@@ -1139,8 +1139,6 @@ struct ActionChipView: View {
             Button {
                 if target == .router {
                     if let message = chip.message { openRouterMessage(message) } else { openApp(.router) }
-                } else if case .computerRun(let id) = target {
-                    openApp(.computerRun(id))
                 } else {
                     store.openActionTarget(target)
                 }

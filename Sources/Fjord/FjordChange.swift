@@ -230,8 +230,6 @@ extension FjordChange {
         switch action.kind {
         case .askRouter(let prompt): return "\(action.title) (\(when)\(settings)), prompt: \(prompt.words())"
         case .comment(let body): return "\(action.title) (\(when)), comment: \(body)"
-        case .runInComputer(let settings):
-            return "\(action.title) (\(when)), computer: \(settings.computerName), workspace: \(settings.workspaceRoot)"
         case .rerun: return "\(action.title) (\(when))"
         }
     }

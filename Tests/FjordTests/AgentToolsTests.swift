@@ -13,16 +13,6 @@ import Testing
         return engine
     }
 
-    /// A copy of linux-1 under its own id: Triage's active-computer set is process-wide, and ComputerRunTests use linux-1.
-    private func isolated() throws -> (engine: MockEngineClient, id: String, target: GuestReference) {
-        let id = "10000000-0000-4000-8000-0000000000a1"
-        var inventory = MockEngineClient.demoInventory
-        var row = try #require(inventory.linux.computers.first { $0.id == MockEngineClient.linuxID })
-        row.configuration.id = id
-        inventory.linux.computers.append(row)
-        return (MockEngineClient(inventory: inventory), id, GuestReference(deviceId: nil, computerId: id))
-    }
-
     @Test func statusWordsNameTheMissingToolsAndTheButton() {
         let missing = MockEngineClient.agentTools(.missing)
         #expect(AgentToolsAdvice.actionTitle(missing) == "Set up")
@@ -95,58 +85,6 @@ import Testing
             #expect(error as? AgentToolsFailure == .macOSNeedsSetup("dev"))
         }
         #expect(engine.agentToolsSetupRequests.isEmpty)
-    }
-
-    @Test func triageSetsMissingToolsUpBeforeTouchingTheWorkspace() async throws {
-        let (engine, computerID, target) = try isolated()
-        engine.mockAgentTools[computerID] = MockEngineClient.agentTools(.missing)
-        let guest = MockGuestClient(accounts: [target: GuestAccount(home: "/home/silo", uid: 1000, operatingSystem: .linux,
-            architecture: "aarch64", nodeExecutable: "/usr/bin/node", claudeExecutable: "/usr/local/bin/claude")])
-        let settings = RunInComputerSettings(deviceID: nil, computerID: computerID, computerName: "linux-1",
-            workspaceRoot: "/workspace", promptTemplate: "Fix {title}", model: nil, effort: nil,
-            permissionMode: .default, allowedTools: [], recordProof: false)
-        let thing = InboxFixture.pr(42)
-        let id = UUID()
-        let initial = ComputerRunRecord(id: id, categoryID: UUID(), actionID: UUID(), thingID: thing.id,
-            triggerKey: "enter", settings: settings, repo: thing.repo,
-            repositoryPath: try settings.repositoryPath(repo: thing.repo),
-            branch: ComputerRunPrompt.branch(task: thing.title, runID: id), taskTitle: thing.title,
-            prompt: ComputerRunPrompt.render(settings.promptTemplate, thing: thing))
-        var seen: [String] = []
-        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .qualified,
-            checkpointRetentionCount: 0, secretAssignment: true, githubRepository: true,
-            shouldContinue: { true }, progressWriter: { _, detail, _ in seen.append(detail); return true })
-        _ = try? await coordinator.run(initial, settings: settings, thing: thing) { _ in true }
-        #expect(engine.agentToolsSetupRequests == [computerID])
-        #expect(seen.contains("Setting up Node.js and Claude Code in linux-1"))
-        #expect(engine.mockAgentTools[computerID]?.state == .ready)
-    }
-
-    @Test func triageStopsOnAMacComputerWithoutToolsBeforeCheckpointing() async throws {
-        let (engine, computerID, target) = try isolated()
-        engine.mockAgentTools[computerID] = MockEngineClient.agentTools(.missing)
-        let guest = MockGuestClient(accounts: [target: GuestAccount(home: "/Users/silo", uid: 501, operatingSystem: .macos,
-            architecture: "arm64", nodeExecutable: "/usr/local/bin/node", claudeExecutable: "/usr/local/bin/claude")])
-        let settings = RunInComputerSettings(deviceID: nil, computerID: computerID, computerName: "linux-1",
-            workspaceRoot: "/workspace", promptTemplate: "Fix {title}", model: nil, effort: nil,
-            permissionMode: .default, allowedTools: [], recordProof: false)
-        let thing = InboxFixture.pr(42)
-        let id = UUID()
-        let initial = ComputerRunRecord(id: id, categoryID: UUID(), actionID: UUID(), thingID: thing.id,
-            triggerKey: "enter", settings: settings, repo: thing.repo,
-            repositoryPath: try settings.repositoryPath(repo: thing.repo),
-            branch: ComputerRunPrompt.branch(task: thing.title, runID: id), taskTitle: thing.title,
-            prompt: ComputerRunPrompt.render(settings.promptTemplate, thing: thing))
-        let coordinator = ComputerRunCoordinator(engine: engine, guest: guest, authorization: .qualified,
-            checkpointRetentionCount: 3, secretAssignment: true, githubRepository: true)
-        do {
-            _ = try await coordinator.run(initial, settings: settings, thing: thing) { _ in true }
-            Issue.record("the run went on without agent tools")
-        } catch {
-            #expect((error as? ComputerRunFailure)?.errorDescription?.contains("developer-tools setup") == true)
-        }
-        #expect(engine.checkpointListCallCount == 0)
-        #expect(await guest.execRecords().isEmpty)
     }
 
     @Test func routerSessionStartSetsToolsUpThroughTheComputersModel() async throws {

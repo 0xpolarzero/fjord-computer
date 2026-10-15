@@ -522,6 +522,8 @@ final class RouterMCPServer: @unchecked Sendable {
     var formAnswerQueued: (@MainActor () -> Void)?
     /// Tests provide a temporary HOME; the app uses the current user's Claude settings file.
     var guestSSHSettings: ClaudeSSHSettings?
+    /// A Triage action's tools: a session started in a computer is preceded by an automatic checkpoint of it (A-18).
+    var checkpointBeforeGuestStart = false
 
     /// The decision-log entry of the run this instance serves (a typed run of the dispatcher, see RouterDispatcher): its
     /// changes join that entry.
@@ -1331,6 +1333,10 @@ final class RouterMCPServer: @unchecked Sendable {
             }
             defer { guestRuntime.releaseStart(reservation) }
             do {
+                if checkpointBeforeGuestStart {
+                    try await AutomaticCheckpoint.take(engine: store.engineClient, computer: computer, task: title)
+                    try live(ticket)
+                }
                 let rowName = store.computers.placementRow(deviceId: deviceId, computerId: computerId)?.name ?? computerId
                 let settingsFile = guestSSHSettings ?? ClaudeSSHSettings()
                 let prepared = try await guestRuntime.prepareDesktopStart(client: guestClient,

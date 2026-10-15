@@ -125,11 +125,6 @@ enum AppWindowShots {
         Shot(name: "reviews") { store in store.shownCategories.first { $0.name.contains("Review") }?.id.asCategory ?? .done },
         Shot(name: "ci") { store in store.shownCategories.first(where: \.isCI)?.id.asCategory ?? .done },
         Shot(name: "done") { _ in .done },
-        computerRunResultShot(name: "triage-computer-run-result-light", appearance: .aqua),
-        computerRunResultShot(name: "triage-computer-run-result-dark", appearance: .darkAqua),
-        computerRunResultShot(name: "triage-computer-run-result-long-min", appearance: .aqua,
-            size: CGSize(width: AppWindowController.minSize.width, height: AppWindowController.minSize.height),
-            summary: String(repeating: "The reconnect path clears the stale cache before it restores the current session. ", count: 24)),
         Shot(name: "computers", destination: { _ in .computers }, prepare: { store in
             store.setTool(.computers, on: true)
         }),
@@ -630,37 +625,6 @@ enum AppWindowShots {
         Shot(name: "router-collapsed-760", destination: { _ in .router }, sidebarHidden: true, size: CGSize(width: 760, height: 1000)),
         Shot(name: "category-narrow", destination: { $0.shownCategories[0].id.asCategory }, size: CGSize(width: 1000, height: 640)),
     ]
-
-    private static func computerRunResultShot(name: String, appearance: NSAppearance.Name,
-                                              size: CGSize = CGSize(width: 1180, height: 820),
-                                              summary: String? = nil) -> Shot {
-        Shot(name: name, destination: { _ in
-            .computerRun(UUID(uuidString: "80000000-0000-4000-8000-000000000001")!)
-        }, size: size, prepare: { store in
-            store.setTool(.triage, on: true)
-            let id = UUID(uuidString: "80000000-0000-4000-8000-000000000001")!
-            let settings = RunInComputerSettings(deviceID: nil, computerID: MockEngineClient.linuxID,
-                computerName: "linux-1", workspaceRoot: "/workspace", promptTemplate: "Fix {title} in {repo}",
-                model: nil, effort: nil, permissionMode: .default, allowedTools: [], recordProof: true)
-            var record = ComputerRunRecord(id: id, categoryID: UUID(uuidString: "80000000-0000-4000-8000-000000000002")!,
-                actionID: UUID(uuidString: "80000000-0000-4000-8000-000000000003")!, thingID: "pr:fjord/lookout:42",
-                triggerKey: "enter", settings: settings, repo: "fjord/lookout", repositoryPath: "/workspace/lookout",
-                branch: "fjord/triage/fix-stale-cache-80000000", taskTitle: "Fix the stale cache after a reconnect",
-                prompt: "Fix the stale cache after a reconnect")
-            record.phase = .result
-            record.checkpointJobID = "job:checkpoint-run-shot"
-            record.checkpointID = "checkpoint-run-shot"
-            record.execJobID = "guest-job-run-shot"
-            record.exitCode = 0
-            record.summary = summary ?? "The reconnect path now clears the stale cache before it restores the current session. Added a regression test for the reconnect sequence."
-            record.pullRequestURL = URL(string: "https://github.com/fjord/lookout/pull/42")
-            record.summaryUnverified = true
-            record.proofState = .complete
-            record.localVideoPath = ProcessInfo.processInfo.environment["FJORD_WINDOW_SHOT_RUN_VIDEO"]
-            record.videoDurationSeconds = record.localVideoPath == nil ? 42.3 : 2
-            store.actionLedger.computerRuns[id] = record
-        }, appearance: appearance)
-    }
 
     private static let canvasSize = CGSize(width: 1440, height: 900)
 
