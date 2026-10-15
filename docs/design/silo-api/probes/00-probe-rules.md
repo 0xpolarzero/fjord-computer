@@ -7,7 +7,7 @@ Context: `docs/design/silo-api/` specifies an API for Silo as an engine, with Fj
 - **The owner's Mac is in use.** Keep focus-stealing GUI work short. Never lock the screen, log out, sleep or reboot. Never change system or security settings (Remote Login, FileVault, firewall, privacy/TCC on the host, login items you didn't create). Never kill apps you didn't start, especially Chrome, Claude or Silo instances already running.
 - **Two macOS VMs at most can run on this Mac**, across all tracks. **Each track may run at most ONE macOS VM at a time.** Only the macOS-VM and proxy tracks run one.
 - **RAM is 64 GiB.** Give probe VMs at most 8 GiB each. Don't start the existing 32 GiB Linux computers unless the track says so.
-- **Disk:** check `df -g /` before anything large. Stop and report if free space falls below 60 GB. Put everything under `~/silo-probes/<track>/`, and clean up VMs and large files at the end (keep small evidence files).
+- **Disk:** internal disk only; never use external drives (/Volumes/*). Check `df -g /` before anything large. Stop and report if free space falls below 60 GB. Put everything under `~/silo-probes/<track>/`, and clean up VMs and large files at the end (keep small evidence files).
 - **Never modify these:**
   - Silo's source in `/Users/polarzero/code/projects/microsandbox-workspaces` (build outputs and caches are fine);
   - Silo's production data (`~/Library/Application Support/org.silo.preview`);
