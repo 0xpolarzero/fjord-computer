@@ -495,7 +495,86 @@ def bench(system, max_calls):
     print(f"bench {system}: {len(out)} moments, {todo} new calls")
 
 
+# ------------------------------------------------------------------ parity fixture for the Swift port
+
+PARITY = HERE.parents[1] / "Tests" / "FjordTests" / "Fixtures" / "router-actions-parity.json"
+
+
+def _walk(o):
+    if isinstance(o, dict):
+        if "d3_decision" in o:
+            yield o
+        for v in o.values():
+            yield from _walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _walk(v)
+
+
+def synthetic_cases(n=300, seed=7):
+    """Made-up boards (three sessions with a card each, two stoppable) with checks drawn from values at, under and over
+    every bar, so that the branches the recorded traces rarely reach (archive, an unclear T, a lead too small, urgent
+    without instead) are compared too."""
+    import random
+    rng = random.Random(seed)
+    values = [0.05, 0.3, 0.49, 0.5, 0.55, 0.6, 0.65, 0.84, 0.85, 0.88, 0.9, 0.95, 0.99]
+    sessions = ["s1", "s2", "s3"]
+    out = []
+    for i in range(n):
+        checks = [["dismiss", f"{s}#c", s, rng.choice(values), False] for s in sessions]
+        stop_for = rng.sample(sessions, rng.choice([0, 1, 2]))
+        checks += [["stop", None, s, rng.choice(values), False] for s in stop_for]
+        T = rng.choice(["session:s1", "session:s2", "session:s3", "new:lookout", "change_fjord", "question", None])
+        sid = T[8:] if T and T.startswith("session:") else None
+        cards = [(f"{s}#c", s, rng.choice(["done", "question"])) for s in sessions]
+        routing_ask = rng.random() < 0.4
+        ranked = rng.sample(["session:s1", "session:s2", "session:s3", "new:lookout", "change_fjord"], 4)
+        options = [a for a in dict.fromkeys(live_action(t, cards) for t in ranked) if a][:4]
+        act = None if routing_ask else live_action(T, cards)
+        info = {"T": T, "pT": rng.choice([0.0, 0.2, 0.39, 0.4, 0.7, 0.95]) if T else 0.0,
+                "raw_top": rng.choice(["unclear", T or "unclear", "session:s2", "change_fjord"]), "checks": checks,
+                "globals": {"urgent": rng.choice(values), "instead": rng.choice(values)}, "stoppable": stop_for,
+                "T_act": live_action(T, cards) if T else None,
+                "routing": {"decision": "ask" if routing_ask else "send", "target": T, "act": act, "options": options}}
+        out.append({"name": f"synthetic:{i}", "info": info, "expected": decide(info)})
+    return out
+
+
+def export_parity(per_class=45):
+    """Recorded check/route answers of the cached D3-all dev traces (runs and bench) with `decide`'s answer on each, for
+    RouterActionsParityTests: every case where a check decided (act, unsure, elsewhere), and an even spread of the route-ask
+    and route outcomes. Deterministic. Only probabilities, ids of the eval boards and actions are written (no message text)."""
+    import glob
+    rows = []
+    for f in sorted(glob.glob(str(OUT / "D3-all.*.jsonl"))) + [str(OUT / "bench.D3-all.jsonl")]:
+        if not os.path.exists(f):
+            continue
+        for line in open(f):
+            for n, x in enumerate(_walk(json.loads(line))):
+                info = x["d3"]
+                d = decide(info)
+                assert d == x["d3_decision"], (f, n)
+                rows.append((os.path.basename(f), x.get("id"), n, info, d))
+    strata = {}
+    for r in rows:
+        strata.setdefault((r[4]["decision"], r[4]["why"]), []).append(r)
+    cases = []
+    for key in sorted(strata):
+        rs = sorted(strata[key], key=lambda r: (r[0], str(r[1]), r[2]))
+        if key in (("route", "route"), ("ask", "route-ask")):
+            step = max(1, len(rs) // per_class)
+            rs = rs[::step][:per_class]
+        for r in rs:
+            cases.append({"name": f"{r[0]}:{r[1]}:{r[2]}", "info": r[3], "expected": r[4]})
+    cases += synthetic_cases()
+    PARITY.parent.mkdir(parents=True, exist_ok=True)
+    PARITY.write_text(json.dumps({"params": PARAMS, "cases": cases}, sort_keys=True, separators=(",", ":")) + "\n")
+    print(f"{len(cases)} cases -> {PARITY}", {f"{k[0]}/{k[1]}": len(v) for k, v in sorted(strata.items())})
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "export-parity":
+        return export_parity()
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["run", "bench"])
     ap.add_argument("system", choices=["shipped", "shipped-repeat", "D3", "D3-placebo", "D3-same", "D3-w2", "D3-final",
