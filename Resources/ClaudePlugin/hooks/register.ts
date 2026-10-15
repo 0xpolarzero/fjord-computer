@@ -56,7 +56,12 @@ import type { EngineInterface, Register } from 'claude-code'
 //
 // `interrupt-v1`: a v3 message is a v2 one with a signed interrupt flag after the effort:
 //   ⟦fjord v3 <target> <nonce> <ms> <model|-> <effort|-> <0|1> <hex HMAC-SHA256>⟧\n<base64 body>
-// with the MAC over "v3\n<target>\n<nonce>\n<ms>\n<model|->\n<effort|->\n<0|1>\n" and the body. From the inbox, with the flag
+// with the MAC over "v3\n<target>\n<nonce>\n<ms>\n<model|->\n<effort|->\n<0|1>\n" and the body.
+// `interrupt-turn-v1`: a v4 message adds the turn the interrupt was judged on after the flag:
+//   ⟦fjord v4 <target> <nonce> <ms> <model|-> <effort|-> <0|1> <turn id|-> <hex HMAC-SHA256>⟧\n<base64 body>
+// with the MAC over "v4\n<target>\n<nonce>\n<ms>\n<model|->\n<effort|->\n<0|1>\n<turn id|->\n" and the body. With a turn id
+// the interrupt is refused ("refused: turn changed", nothing submitted, the nonce not claimed) unless that turn is the one
+// running, checked before the nonce is claimed (so a retry of an unclaimed message is checked again) and again by the stop. From the inbox, with the flag
 // set, the turn under way (if any) is stopped as above, then the settings are applied and the words submitted as the
 // person's own, in one step: the ack is "ok interrupted <turn id>" or "ok idle" (then it only submits), followed by what
 // the settings did. Plain v1 and v2 messages keep queueing behind a running turn. Over the peer channel (whose hook a turn
@@ -73,12 +78,12 @@ import type { EngineInterface, Register } from 'claude-code'
 //
 // Fjord writes this file; edits are overwritten.
 
-const HEADER = /(?:^|\n)⟦fjord (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)|v3 (\S+) (\S+) (\d+) (\S+) (\S+) ([01])) ([0-9a-f]{64})⟧\n/
+const HEADER = /(?:^|\n)⟦fjord (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)|v3 (\S+) (\S+) (\d+) (\S+) (\S+) ([01])|v4 (\S+) (\S+) (\d+) (\S+) (\S+) ([01]) (\S+)) ([0-9a-f]{64})⟧\n/
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const CLOSE = '</cross-session-message>'
 const WINDOW_MS = 10 * 60 * 1000
 const NONCE = 'nonce.'
-export const CAPABILITIES = ['inbox-v1', 'settings-v1', 'abort-v1', 'stop-v1', 'interrupt-v1']
+export const CAPABILITIES = ['inbox-v1', 'settings-v1', 'abort-v1', 'stop-v1', 'interrupt-v1', 'interrupt-turn-v1']
 const POLL_MS = 500
 const ACTIVATION = crypto.randomUUID()
 
@@ -133,10 +138,12 @@ export type Settings = { model?: string; effort?: string }
 
 /** What the MAC covers: the version, the target, the nonce and the time, one per line (v2: also the model and the effort),
  * then the body's bytes. */
-export const macInput = (target: string, nonce: string, ts: string, body: Uint8Array, settings?: Settings, interrupt?: boolean) =>
+export const macInput = (target: string, nonce: string, ts: string, body: Uint8Array, settings?: Settings, interrupt?: boolean, expectTurn?: string) =>
   join(
     enc.encode(
-      interrupt !== undefined
+      expectTurn !== undefined
+        ? `v4\n${target}\n${nonce}\n${ts}\n${settings?.model ?? '-'}\n${settings?.effort ?? '-'}\n${interrupt ? 1 : 0}\n${expectTurn}\n`
+        : interrupt !== undefined
         ? `v3\n${target}\n${nonce}\n${ts}\n${settings?.model ?? '-'}\n${settings?.effort ?? '-'}\n${interrupt ? 1 : 0}\n`
         : settings
           ? `v2\n${target}\n${nonce}\n${ts}\n${settings.model ?? '-'}\n${settings.effort ?? '-'}\n`
@@ -182,18 +189,21 @@ export const parse = (text: string) => {
   const header = m[0]
   const v2 = m[4] !== undefined
   const v3 = m[9] !== undefined
-  const [target, nonce, ts] = v3 ? [m[9], m[10], m[11]] : v2 ? [m[4], m[5], m[6]] : [m[1], m[2], m[3]]
-  const mac = m[15]
-  const [model, effort] = v3 ? [m[12], m[13]] : [m[7], m[8]]
+  const v4 = m[15] !== undefined
+  const [target, nonce, ts] = v4 ? [m[15], m[16], m[17]] : v3 ? [m[9], m[10], m[11]] : v2 ? [m[4], m[5], m[6]] : [m[1], m[2], m[3]]
+  const mac = m[22]
+  const [model, effort] = v4 ? [m[18], m[19]] : v3 ? [m[12], m[13]] : [m[7], m[8]]
   const settings: Settings | undefined =
-    v2 || v3 ? { model: model === '-' ? undefined : model, effort: effort === '-' ? undefined : effort } : undefined
-  const interrupt = v3 ? m[14] === '1' : undefined
+    v2 || v3 || v4 ? { model: model === '-' ? undefined : model, effort: effort === '-' ? undefined : effort } : undefined
+  const interrupt = v4 ? m[20] === '1' : v3 ? m[14] === '1' : undefined
+  // v4: the turn the interrupt was judged on (`-`: none named), covered by the MAC.
+  const expectTurn = v4 ? m[21] : undefined
   let rest = text.slice(m.index + header.length)
   const close = rest.indexOf(CLOSE)
   if (close >= 0) rest = rest.slice(0, close)
   const body = fromBase64(rest.trim())
   if (!body) return undefined
-  return { target, nonce, ts, mac, body, settings, interrupt }
+  return { target, nonce, ts, mac, body, settings, interrupt, expectTurn }
 }
 
 /** Compares two MACs in time that doesn't depend on where they differ. */
@@ -478,7 +488,7 @@ export async function accept(
   const { keyPath } = await config($)
   if (!keyPath) return { ok: false, reason: 'no key configured' }
   const key = (await $.fs.read(keyPath)).trim()
-  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body, signed.settings, signed.interrupt))
+  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body, signed.settings, signed.interrupt, signed.expectTurn))
   const now = await $.clock.now()
   const ts = Number(signed.ts)
   if (!same(expected, signed.mac)) return { ok: false, reason: 'bad signature' }
@@ -500,10 +510,15 @@ export async function accept(
   // An interrupt's words are checked before anything is stopped: a turn is never aborted for text that can't be submitted.
   const unfit = apply && signed.interrupt ? unsubmittable(body) : undefined
   if (unfit) return { ok: false, reason: `not submitted: ${unfit}` }
+  // An interrupt judged on a turn (v4) acts on that turn only: when another runs, or none, nothing is submitted and the nonce
+  // stays unclaimed, so a retry of the same message is refused the same way while that holds.
+  const expectTurn = apply && signed.interrupt && signed.expectTurn !== undefined && signed.expectTurn !== '-' ? signed.expectTurn : undefined
+  if (expectTurn !== undefined && running !== expectTurn) return { ok: false, reason: 'turn changed' }
   if (!(await claim($, signed.nonce, ts, now))) return { ok: false, reason: 'already delivered' }
   // An interrupt stops the turn under way first (the person's words then start the next one at once). When the stop fails
   // and the turn still runs, the words would only queue behind it: refused, not delivered.
-  let interrupted = apply && signed.interrupt ? await stopRunning($, now, undefined, 'Interrupted from Fjord') : undefined
+  let interrupted = apply && signed.interrupt ? await stopRunning($, now, expectTurn, 'Interrupted from Fjord') : undefined
+  if (interrupted === 'not-running' && expectTurn !== undefined) return { ok: false, reason: 'turn changed' }
   if (interrupted === 'not-running') {
     if (running !== undefined) return { ok: false, reason: 'the running turn could not be stopped' }
     interrupted = 'idle'

@@ -143,7 +143,8 @@ import Testing
     }
 
     private static let capable: [String: Any] = [
-        "capabilities": [ClaudePlugin.inboxCapability, ClaudePlugin.settingsCapability, ClaudePlugin.stopCapability, ClaudePlugin.interruptCapability],
+        "capabilities": [ClaudePlugin.inboxCapability, ClaudePlugin.settingsCapability, ClaudePlugin.stopCapability, ClaudePlugin.interruptCapability,
+                         ClaudePlugin.interruptTurnCapability],
         "turn": ["id": "t1", "startedAt": 1],
     ]
 
@@ -363,6 +364,39 @@ import Testing
         let fake = plugin(l.inbox, answer: "ok interrupted t1")
         #expect(await l.store.interrupt(sessionID: "local_a", text: "Go", turn: "t1") == .delivered(ack: "ok interrupted t1", interrupted: "t1"))
         _ = await fake.value
+    }
+
+    @Test func anInterruptJudgedOnATurnIsAV4MessageWhoseMACCoversTheTurn() throws {
+        let nonce = UUID(uuidString: RelaySigning.nonce)!
+        let signed = RelaySigner.sign(body: RelaySigning.body, target: RelaySigning.target, key: RelaySigning.key, nonce: nonce,
+                                      now: Self.now, interrupt: true, expectTurn: "turn-A")
+        let line = String(signed.split(separator: "\n", maxSplits: 1)[0])
+        #expect(line.hasPrefix("⟦fjord v4 cli-target \(RelaySigning.nonce) 2000000000000 - - 1 turn-A "))
+        let mac = String(line.dropLast().split(separator: " ").last!)
+        func macOf(_ turn: String?) -> String {
+            RelaySigner.mac(key: RelaySigning.key, target: RelaySigning.target, nonce: RelaySigning.nonce, ts: "2000000000000",
+                            body: Data(RelaySigning.body.utf8), model: "-", effort: "-", interrupt: true, expectTurn: turn)
+        }
+        #expect(macOf("turn-A") == mac)
+        #expect(macOf("turn-B") != mac, "another turn needs another signature")
+        #expect(macOf(nil) != mac, "a v3 MAC is not a v4 one")
+        #expect(RelayInbox.header(of: signed)?.nonce == RelaySigning.nonce)
+        // No turn judged: the v3 text it always was.
+        let v3 = RelaySigner.sign(body: RelaySigning.body, target: RelaySigning.target, key: RelaySigning.key, nonce: nonce, now: Self.now, interrupt: true)
+        #expect(v3.hasPrefix("⟦fjord v3 "))
+    }
+
+    @Test func anInterruptNamesItsTurnInsideTheSignedRequestAndAnOldPluginIsUnsupported() async throws {
+        let l = try local(extra: Self.capable)
+        let fake = plugin(l.inbox, answer: "refused: turn changed")
+        let outcome = await l.store.interrupt(sessionID: "local_a", text: "Go", turn: "t1")
+        #expect(outcome == .refused("turn changed"), "the plugin's refusal is a known not-delivered outcome")
+        let text = try #require(await fake.value)
+        #expect(text.hasPrefix("⟦fjord v4 cli-a ") && text.split(separator: "\n")[0].contains(" 1 t1 "))
+        // A plugin without `interrupt-turn-v1` can't hold the turn: nothing is written.
+        let old = try local(extra: ["capabilities": [ClaudePlugin.inboxCapability, ClaudePlugin.interruptCapability], "turn": ["id": "t1"]])
+        guard case .unsupported = await old.store.interrupt(sessionID: "local_a", text: "Go", turn: "t1") else { Issue.record("not unsupported"); return }
+        #expect(messages(old).isEmpty)
     }
 
     @Test func anInterruptLostAfterItWasWrittenIsUnknownAndSentAgainWithItsOwnNonce() async throws {

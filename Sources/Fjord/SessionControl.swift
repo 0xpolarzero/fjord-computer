@@ -180,6 +180,11 @@ extension Store {
             if resend == nil, let expected, let running = target.turn?.id, running != expected {
                 return .refused("Its turn changed since you asked: it isn't the one you meant to stop")
             }
+            // The turn judged rides inside the signed request, which the plugin checks atomically against the turn it stops (a
+            // turn that began meanwhile is never interrupted, a retry included). A resend carries what it was signed with.
+            if resend == nil, expected != nil, !target.can(ClaudePlugin.interruptTurnCapability) {
+                return .unsupported("Fjord's plugin in this session is too old to interrupt a given turn: restart it or run /reload-plugins in it")
+            }
             let applied = target.can(ClaudePlugin.settingsCapability) ? settings : nil
             let ack: String
             if let guest = target.guest {
@@ -187,7 +192,7 @@ extension Store {
                 if let resend { signed = resend } else {
                     signed = try await guestSigned(target.cli, guest: guest) { key, now in
                         RelaySigner.sign(body: text, target: target.cli, key: key, now: now, model: applied?.model, effort: applied?.effort,
-                                         interrupt: true)
+                                         interrupt: true, expectTurn: expected)
                     }
                 }
                 written = signed
@@ -197,7 +202,7 @@ extension Store {
                 let signed: String
                 if let resend { signed = resend } else {
                     signed = try await localSigned { key in
-                        RelaySigner.sign(body: text, target: target.cli, key: key, model: applied?.model, effort: applied?.effort, interrupt: true)
+                        RelaySigner.sign(body: text, target: target.cli, key: key, model: applied?.model, effort: applied?.effort, interrupt: true, expectTurn: expected)
                     }
                 }
                 guard let paths = routerFiles else { return .failed("The Router is off") }

@@ -26,10 +26,12 @@ const base64 = (bytes: Uint8Array) => {
   }
   return out
 }
-const sign = async (body: string, { target = TARGET, nonce = NONCE, ts = TS, key = KEY, settings, interrupt }: { target?: string; nonce?: string; ts?: number; key?: string; settings?: Settings; interrupt?: boolean } = {}) => {
+const sign = async (body: string, { target = TARGET, nonce = NONCE, ts = TS, key = KEY, settings, interrupt, expectTurn }: { target?: string; nonce?: string; ts?: number; key?: string; settings?: Settings; interrupt?: boolean; expectTurn?: string } = {}) => {
   const bytes = enc.encode(body)
-  const mac = await hmac(enc.encode(key), macInput(target, nonce, String(ts), bytes, settings, interrupt))
-  const head = interrupt !== undefined
+  const mac = await hmac(enc.encode(key), macInput(target, nonce, String(ts), bytes, settings, interrupt, expectTurn))
+  const head = expectTurn !== undefined
+    ? `v4 ${target} ${nonce} ${ts} ${settings?.model ?? '-'} ${settings?.effort ?? '-'} ${interrupt ? 1 : 0} ${expectTurn}`
+    : interrupt !== undefined
     ? `v3 ${target} ${nonce} ${ts} ${settings?.model ?? '-'} ${settings?.effort ?? '-'} ${interrupt ? 1 : 0}`
     : settings
       ? `v2 ${target} ${nonce} ${ts} ${settings.model ?? '-'} ${settings.effort ?? '-'}`
@@ -429,7 +431,7 @@ describe('the inbox', () => {
   })
 
   test('presence names the capability', () => {
-    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1', 'abort-v1', 'stop-v1', 'interrupt-v1'])
+    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1', 'abort-v1', 'stop-v1', 'interrupt-v1', 'interrupt-turn-v1'])
   })
 
   const SETTINGS_NONCE = '223e4567-e89b-12d3-a456-426614174000'
@@ -1153,6 +1155,42 @@ describe('stopping a turn and interrupting it', () => {
     expect(w.appended).toEqual(['Interrupted from Fjord'])
   })
 
+  test('a v4 interrupt names the turn it was judged on: it stops that turn, and is refused (nothing submitted, nonce unclaimed) when another runs or none', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    await settle()
+    // The turn changed: A ended, B began.
+    await $.turn.complete({ ...complete, turnId: 't1' })
+    await $.turn.start({ text: 'typed', turnId: 't2' })
+    await settle()
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true, expectTurn: 't1' }))).toBe('refused: turn changed\n')
+    expect(w.order).toEqual([])
+    expect(w.submitted).toEqual([])
+    // Not claimed: the same message is refused again as a retry, and still stopped nothing.
+    w.inbox[`${TARGET}/${NONCE}.msg`] = await sign(BODY, { interrupt: true, expectTurn: 't1' })
+    delete w.written[`/inbox/${TARGET}/${NONCE}.ack`]
+    delete w.inbox[`${TARGET}/${NONCE}.ack`]
+    await look($, w)
+    await settle()
+    expect(w.written[`/inbox/${TARGET}/${NONCE}.ack`]).toBe('refused: turn changed\n')
+    expect(w.order).toEqual([])
+    // The turn it names runs: stopped and submitted.
+    expect(await put($, w, STOP_NONCE, await sign(BODY, { interrupt: true, expectTurn: 't2', nonce: STOP_NONCE }))).toBe('ok interrupted t2\n')
+    expect(w.order).toEqual(['abort t2', 'submit'])
+  })
+
+  test('a v4 interrupt of an idle session that named a turn is refused; its turn is inside the signature', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true, expectTurn: 't1' }))).toBe('refused: turn changed\n')
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    await settle()
+    const signed = await sign(BODY, { interrupt: true, expectTurn: 't9', nonce: STOP_NONCE })
+    expect(await put($, w, STOP_NONCE, signed.replace(' t9 ', ' t1 '))).toBe('refused: bad signature\n')
+    expect(w.order).toEqual([])
+  })
+
   test('an interrupt applies its settings after the stop and before the words', async ($, on) => {
     const w = world(on)
     await look($, w)
@@ -1218,7 +1256,7 @@ describe('stopping a turn and interrupting it', () => {
     const w = world(on)
     await look($, w)
     expect(presence(w).turn).toBeNull()
-    expect(presence(w).capabilities).toEqual(expect.arrayContaining(['stop-v1', 'interrupt-v1']))
+    expect(presence(w).capabilities).toEqual(expect.arrayContaining(['stop-v1', 'interrupt-v1', 'interrupt-turn-v1']))
     await $.turn.start({ text: 'typed', turnId: 't1' })
     expect(presence(w).turn).toEqual({ id: 't1', startedAt: TS + 1500 })
     // A subagent's turn ending changes nothing; the main turn's does.

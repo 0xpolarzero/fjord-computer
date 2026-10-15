@@ -312,13 +312,17 @@ enum RouterActionChecks {
     @MainActor
     static func read(_ store: Store, message: String, tagged: String?, scope: Scope = Scope(), ask: JevAsker) async throws -> RouterActionReading {
         let c = candidates(store, scope: scope)
+        // The turns are read now, before the awaited call: a judgment is about the turn that ran when it was asked, never one that
+        // began during it. A session with no known turn id can't be named in a stop or an interrupt, so it isn't stoppable.
+        var turns: [String: String] = [:]
+        for s in c.sessions { if let turn = store.runningTurn(sessionID: s.id)?.id { turns[s.id] = turn } }
         let call = call(store, candidates: c)
         // The state is the route's own: the redacted message (what it tags goes with it).
         var state = ["message": RouterTools.redacted(message)]
         if let tagged { state["tagged in the message"] = RouterTools.redacted(tagged) }
         let answers = try await JevClient.$questionOrder.withValue(call.order) { try await ask(call.questions, state) }
-        var reading = RouterActionReading(stoppable: c.sessions.map(\.id))
-        for s in c.sessions { if let turn = store.runningTurn(sessionID: s.id)?.id { reading.turns[s.id] = turn } }
+        var reading = RouterActionReading(stoppable: c.sessions.map(\.id).filter { turns[$0] != nil })
+        reading.turns = turns
         for key in call.order {
             if let card = call.card[key] {
                 reading.checks.append(.init(kind: .dismiss, card: card.id, session: card.sessionID, p: answers[key]?.yes ?? 0))

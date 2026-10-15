@@ -404,8 +404,15 @@ struct RouterAskBack: Identifiable, Equatable {
         if ask.context.action != nil, RouterRun.Intent(rawValue: target) != nil || !store.toolsLinked { return false }
         // Offered when it was asked: a card the page has hidden since (or one addressed, a session archived) isn't sent to.
         guard eligible(target, store: store) else { return false }
+        if unconfirmed[id] != nil, !Self.isRetryOrOpen(target) { return false }
         answer(ask, target: target, store: store)
         return true
+    }
+
+    private static func isRetryOrOpen(_ target: String) -> Bool {
+        let act = RouterAct(target: target)
+        if case .retry = act { return true }
+        return act.isOpen
     }
 
     /// "Choose folder…" on an ask: a new session in the folder you chose, with the message, whether Fjord knew the
@@ -414,7 +421,7 @@ struct RouterAskBack: Identifiable, Equatable {
     func pick(_ id: UUID, folder: String) -> Bool {
         guard let store, store.routerOn, !folder.isEmpty, let ask = askBacks.first(where: { $0.id == id }),
               ask.options.contains(where: { $0.target == RouterAskBack.chooseFolder }), live(ask, store: store) else { return false }
-        if ask.context.action != nil, !store.toolsLinked { return false }
+        if ask.context.action != nil, !store.toolsLinked || unconfirmed[id] != nil { return false }
         answer(ask, target: "new:\(folder)", store: store, folder: folder)
         return true
     }
@@ -1291,7 +1298,7 @@ struct RouterAskBack: Identifiable, Equatable {
             stage(job, "sending it again")
             let ticket = job.tools.ticket()
             let outcome = await effects.interrupt(job.tools, id, pending.text, pending.turn, pending.signed)
-            try interrupted(job, session: id, name: title(id), text: pending.text, turn: pending.turn, outcome, ticket: ticket)
+            try interrupted(job, session: id, name: title(id), text: pending.text, turn: pending.turn, outcome, ticket: ticket, retrying: true)
         case .open(let id):
             store.openAgent(id)
             store.updateDecision(job.id) {
@@ -1307,8 +1314,27 @@ struct RouterAskBack: Identifiable, Equatable {
     /// (the same nonce: the plugin's claim of it lets one copy through) and asks; only one known not to have gone offers the
     /// words to the session instead. Nothing is asked once the run was stopped; what went stays on the line.
     private func interrupted(_ job: Job, session id: String, name: String, text: String, turn: String?, _ outcome: DeliveryOutcome,
-                             ticket: RouterTools.Ticket) throws {
+                             ticket: RouterTools.Ticket, retrying: Bool = false) throws {
         let cancelled = Task.isCancelled || (try? job.tools.live(ticket)) == nil
+        // A retry that failed to reach the plugin (it is temporarily unavailable, an old one, nothing written) or was told the
+        // nonce was taken already proves nothing about the first try: the status stays unknown, and only Retry or a look at
+        // the session is offered, never a fresh send. Resolved: an ack for the nonce (delivered, or the plugin refusing it
+        // unclaimed, such as `turn changed`) or a new unconfirmed outcome (which carries its own signed text).
+        if retrying, let pending = unconfirmed[job.id] {
+            var stillUnknown: String?
+            switch outcome {
+            case .unsupported(let why), .failed(let why): stillUnknown = why
+            case .refused(let why) where why.contains("already delivered"): stillUnknown = why
+            default: break
+            }
+            if let why = stillUnknown, pending.session == id {
+                note(job, .failed(RouterDecision.clip("Still can't tell whether “\(RouterDecision.clip(name, 40))” got it: \(why)", 160)), session: id)
+                if cancelled { throw CancellationError() }
+                askBack(job, Classification(ranked: [], sure: false, assisted: true), path: "interrupt-unconfirmed",
+                        note: "It may already have gone: sending the same message again can't make it arrive twice", acts: [.retry(session: id), .open(session: id)])
+                return
+            }
+        }
         switch outcome {
         case .delivered(_, let interrupted):
             unconfirmed[job.id] = nil
@@ -1321,10 +1347,16 @@ struct RouterAskBack: Identifiable, Equatable {
             askBack(job, found, path: "interrupt-unconfirmed",
                     note: "It may already have gone: sending the same message again can't make it arrive twice", acts: [.retry(session: id), .open(session: id)])
         case .unsupported(let why), .refused(let why), .failed(let why):
+            // Conclusively not delivered (a refusal before the nonce was claimed, or nothing written on a first try).
+            unconfirmed[job.id] = nil
             if cancelled { throw CancellationError() }
             couldntAct(job, session: id, why, stopping: name)
         }
     }
+
+    /// Whether the ask's message is in an interrupt whose delivery is unconfirmed: it can only be sent again as it was (Retry) or
+    /// the session looked at, never as a new message to anywhere (a second copy could reach the session).
+    func resendsOnly(_ id: UUID) -> Bool { unconfirmed[id] != nil }
 
     /// A stop that couldn't be done: why, on the line, and an ask where the words go instead (queued to the session, or open it).
     private func couldntAct(_ job: Job, session: String, _ why: String, stopping name: String? = nil) {

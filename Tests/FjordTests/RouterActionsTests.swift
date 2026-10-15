@@ -72,7 +72,7 @@ extension RouterDispatcherTests {
         #expect(asked?.state["message"]?.contains("sk-ant") == false, "the message is redacted as the route's is")
         #expect(asked?.state.keys.sorted() == ["message"])
         #expect(asked?.order == ["dismiss0", "dismiss1", "stop0", "urgent", "instead"])
-        #expect(reading.stoppable == ["local_c"] && reading.checks.count == 3 && reading.urgent == 0.2)
+        #expect(reading.stoppable.isEmpty && reading.checks.count == 3 && reading.urgent == 0.2, "local_c runs by the feed alone: no turn id to name, so not stoppable")
         // On the wire the questions come in that order (a dictionary has none).
         let data = try JevClient.$questionOrder.withValue(asked?.order) {
             try JevClient.requestData(asked?.questions ?? [:], about: asked?.state ?? [:])

@@ -2824,7 +2824,8 @@ struct AskBackCard: View, Equatable {
                     // RouterKeys: ⌘1–⌘4 on the newest ask.
                     .help(newest && index < RouterKeys.pickKeys.count ? "⌘\(index + 1)" : "")
                 }
-                Menu {
+                // A message whose delivery is unconfirmed is only sent again as it was, or the session looked at.
+                if !store.routerDispatcher.resendsOnly(ask.id) { Menu {
                     if !pickers.sessions.isEmpty {
                         Section("Send to a session") {
                             ForEach(pickers.sessions) { option in
@@ -2845,7 +2846,7 @@ struct AskBackCard: View, Equatable {
                         .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(CDS.Fill.field))
                         .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(CDS.border, lineWidth: 1) }
                 }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize() }
                 ClaudeButton("Dismiss", variant: .ghost, size: .sm) { store.routerDispatcher.dismiss(ask.id) }
             }
         }
