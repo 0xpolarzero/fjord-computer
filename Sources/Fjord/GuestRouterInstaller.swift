@@ -51,7 +51,7 @@ struct GuestRouterInstaller: Sendable {
         guard account.nodeExecutable.hasPrefix("/") else { throw Failure.invalidAccount }
         try await check(account.nodeExecutable, minimumNodeMajor: 18, computer: computer, cwd: account.home)
         let paths = try GuestRouterPaths(home: account.home)
-        let version = ClaudePlugin.version(app: "fjord-guest-2")
+        let version = ClaudePlugin.version(app: "fjord-guest-3")
         let previous = try? await client.filesRead(computer: computer, path: GuestRouterPaths.join(paths.root, "install-version"), offset: nil, length: nil)
         let alreadyInstalled = String(data: previous?.data ?? Data(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == version
 
@@ -336,6 +336,8 @@ const readInput = async () => {
 const lineObjects = text => text.split('\n').filter(line => line.trim()).flatMap(line => {
   try { return [JSON.parse(line)] } catch { return [] }
 })
+// A row's content is a string for a plain prompt (the session's first message), not a list of blocks.
+const blocks = row => Array.isArray(row.message?.content) ? row.message.content : []
 const transcriptState = (file, tool, input, id) => {
   try {
     const stat = fs.statSync(file)
@@ -349,12 +351,12 @@ const transcriptState = (file, tool, input, id) => {
     if (!match) {
       for (const row of records) {
         if (row.type !== 'assistant') continue
-        const content = row.message?.content || []
+        const content = blocks(row)
         for (const part of content) if (part.type === 'tool_use' && part.name === tool && isDeepStrictEqual(part.input, input)) match = part.id
       }
     }
     return { id: match, answered: !!match && records.some(row => row.type === 'user' &&
-      (row.message?.content || []).some(part => part.type === 'tool_result' && part.tool_use_id === match)) }
+      blocks(row).some(part => part.type === 'tool_result' && part.tool_use_id === match)) }
   } catch { return { id, answered: false } }
 }
 const verdict = (tool, input, answer) => {

@@ -303,6 +303,56 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(stdout.fileHandleForReading.readDataToEndOfFile().isEmpty)
     }
 
+    @Test func guestFormHookFindsTheCallInATranscriptWhoseFirstPromptIsAPlainString() async throws {
+        let dir = TempDir()
+        let module = dir.path("form-hook.mjs")
+        try Data(GuestRouterArtifacts.formModule.utf8).write(to: module)
+        let forms = dir.url.appendingPathComponent(".local/share/fjord/router/forms", isDirectory: true)
+        try FileManager.default.createDirectory(at: forms, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: forms.appendingPathComponent(".enabled").path, contents: Data())
+        let input: [String: Any] = ["questions": [["question": "Red or blue?", "header": "Color", "multiSelect": false,
+                                                  "options": [["label": "Red", "description": "r"], ["label": "Blue", "description": "b"]]]]]
+        // Claude Code writes the first user row with a string as its content, then the assistant's tool_use.
+        let rows: [[String: Any]] = [
+            ["type": "user", "message": ["role": "user", "content": "ask me which color I prefer"]],
+            ["type": "assistant", "message": ["role": "assistant", "content": [
+                ["type": "tool_use", "id": "toolu_guest_1", "name": "AskUserQuestion", "input": input]]]],
+        ]
+        let transcript = dir.path("session.jsonl")
+        try Data(rows.map { String(decoding: try! JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
+            .joined(separator: "\n").utf8).write(to: transcript)
+        let request = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion", "tool_input": input,
+            "session_id": "s1", "transcript_path": transcript.path, "cwd": "/home/silo/e2e-proj",
+        ])
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["node", module.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = dir.url.path
+        process.environment = environment
+        let stdin = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer { process.terminate(); process.waitUntilExit() }
+        try stdin.fileHandleForWriting.write(contentsOf: request)
+        try stdin.fileHandleForWriting.close()
+
+        var toolUseID: String?
+        for _ in 0..<80 where toolUseID == nil {
+            try await Task.sleep(for: .milliseconds(100))
+            let files = (try? FileManager.default.contentsOfDirectory(at: forms, includingPropertiesForKeys: nil)) ?? []
+            for file in files where file.pathExtension == "json" && !file.lastPathComponent.hasSuffix(".answer.json") {
+                let form = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                if let id = form?["tool_use_id"] as? String { toolUseID = id }
+            }
+        }
+        #expect(toolUseID == "toolu_guest_1")
+    }
+
     @Test func guestDisablePersistsNestedRemovalFromAMixedHookEntry() async throws {
         let guest = client()
         let paths = try GuestRouterPaths(home: account.home)
