@@ -84,3 +84,10 @@ Same setup (new backup `*-<ts2>`, own silod from the same pinned bundle, debug F
 - Mistake of mine: the first LCU click used a stale element id (701 from the previous run, after the tree changed) and hit an unknown element in the Claude window; the next call pressed Escape. No visible effect was seen.
 - The cheaper non-UI trigger (item 1, last bullet), T4 and T3 were not run since (b) did not pass.
 - Cleanup: record V moved to `~/.Trash/local_51ac372b-....2.json` (the first copy is also there); `e2e-relay` stopped and back to 32 GiB; silod and Fjord autostart stopped; `settings.json` and `ssh/config` restored and `cmp` identical to the backups; no worktree this run (the bundle from the first run was reused, built from the same pin). The extra "Code" window opened by me is still open in Claude: close it by hand. No Desktop sessions were created, so none to archive.
+
+## Third run: T3 (route F) BLOCKED
+Same setup (backup `*-<ts3>`, own silod, debug Fjord, `e2e-relay` at 8 GiB, alias and `sshConfigs` entry). Hub: the existing SSH session `local_5161f311` (cat or dog). Plan: send, from debug Fjord's Router, a message asking that session to call `start_session` with `initiation user_asked`, `context fresh` and no place (then `fork`), and record card, child host and folder, first turn, `spawnedFrom` and presence.
+
+The LCU call that types that message into Fjord's Router and presses Return was refused by the auto-mode classifier ("dangerous", no explanation). Nothing was typed or sent. I did not retry or reword it. T3 is therefore NOT RUN: no observation on the card, `spawnedFrom`, presence or delivery into a child. The owner can run it by hand (the message text is in the task brief) or allow the LCU call.
+
+Cleanup: Fjord test app and silod stopped; `e2e-relay` stopped and back to 32 GiB (read back); `settings.json` and `ssh/config` restored, `cmp` identical; no records written this run, no Desktop sessions created, no worktree.
