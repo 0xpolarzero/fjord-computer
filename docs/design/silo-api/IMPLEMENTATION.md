@@ -6,11 +6,12 @@ This is the orchestration tracker, kept by the coordinating agent. The spec is t
 
 All planned engine and Fjord work is merged. Silo main (3b08abb6) is pushed to GitHub and `scripts/silod.commit` pins it. Live checks pass: macOS (probes/live-final.md), the end-to-end engine and GUI (probes/e2e.md, e2e-gui.md), and Router "Runs on" in a real Claude Desktop SSH session (probes/e2e-router.md).
 
+Triage in a computer no longer runs headless (95-decisions, 2026-10-15 amendment): it starts a Router Desktop SSH session with one Send, so B-17 is not needed.
+
 Being fixed: Router cards overflow with long guest project labels; guest folders offered as Mac projects; guest delivery needs the Computers page opened once after launch.
 
 What's left needs the owner:
-1. B-17: a real `claude setup-token` passed as a secret, to prove bearer substitution for Triage.
-2. B-25: GitHub sign-in over SSH, which needs the owner's GitHub sign-in and a second Mac.
+1. B-25: GitHub sign-in over SSH, which needs the owner's GitHub sign-in and a second Mac.
 
 ## Phases and tracks
 
@@ -39,7 +40,7 @@ P3-guest (`guest.exec`/`guest.files`/`guest.sshAlias`) · P3-checkpoints (automa
 
 ### Phase 4: Fjord features
 
-Computers tool, complete · Router "Runs on" (sshConfigs, plugin and hook installed in the guest, delivery over `guest.files`) · Triage "Run in a computer" (headless runs, an automatic checkpoint first, proof recordings) · bundling `silod` and registering the LaunchAgent
+Computers tool, complete · Router "Runs on" (sshConfigs, plugin and hook installed in the guest, delivery over `guest.files`) · Triage in a computer (as a Router Desktop SSH session with one Send, an automatic checkpoint first; the headless runs were removed 2026-10-15) · bundling `silod` and registering the LaunchAgent
 
 ## Process (2026-10-14 update)
 
