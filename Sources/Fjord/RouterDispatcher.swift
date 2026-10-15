@@ -37,6 +37,8 @@ struct RouterContext: Equatable {
     /// one, never the Router's own runs: an incoming PR must never change settings), and when where isn't clear it waits for
     /// your pick, with no fallback.
     var action: RouterActionSource?
+    /// The turn each session ran when the checks were asked (by session): a stop or an interrupt from them names it.
+    var turns: [String: String] = [:]
     /// Sent from the Router page's composer: its run shows as a pill over the composer, flying to where it went
     /// (`RouterFlights`), and an ask about it unfolds there rather than in Needs you.
     var flies = false
@@ -209,11 +211,13 @@ struct RouterAskBack: Identifiable, Equatable {
             throw RouterTools.Failure("The Router isn't ready")
         }
         /// The checks call for a message about to be routed (`RouterActionChecks`): nil when it can't be asked (no Jev).
-        var checks: @MainActor (RouterTools, _ message: String) async throws -> RouterActionReading? = { _, _ in nil }
-        /// Stops a session's running turn (`Store.stopTurn`), through a gate that refuses once the run is over.
-        var stop: @MainActor (RouterTools, _ session: String) async -> StopOutcome = { _, _ in .failed("The Router isn't ready") }
-        /// Stops a session's running turn and sends it `text` as the next message (`Store.interrupt`).
-        var interrupt: @MainActor (RouterTools, _ session: String, _ text: String) async -> DeliveryOutcome = { _, _, _ in
+        var checks: @MainActor (RouterTools, _ message: String, _ scope: RouterActionChecks.Scope) async throws -> RouterActionReading? = { _, _, _ in nil }
+        /// Stops a session's running turn (`Store.stopTurn`), through a gate that refuses once the run is over. `turn`: the one
+        /// the checks saw; another running now is left alone.
+        var stop: @MainActor (RouterTools, _ session: String, _ turn: String?) async -> StopOutcome = { _, _, _ in .failed("The Router isn't ready") }
+        /// Stops a session's running turn and sends it `text` as the next message (`Store.interrupt`). `turn` as for `stop`;
+        /// `resend`: the signed text of an earlier try whose outcome is unknown, written again with its nonce.
+        var interrupt: @MainActor (RouterTools, _ session: String, _ text: String, _ turn: String?, _ resend: String?) async -> DeliveryOutcome = { _, _, _, _, _ in
             .failed("The Router isn't ready")
         }
         /// A plan decided for a card (approved, or sent back with the message): what was done.
@@ -230,6 +234,8 @@ struct RouterAskBack: Identifiable, Equatable {
     struct SplitRequest: Equatable {
         var id: UUID
         var text: String
+        /// The pills the message had, where they stood in `text` (its "@name"s): they come back as pills.
+        var mentions: [RouterMention] = []
     }
     /// The runs of messages sent from the composer (`RouterContext.flies`), oldest first: the composer's pills.
     private(set) var flying: [UUID] = []
@@ -261,6 +267,14 @@ struct RouterAskBack: Identifiable, Equatable {
     /// A run is over (tests wait on it).
     @ObservationIgnored var onFinish: ((UUID) -> Void)?
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
+    /// Interrupts whose delivery isn't known, by their entry: what is sent again, as it was written, on "Send again".
+    @ObservationIgnored private var unconfirmed: [UUID: Unconfirmed] = [:]
+    private struct Unconfirmed {
+        var session: String
+        var signed: String
+        var text: String
+        var turn: String?
+    }
     @ObservationIgnored private var runTools: [UUID: RouterTools] = [:]
     /// Jev's questions (tests answer for him); else `RouterTools.chooser` for the routing alone, else TypeSafe with your key.
     @ObservationIgnored var asker: JevAsker?
@@ -1183,7 +1197,7 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.reply = [$0.reply, "Split: the message is back in the composer."].compactMap { $0 }.joined(separator: " ")
             $0.outcome = .done
         }
-        splitRequest = SplitRequest(id: id, text: ask.message)
+        splitRequest = SplitRequest(id: id, text: ask.message, mentions: ask.context.mentions)
         follow(id)
     }
 
@@ -1244,11 +1258,22 @@ struct RouterAskBack: Identifiable, Equatable {
         case .stop(let id):
             let name = title(id), project = store.routerSessionProject(id).name
             let since = store.runningTurn(sessionID: id)?.startedAt.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+            // The turn the checks judged, never whichever runs by the time of a pick.
+            let turn = job.context.turns[id]
+            let ticket = job.tools.ticket()
             stage(job, "stopping")
-            switch await effects.stop(job.tools, id) {
+            let outcome = await effects.stop(job.tools, id, turn)
+            // Stopped (Stop, the Router off) while it was being done: what was done is kept on the line, nothing more is asked.
+            let cancelled = Task.isCancelled || (try? job.tools.live(ticket)) == nil
+            switch outcome {
             case .stopped: note(job, .stopped(title: name, project: project, since: since), session: id)
-            case .idle, .notRunning: couldntAct(job, session: id, "“\(RouterDecision.clip(name, 40))” wasn't running")
-            case .unsupported(let why), .failed(let why): couldntAct(job, session: id, why, stopping: name)
+            case .idle, .notRunning:
+                if cancelled { throw CancellationError() }
+                let gone = turn != nil && outcome == .notRunning ? "its turn had ended or another began" : "wasn't running"
+                couldntAct(job, session: id, "“\(RouterDecision.clip(name, 40))” \(gone)")
+            case .unsupported(let why), .failed(let why):
+                if cancelled { throw CancellationError() }
+                couldntAct(job, session: id, why, stopping: name)
             }
         case .interrupt(let id):
             let name = title(id)
@@ -1256,11 +1281,17 @@ struct RouterAskBack: Identifiable, Equatable {
             let delivery = try await effects.prepare(job.tools, id)
             try Task.checkCancellation()
             stage(job, "stopping it and sending")
-            switch await effects.interrupt(job.tools, id, delivery.body) {
-            case .delivered(_, let interrupted):
-                note(job, .interrupted(title: name, text: delivery.body, stopped: interrupted != nil), session: id)
-            case .unsupported(let why), .refused(let why), .failed(let why): couldntAct(job, session: id, why, stopping: name)
+            let turn = job.context.turns[id], ticket = job.tools.ticket()
+            let outcome = await effects.interrupt(job.tools, id, delivery.body, turn, nil)
+            try interrupted(job, session: id, name: name, text: delivery.body, turn: turn, outcome, ticket: ticket)
+        case .retry(let id):
+            guard let pending = unconfirmed[job.id], pending.session == id else {
+                throw RouterTools.Failure("There is nothing to send again")
             }
+            stage(job, "sending it again")
+            let ticket = job.tools.ticket()
+            let outcome = await effects.interrupt(job.tools, id, pending.text, pending.turn, pending.signed)
+            try interrupted(job, session: id, name: title(id), text: pending.text, turn: pending.turn, outcome, ticket: ticket)
         case .open(let id):
             store.openAgent(id)
             store.updateDecision(job.id) {
@@ -1269,6 +1300,29 @@ struct RouterAskBack: Identifiable, Equatable {
             }
         default:
             try await route(job, to: act.target)
+        }
+    }
+
+    /// How an interrupt (or its sending again) ended. A delivery whose outcome is unknown keeps its signed text for "Send again"
+    /// (the same nonce: the plugin's claim of it lets one copy through) and asks; only one known not to have gone offers the
+    /// words to the session instead. Nothing is asked once the run was stopped; what went stays on the line.
+    private func interrupted(_ job: Job, session id: String, name: String, text: String, turn: String?, _ outcome: DeliveryOutcome,
+                             ticket: RouterTools.Ticket) throws {
+        let cancelled = Task.isCancelled || (try? job.tools.live(ticket)) == nil
+        switch outcome {
+        case .delivered(_, let interrupted):
+            unconfirmed[job.id] = nil
+            note(job, .interrupted(title: name, text: text, stopped: interrupted != nil), session: id)
+        case .unconfirmed(let why, let signed):
+            unconfirmed[job.id] = Unconfirmed(session: id, signed: signed, text: text, turn: turn)
+            note(job, .failed(RouterDecision.clip("Can't tell whether “\(RouterDecision.clip(name, 40))” got it: \(why)", 160)), session: id)
+            if cancelled { throw CancellationError() }
+            let found = Classification(ranked: [], sure: false, assisted: true)
+            askBack(job, found, path: "interrupt-unconfirmed",
+                    note: "It may already have gone: sending the same message again can't make it arrive twice", acts: [.retry(session: id), .open(session: id)])
+        case .unsupported(let why), .refused(let why), .failed(let why):
+            if cancelled { throw CancellationError() }
+            couldntAct(job, session: id, why, stopping: name)
         }
     }
 
@@ -1299,8 +1353,14 @@ struct RouterAskBack: Identifiable, Equatable {
         let inWorld = Self.inWorld(world, unattended: unattended, store: store)
         // The checks (archive, stop) are asked beside the route, at send time only: not when a pick was shown over the composer
         // for these words (you went with it), not for an inbox action's message, which only ever goes to a session.
+        // The sessions you tagged (more than one: one alone was sent to, `plan`): only they, their cards and the Router's own
+        // runs are gone to; a message wholly for the Router has no such bound.
+        let scope = Self.forRouter(job.text, pills: job.context.pills) ? []
+            : Set(job.context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true })
+        // The checks are about what the route may go to: the projects it narrows to and the sessions tagged.
+        let checkScope = RouterActionChecks.Scope(projects: narrowed.isEmpty ? nil : Set(narrowed), sessions: scope)
         let checking: Task<RouterActionReading?, Never>? = unattended || job.context.shown != nil ? nil : Task { [effects, tools = job.tools, text = job.text] in
-            (try? await effects.checks(tools, text)) ?? nil
+            (try? await effects.checks(tools, text, checkScope)) ?? nil
         }
         defer { checking?.cancel() }
         // The pick shown over the composer for these words is the decision: sent as shown, not asked again.
@@ -1325,10 +1385,8 @@ struct RouterAskBack: Identifiable, Equatable {
         // Where your own words send it ("start a session in lookout …", "tell CI to …"), resolved here and not by Jev, is
         // where it goes: his pick of another doesn't send it elsewhere ("tell CI to update the docs" isn't for Docs). Not
         // where you waved it off, nor when it is gone.
-        // The sessions you tagged (more than one: one alone was sent to, `plan`): only they, their cards and the Router's own
-        // runs are gone to; when Jev's pick isn't among them, you pick among them. Not for a message wholly for the Router.
-        let scope = Self.forRouter(job.text, pills: job.context.pills) ? []
-            : Set(job.context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true })
+        // Of the sessions you tagged, only they, their cards and the Router's own runs are gone to; when Jev's pick isn't
+        // among them, you pick among them (`scope`, above).
         let inScope = { (target: String) in
             scope.isEmpty || RouterRun.Intent(rawValue: target) != nil || Self.session(of: target, store: store).map(scope.contains) == true
         }
@@ -1378,13 +1436,20 @@ struct RouterAskBack: Identifiable, Equatable {
         var checksTrace: RouterTrace.Checks?
         if let checking, found.assisted, !noClone, let reading = await checking.value {
             try Task.checkCancellation()
-            let decided = RouterActionChecks.decideAction(RouterActionChecks.info(found: found, reading: reading, store: store))
+            var decided = RouterActionChecks.decideAction(RouterActionChecks.info(found: found, reading: reading, store: store))
+            // Only what the checks were asked about is acted on: an action on anything else (outside the route's scope) is not done.
+            if let act = decided.act, !RouterActionChecks.allows(act, reading) { decided = .init(kind: .route, act: nil, why: "route") }
+            decided.options = decided.options.filter { RouterActionChecks.allows($0, reading) }
             checksTrace = RouterTrace.Checks(reading, decided)
             switch decided.kind {
             case .act:
-                if let act = decided.act { return try await perform(job, act, inputs: found.trace, checks: checksTrace, decided: true) }
+                if let act = decided.act {
+                    var acting = job
+                    acting.context.turns = reading.turns
+                    return try await perform(acting, act, inputs: found.trace, checks: checksTrace, decided: true)
+                }
             case .ask:
-                return askBack(job, found, path: "checks", chooseFolder: false, acts: decided.options, checks: checksTrace)
+                return askBack(job, found, path: "checks", chooseFolder: false, acts: decided.options, checks: checksTrace, turns: reading.turns)
             case .route: break
             }
         }
@@ -1472,7 +1537,7 @@ struct RouterAskBack: Identifiable, Equatable {
     func eligible(_ target: String, store: Store) -> Bool {
         switch RouterAct(target: target) {
         case .archive(let id): return store.routerShownOpenCards.contains { $0.id == id }
-        case .stop(let id), .interrupt(let id), .open(let id): return store.claudeSessions[id].map { !$0.isArchived } ?? false
+        case .stop(let id), .interrupt(let id), .open(let id), .retry(let id): return store.claudeSessions[id].map { !$0.isArchived } ?? false
         default: break
         }
         if target.hasPrefix("answer:") { return store.routerShownOpenCards.contains { $0.id == String(target.dropFirst(7)) } }
@@ -1523,7 +1588,8 @@ struct RouterAskBack: Identifiable, Equatable {
     /// `suggestion`: what a pick corrects, when it isn't Jev's top (a wrong send asked again); `path` for the trace likewise.
     /// `note`: why it asks, when it isn't Jev's doubt; `chooseFolder`: "Choose folder…" is offered last.
     private func askBack(_ job: Job, _ ranked: Classification, suggestion: String? = nil, path: String? = nil, note: String? = nil,
-                         chooseFolder: Bool = false, whole: Bool = false, acts: [RouterAct]? = nil, checks: RouterTrace.Checks? = nil) {
+                         chooseFolder: Bool = false, whole: Bool = false, acts: [RouterAct]? = nil, checks: RouterTrace.Checks? = nil,
+                         turns: [String: String] = [:]) {
         guard let store else { return }
         let found = ranked
         var options: [RouterAskBack.Option] = []
@@ -1545,7 +1611,10 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         if chooseFolder, let choose = option(RouterAskBack.chooseFolder, store: store) { options.append(choose) }
         if whole, let split = option(RouterAskBack.split, store: store) { options.append(split) }
-        var ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
+        // The turns the checks judged go with the ask: a stop or an interrupt picked later names them.
+        var context = job.context
+        if !turns.isEmpty { context.turns = turns }
+        var ask = RouterAskBack(id: job.id, message: job.text, context: context, options: options,
                                 suggestion: suggestion ?? (acts != nil ? options.first?.target : found.top?.target), at: Date(), note: note)
         ask.whole = whole
         var inputs = found.trace
@@ -1627,7 +1696,10 @@ struct RouterAskBack: Identifiable, Equatable {
         case .askFjord: return .init(target: act.target, title: "Ask Fjord", detail: "A question about now")
         case .open(let id):
             guard let s = session(id) else { return nil }
-            return .init(target: act.target, title: "Open the session", detail: s.title)
+            return .init(target: act.target, title: "Check the session", detail: s.title)
+        case .retry(let id):
+            guard let s = session(id) else { return nil }
+            return .init(target: act.target, title: "Send again to " + name(s.title), detail: "the same message: it can't arrive twice")
         case .other: return nil
         }
     }
@@ -1815,21 +1887,21 @@ extension RouterDispatcher.Effects {
                 let project = store.claudeSessions[request.session].map { store.folderName($0.folderKey) } ?? ""
                 return try started(answer, tools, project: project, settings: nil)
             },
-            checks: { [weak dispatcher] tools, message in
+            checks: { [weak dispatcher] tools, message, scope in
                 guard let dispatcher, let store = dispatcher.storeForEffects, let ask = dispatcher.jevForEffects(tools) else { return nil }
-                return try await RouterActionChecks.read(store, message: message, tagged: tools.tagged, ask: ask)
+                return try await RouterActionChecks.read(store, message: message, tagged: tools.tagged, scope: scope, ask: ask)
             },
-            stop: { [weak dispatcher] tools, session in
+            stop: { [weak dispatcher] tools, session, turn in
                 guard let dispatcher, let store = dispatcher.storeForEffects else { return .failed("Fjord isn't ready") }
                 let ticket = tools.ticket()
-                return await store.stopTurn(sessionID: session, gate: { [weak tools] in
+                return await store.stopTurn(sessionID: session, turn: turn, gate: { [weak tools] in
                     tools.flatMap { (try? $0.live(ticket)) == nil ? "Stopped; nothing was done" : nil }
                 })
             },
-            interrupt: { [weak dispatcher] tools, session, text in
+            interrupt: { [weak dispatcher] tools, session, text, turn, resend in
                 guard let dispatcher, let store = dispatcher.storeForEffects else { return .failed("Fjord isn't ready") }
                 let ticket = tools.ticket()
-                return await store.interrupt(sessionID: session, text: text, gate: { [weak tools] in
+                return await store.interrupt(sessionID: session, text: text, turn: turn, resend: resend, gate: { [weak tools] in
                     tools.flatMap { (try? $0.live(ticket)) == nil ? "Stopped; nothing was done" : nil }
                 })
             },

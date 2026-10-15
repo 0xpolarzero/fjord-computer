@@ -207,7 +207,7 @@ extension RouterDispatcherTests {
                     "the line says why: \(outcome)")
             let ask = d.askBacks.first { $0.id == a }
             #expect(ask?.options.map(\.target) == ["session:local_c", "open:session:local_c"])
-            #expect(ask?.options.map(\.title) == ["Send to “Run the CI”", "Open the session"])
+            #expect(ask?.options.map(\.title) == ["Send to “Run the CI”", "Check the session"])
             #expect(f.sent.isEmpty)
             // "Send to X" queues the words behind its turn.
             f.finished = []

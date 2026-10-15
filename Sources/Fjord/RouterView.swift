@@ -472,15 +472,18 @@ final class RouterModel {
 
     /// "Split…": the compound message back in the composer. No armed reply, edit or pinned/predicted target goes with it (a send
     /// would fork or go to that one with these words). A draft you had not sent stays: the message follows it, below.
-    func restore(_ text: String) {
+    func restore(_ text: String, mentions: [RouterMention] = []) {
         replyTo = nil
         editing = nil
         live.reset()
-        let words = text.replacingOccurrences(of: MentionText.markString, with: "")
+        // Its pills come back as pills (a mark each, in order), not as plain "@name".
+        let (words, tagged) = MentionText.restoring(text, mentions: mentions)
         if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            pointers = []
+            pointers = tagged
             draft = words
         } else {
+            // The draft's own marks come first, so the new ones follow theirs.
+            pointers += tagged
             draft += "\n\n" + words
         }
         caretRequest = (draft as NSString).length

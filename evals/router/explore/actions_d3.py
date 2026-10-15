@@ -166,6 +166,70 @@ def read_checks(answers, mapping):
     return cs, glob
 
 
+# ------------------------------------------------------------------ inputs the live app assembles (RouterActionChecks)
+
+def route_top(probs, order):
+    """Jev's raw top of the route: the highest probability; a tie goes to the option sent first (`order`: the targets as the
+    route question listed them), then any other key by name. One rule, the Swift `RouterActionChecks.rawTop` does the same."""
+    keys = list(order) + sorted(k for k in probs if k not in order)
+    best = None
+    for k in keys:
+        if k in probs and (best is None or probs[k] > probs[best]):
+            best = k
+    return best
+
+
+def _in_scope(scope, sid, project):
+    projects, sessions = scope.get("projects"), scope.get("sessions") or []
+    return (projects is None or project in projects) and (not sessions or sid in sessions)
+
+
+def assemble_inputs(board, scope):
+    """What the checks are asked about, as the live app assembles it (`RouterActionChecks.assemble`) and as `adapter.to_case`
+    narrows a board: only what the route may go to (the projects it narrows to, the sessions tagged). board: {"sessions":
+    [{id, project, running, waits_on_you, last_activity, archived}], "cards": [{id, session}]}. → the dismiss cards in board
+    order and the stoppable sessions, latest activity first (a tie, the smaller id first)."""
+    live = {s["id"]: s for s in board["sessions"] if not s.get("archived")}
+    cards = [c["id"] for c in board["cards"]
+             if c["session"] in live and _in_scope(scope, c["session"], live[c["session"]]["project"])]
+    run = [s for s in live.values()
+           if s.get("running") and not s.get("waits_on_you") and _in_scope(scope, s["id"], s["project"])]
+    run.sort(key=lambda s: (-s.get("last_activity", 0), s["id"]))
+    return {"cards": cards, "stoppable": [s["id"] for s in run]}
+
+
+def _canon(target, cards):
+    if target.startswith("answer:"):
+        c = next((c for c in cards if c[0] == target[7:]), None)
+        return "session:" + c[1] if c else target
+    return target
+
+
+def assemble_info(found, cards):
+    """What `decide` reads about the route (`RouterActionChecks.info`), from the classification the route made: found {ranked:
+    [[target, p]], sure, card, route: {target: p}, options: [targets as sent]}, cards [[id, session, kind]]."""
+    ranked = found["ranked"]
+    top = ranked[0] if ranked else None
+    asks = not (found["sure"] and top is not None)
+    info = {"T": None, "pT": 0.0, "T_act": None,
+            "raw_top": route_top(found["route"], found.get("options") or []) if found.get("route") else None}
+    act = None
+    if top:
+        T = _canon(top[0], cards)
+        info.update({"T": T, "pT": top[1], "T_act": live_action(T, cards)})
+        if not asks:
+            act = live_action(T, cards)
+    options = []
+    for t in (found.get("card") or []) + [r[0] for r in ranked]:
+        if t == "unclear":
+            continue
+        a = live_action(_canon(t, cards), cards)
+        if a and a not in options:
+            options.append(a)
+    info["routing"] = {"decision": "ask" if asks else "send", "act": act, "options": options[:4]}
+    return info
+
+
 # ------------------------------------------------------------------ actions
 
 def act_of(kind, card, sid):
@@ -311,7 +375,7 @@ def _system_class():
                 probs = fusion.probs(fs, w)
             route = answers.get("route", {}).get("probabilities", {})
             raw = {keymap.get(k, k): p for k, p in route.items()}
-            raw_top = max(raw.items(), key=lambda x: x[1])[0] if raw else None
+            raw_top = route_top(raw, list(keymap.values())) if raw else None
             st = {"sessions": case["board"]["sessions"]}
             canon = lambda t: adapter.canonical_target(t, st)
             return {canon(k): v for k, v in probs.items()}, canon(raw_top)
@@ -540,6 +604,47 @@ def synthetic_cases(n=300, seed=7):
     return out
 
 
+def synthetic_assembly(n=250, seed=11):
+    """Made-up boards with sessions of three projects (archived, waiting, idle, equal activity), cards on them (and on none),
+    and every scope: no bound, projects, tagged sessions, both."""
+    import random
+    rng = random.Random(seed)
+    out = []
+    for i in range(n):
+        sessions = [{"id": f"s{j}", "project": rng.choice(["p1", "p2", "p3"]), "running": rng.random() < 0.6,
+                     "waits_on_you": rng.random() < 0.25, "archived": rng.random() < 0.15,
+                     "last_activity": rng.choice([100, 200, 200, 300])} for j in range(rng.randint(1, 7))]
+        ids = [s["id"] for s in sessions] + ["ghost"]
+        cards = [{"id": f"c{k}", "session": rng.choice(ids)} for k in range(rng.randint(0, 6))]
+        projects = rng.choice([None, None, ["p1"], ["p2", "p3"], ["p9"]])
+        tagged = rng.choice([[], [], rng.sample([s["id"] for s in sessions], min(2, len(sessions)))])
+        scope = {"projects": projects, "sessions": tagged}
+        board = {"sessions": sessions, "cards": cards}
+        out.append({"name": f"assembly:{i}", "board": board, "scope": scope, "expected": assemble_inputs(board, scope)})
+    return out
+
+
+def synthetic_info(n=250, seed=13):
+    """Made-up classifications, with the ties between options a dictionary's order used to decide."""
+    import random
+    rng = random.Random(seed)
+    targets = ["session:s1", "session:s2", "session:s3", "answer:c1", "answer:c2", "new:/code/x", "change_fjord", "question", "unclear"]
+    cards = [["c1", "s1", "question"], ["c2", "s2", "done"], ["c3", "s3", "plan"]]
+    out = []
+    for i in range(n):
+        order = rng.sample(targets, rng.randint(3, len(targets)))
+        ps = [rng.choice([0.1, 0.3, 0.3, 0.5, 0.5, 0.7]) for _ in order]
+        route = dict(zip(order, ps))
+        pool = [t for t in order if t != "unclear"] or ["session:s1"]
+        ranked_t = rng.sample(pool, k=min(len(pool), rng.randint(0, 4)))
+        ranked = [[t, rng.choice([0.2, 0.4, 0.6, 0.9])] for t in ranked_t]
+        card = rng.choice([None, None, rng.sample(targets, 3)])
+        found = {"ranked": ranked, "sure": rng.random() < 0.5, "card": card, "route": route if rng.random() < 0.9 else {},
+                 "options": order}
+        out.append({"name": f"info:{i}", "found": found, "cards": cards, "expected": assemble_info(found, cards)})
+    return out
+
+
 def export_parity(per_class=45):
     """Recorded check/route answers of the cached D3-all dev traces (runs and bench) with `decide`'s answer on each, for
     RouterActionsParityTests: every case where a check decided (act, unsure, elsewhere), and an even spread of the route-ask
@@ -568,7 +673,10 @@ def export_parity(per_class=45):
             cases.append({"name": f"{r[0]}:{r[1]}:{r[2]}", "info": r[3], "expected": r[4]})
     cases += synthetic_cases()
     PARITY.parent.mkdir(parents=True, exist_ok=True)
-    PARITY.write_text(json.dumps({"params": PARAMS, "cases": cases}, sort_keys=True, separators=(",", ":")) + "\n")
+    # "assembly": the inputs of the checks (scope, candidate order, stoppable set); "info": what the route's outcome gives
+    # `decide` (target, raw top with its tie rule, the route's act and options), beside the decision itself.
+    PARITY.write_text(json.dumps({"params": PARAMS, "cases": cases, "assembly": synthetic_assembly(), "info": synthetic_info()},
+                                 sort_keys=True, separators=(",", ":")) + "\n")
     print(f"{len(cases)} cases -> {PARITY}", {f"{k[0]}/{k[1]}": len(v) for k, v in sorted(strata.items())})
 
 

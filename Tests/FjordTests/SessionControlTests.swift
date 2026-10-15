@@ -341,6 +341,48 @@ import Testing
         #expect(text.hasPrefix("⟦fjord v3 cli-a ") && text.split(separator: "\n")[0].contains(" - - 1 "))
     }
 
+    // MARK: A stop or an interrupt is for the turn that was judged
+
+    @Test func aStopNamingAnotherTurnThanTheRunningOneIsLeftAloneAndWritesNothing() async throws {
+        let l = try local(extra: Self.capable)
+        #expect(await l.store.stopTurn(sessionID: "local_a", turn: "t0") == .notRunning)
+        #expect(messages(l).isEmpty, "a turn that began after the one judged is not stopped")
+        // The turn judged is the one the message names, whatever presence shows by then.
+        let fake = plugin(l.inbox, answer: "ok stopped t1")
+        #expect(await l.store.stopTurn(sessionID: "local_a", turn: "t1") == .stopped("t1"))
+        let text = try #require(await fake.value)
+        #expect(text.hasPrefix("⟦fjord stop v1 cli-a ") && text.contains(" t1 "))
+    }
+
+    @Test func anInterruptJudgedOnAnotherTurnIsRefusedWithNothingWritten() async throws {
+        let l = try local(extra: Self.capable)
+        let outcome = await l.store.interrupt(sessionID: "local_a", text: "Go", turn: "t0")
+        guard case .refused = outcome else { Issue.record("not refused: \(outcome)"); return }
+        #expect(messages(l).isEmpty)
+        // The turn that is running is interrupted as before.
+        let fake = plugin(l.inbox, answer: "ok interrupted t1")
+        #expect(await l.store.interrupt(sessionID: "local_a", text: "Go", turn: "t1") == .delivered(ack: "ok interrupted t1", interrupted: "t1"))
+        _ = await fake.value
+    }
+
+    @Test func anInterruptLostAfterItWasWrittenIsUnknownAndSentAgainWithItsOwnNonce() async throws {
+        let l = try local(extra: Self.capable)
+        // Before anything was written, a failure is a failure (nothing can have gone).
+        #expect(await l.store.interrupt(sessionID: "local_a", text: "Go", gate: { "gone" }) == .refused("gone"))
+        // Stopped while waiting for the plugin's answer: the message was in the inbox, so it may have been taken.
+        let run = Task { await l.store.interrupt(sessionID: "local_a", text: "Do this instead") }
+        var watchdog = Watchdog()
+        while messages(l).isEmpty, !watchdog.expired() { try? await Task.sleep(nanoseconds: 10_000_000) }
+        run.cancel()
+        guard case .unconfirmed(_, let signed) = await run.value else { Issue.record("not unconfirmed"); return }
+        let nonce = try #require(RelayInbox.header(of: signed)?.nonce)
+        // Sent again, the very same text (same nonce) is what the plugin gets, not a new message.
+        let fake = plugin(l.inbox, answer: "ok interrupted t1")
+        let again = await l.store.interrupt(sessionID: "local_a", text: "Do this instead", resend: signed)
+        #expect(again == .delivered(ack: "ok interrupted t1", interrupted: "t1"))
+        #expect(try #require(await fake.value) == signed && RelayInbox.header(of: signed)?.nonce == nonce)
+    }
+
     @Test func withoutTheRouterNothingIsSent() async {
         let store = Store()
         store.persists = false

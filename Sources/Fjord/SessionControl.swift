@@ -32,7 +32,12 @@ enum DeliveryOutcome: Equatable, Sendable {
     case unsupported(String)
     /// The gate or the plugin said no (the reason).
     case refused(String)
+    /// Nothing reached the plugin (or it said so): confirmed not delivered.
     case failed(String)
+    /// The message was put in the inbox and no answer came back (or the answer was lost): it may have been submitted. `signed`
+    /// is the text as written, with its nonce: sent again as it is, the plugin's claim of the nonce makes a second copy
+    /// impossible; a new message (another nonce) could arrive twice.
+    case unconfirmed(String, signed: String)
 }
 
 enum SessionControlAck {
@@ -102,7 +107,8 @@ extension Store {
 
     /// Stops the turn `sessionID` is running. The turn named is the one presence shows now: a plugin whose running turn is
     /// another one leaves it alone (`.notRunning`). A session whose presence says it is idle is not written to (`.idle`).
-    func stopTurn(sessionID: String, gate: (@MainActor @Sendable () -> String?)? = nil) async -> StopOutcome {
+    /// `turn`: the turn the caller saw (the one the stop was judged on); a plugin whose running turn is another leaves it alone.
+    func stopTurn(sessionID: String, turn expected: String? = nil, gate: (@MainActor @Sendable () -> String?)? = nil) async -> StopOutcome {
         do {
             let target: ControlTarget
             if let guest = GuestRouterRuntime.shared.guestReference(for: sessionID) {
@@ -118,9 +124,12 @@ extension Store {
                 return .unsupported("Fjord's plugin in this session is too old to stop a turn: restart it or run /reload-plugins in it")
             }
             if target.hasTurnField, target.turn == nil { return .idle }
+            // Another turn than the one judged: left alone, nothing written.
+            if let expected, let running = target.turn?.id, running != expected { return .notRunning }
             // A refusal known now is returned without writing; the gate is asked again right before the write.
             if let refusal = await MainActor.run(body: { gate?() }) { return .failed(refusal) }
-            let turn = target.turn?.id
+            // The turn named is the one judged (else whichever presence shows): the plugin answers not-running for another.
+            let turn = expected ?? target.turn?.id
             let ack: String
             if let guest = target.guest {
                 let signed = try await guestSigned(target.cli, guest: guest) { key, now in
@@ -145,8 +154,13 @@ extension Store {
     /// Interrupts `sessionID`: the turn it runs (if any) is stopped and `text` submitted as the person's own words, in one
     /// step in the plugin (a v3 message); the model and effort of `settings` ride along when the plugin applies them.
     /// `text` is sent as it is: the caller adds whatever the message carries. An idle session just takes the message.
-    func interrupt(sessionID: String, text: String, settings: SessionSettings? = nil,
-                   gate: (@MainActor @Sendable () -> String?)? = nil) async -> DeliveryOutcome {
+    /// `turn`: the turn the caller judged; when another one runs now, nothing is written (`.refused`).
+    /// `resend`: the signed text of an earlier try that ended `.unconfirmed`, written again as it was (same nonce) instead of
+    /// signing a new message; `text` is then only what it says.
+    func interrupt(sessionID: String, text: String, settings: SessionSettings? = nil, turn expected: String? = nil,
+                   resend: String? = nil, gate: (@MainActor @Sendable () -> String?)? = nil) async -> DeliveryOutcome {
+        // Set once the message may have reached the inbox: from there on a failure is not a proof it wasn't delivered.
+        var written: String?
         do {
             let target: ControlTarget
             if let guest = GuestRouterRuntime.shared.guestReference(for: sessionID) {
@@ -161,35 +175,55 @@ extension Store {
             guard target.can(ClaudePlugin.inboxCapability), target.can(ClaudePlugin.interruptCapability) else {
                 return .unsupported("Fjord's plugin in this session is too old to interrupt a turn: restart it or run /reload-plugins in it")
             }
+            // A resend of a message already in the plugin's hands is not refused for the turn moving on: it either was taken
+            // (the plugin says so) or wasn't, and a new turn is no reason to hide that.
+            if resend == nil, let expected, let running = target.turn?.id, running != expected {
+                return .refused("Its turn changed since you asked: it isn't the one you meant to stop")
+            }
             let applied = target.can(ClaudePlugin.settingsCapability) ? settings : nil
             let ack: String
             if let guest = target.guest {
-                let signed = try await guestSigned(target.cli, guest: guest) { key, now in
-                    RelaySigner.sign(body: text, target: target.cli, key: key, now: now, model: applied?.model, effort: applied?.effort,
-                                     interrupt: true)
+                let signed: String
+                if let resend { signed = resend } else {
+                    signed = try await guestSigned(target.cli, guest: guest) { key, now in
+                        RelaySigner.sign(body: text, target: target.cli, key: key, now: now, model: applied?.model, effort: applied?.effort,
+                                         interrupt: true)
+                    }
                 }
+                written = signed
                 ack = try await GuestRouterRuntime.shared.deliver(signed, to: target.cli, computer: guest.computer, body: text,
                                                                    gate: gate, preflight: gate)
             } else {
-                let signed = try await localSigned { key in
-                    RelaySigner.sign(body: text, target: target.cli, key: key, model: applied?.model, effort: applied?.effort, interrupt: true)
+                let signed: String
+                if let resend { signed = resend } else {
+                    signed = try await localSigned { key in
+                        RelaySigner.sign(body: text, target: target.cli, key: key, model: applied?.model, effort: applied?.effort, interrupt: true)
+                    }
                 }
                 guard let paths = routerFiles else { return .failed("The Router is off") }
+                written = signed
                 ack = try await RelayInbox(root: paths.relay).deliver(signed, to: target.cli, gate: gate)
             }
             guard let how = SessionControlAck.delivery(ack) else { return .failed("The session's plugin answered “\(RouterDecision.clip(ack, 60))”") }
             return .delivered(ack: ack, interrupted: how.interrupted)
         } catch let failure as RelayInbox.Failure {
             if case .refused(let why) = failure { return .refused(why) }
-            return .failed(failure.localizedDescription)
+            return unknown(failure, written)
         } catch let failure as GuestRelayInbox.Failure {
             if case .refused(let why) = failure { return .refused(why) }
-            return .failed(failure.localizedDescription)
+            return unknown(failure, written)
         } catch is CancellationError {
+            if let written { return .unconfirmed("Stopped while it was being sent: it may have gone", signed: written) }
             return .failed("Stopped; nothing was sent")
         } catch {
-            return .failed(error.localizedDescription)
+            return unknown(error, written)
         }
+    }
+
+    /// A failure after the message was put in the inbox is an unknown outcome; before, it is a failure.
+    private func unknown(_ error: Error, _ written: String?) -> DeliveryOutcome {
+        guard let written else { return .failed(error.localizedDescription) }
+        return .unconfirmed(error.localizedDescription, signed: written)
     }
 
     // MARK: Reading and signing

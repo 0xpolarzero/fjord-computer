@@ -25,6 +25,8 @@ enum RouterAct: Hashable, Sendable {
     case compound
     /// Opens the session in Claude, sending nothing (an ask's option after a stop that couldn't be done).
     case open(session: String)
+    /// The interrupt whose delivery isn't known, sent again as it was written (same nonce: it can't arrive twice).
+    case retry(session: String)
     /// Anything else the route named (its wire form).
     case other(String)
 
@@ -41,6 +43,7 @@ enum RouterAct: Hashable, Sendable {
         case .askFjord: "ask_fjord"
         case .compound: "compound"
         case .open(let session): "open:session:\(session)"
+        case .retry(let session): "retry:session:\(session)"
         case .other(let wire): wire
         }
     }
@@ -56,6 +59,7 @@ enum RouterAct: Hashable, Sendable {
             case ("answer", "card"): self = .answer(card: parts[2]); return
             case ("start", "new"): self = .start(folder: parts[2]); return
             case ("open", "session"): self = .open(session: parts[2]); return
+            case ("retry", "session"): self = .retry(session: parts[2]); return
             default: break
             }
         }
@@ -81,6 +85,7 @@ enum RouterAct: Hashable, Sendable {
         case .askFjord: "question"
         case .compound: "compound"
         case .open(let session): "open:session:\(session)"
+        case .retry(let session): "retry:session:\(session)"
         case .other(let wire): wire
         }
     }
@@ -105,6 +110,7 @@ enum RouterAct: Hashable, Sendable {
         case .stop: "stop"
         case .interrupt: "interrupt"
         case .open: "open"
+        case .retry: "interrupt"
         default: "send"
         }
     }
@@ -112,7 +118,7 @@ enum RouterAct: Hashable, Sendable {
     /// Archive, stop or interrupt: what the checks name, done by `RouterDispatcher.perform`.
     var isCheckAction: Bool {
         switch self {
-        case .archive, .stop, .interrupt: true
+        case .archive, .stop, .interrupt, .retry: true
         default: false
         }
     }
@@ -149,6 +155,9 @@ struct RouterActionReading: Equatable, Sendable {
     var urgent = 0.0
     var instead = 0.0
     var stoppable: [String] = []
+    /// The turn each stoppable session ran when the checks were asked (by session): what a stop or an interrupt picked later
+    /// names, so it never lands on a turn that began after.
+    var turns: [String: String] = [:]
 }
 
 /// What the decision reads: the route's outcome and the checks.
@@ -201,27 +210,63 @@ enum RouterActionChecks {
 
     // MARK: Candidates and questions
 
+    /// Where the route may go: the projects tagged (the folders the route narrows to, as `RouterTools.targets`) and the sessions
+    /// tagged (more than one). The checks are asked about, and an action is done on, only what is inside it
+    /// (the evals' `adapter.to_case` narrows the board the same way before it builds the checks).
+    struct Scope: Equatable, Sendable {
+        var projects: Set<String>?
+        var sessions: Set<String> = []
+        init(projects: Set<String>? = nil, sessions: Set<String> = []) {
+            self.projects = projects
+            self.sessions = sessions
+        }
+        func contains(session: String, folder: String) -> Bool {
+            (projects?.contains(folder) ?? true) && (sessions.isEmpty || sessions.contains(session))
+        }
+    }
+
     /// What the checks are asked about, at the time they are asked.
     struct Candidates: Equatable {
-        /// Every open card on the board (board order) whose session is known.
+        /// Every open card in scope (board order) whose session is known.
         var cards: [RouterCard]
-        /// Every session that works and doesn't wait on you (board order).
+        /// Every session in scope that works and doesn't wait on you (most recent first).
         var sessions: [ClaudeSession]
     }
 
+    /// The pure part of the candidates, mirrored by `assemble_inputs` of explore/actions_d3.py (the parity fixture compares them).
+    struct BoardCard: Equatable, Sendable { var id: String, session: String, folder: String }
+    struct BoardSession: Equatable, Sendable {
+        var id: String, folder: String
+        var working: Bool, waits: Bool
+        var lastActivity: Double
+    }
+
+    /// The ids asked about: cards in board order whose session is live and in scope; sessions that work, don't wait on you and
+    /// are in scope, latest activity first (a tie, the smaller id first).
+    static func assemble(cards: [BoardCard], sessions: [BoardSession], live: Set<String>, scope: Scope) -> (cards: [String], sessions: [String]) {
+        let folder = Dictionary(sessions.map { ($0.id, $0.folder) }, uniquingKeysWith: { a, _ in a })
+        let cardIDs = cards.filter { live.contains($0.session) && scope.contains(session: $0.session, folder: folder[$0.session] ?? $0.folder) }.map(\.id)
+        let running = sessions.filter { live.contains($0.id) && $0.working && !$0.waits && scope.contains(session: $0.id, folder: $0.folder) }
+            .sorted { ($0.lastActivity, $1.id) > ($1.lastActivity, $0.id) }.map(\.id)
+        return (cardIDs, running)
+    }
+
     @MainActor
-    static func candidates(_ store: Store) -> Candidates {
+    static func candidates(_ store: Store, scope: Scope = Scope()) -> Candidates {
         let live = store.claudeSessions.filter { !$0.value.isArchived }
-        let cards = store.routerShownOpenCards.filter { live[$0.sessionID] != nil }
-        let waiting = Set(store.routerShownOpenCards.filter { RouterTools.waitsOnYou.contains($0.kind) }.map(\.sessionID))
-        let sessions = live.values.filter { s in
-            guard !waiting.contains(s.id) else { return false }
+        let shown = store.routerShownOpenCards
+        let waiting = Set(shown.filter { RouterTools.waitsOnYou.contains($0.kind) }.map(\.sessionID))
+        let boardCards = shown.map { BoardCard(id: $0.id, session: $0.sessionID, folder: store.routerProjectFolder(sessionID: $0.sessionID, fallback: $0.folder)) }
+        let boardSessions = live.values.map { s -> BoardSession in
             // Running by the feed or by the plugin's own presence; a plugin that says it is idle outranks the feed.
-            if let target = store.controlTarget(s.id), target.hasTurnField, target.turn == nil { return false }
-            return s.running || store.runningTurn(sessionID: s.id) != nil
+            var working = s.running || store.runningTurn(sessionID: s.id) != nil
+            if let target = store.controlTarget(s.id), target.hasTurnField, target.turn == nil { working = false }
+            return BoardSession(id: s.id, folder: store.routerProjectFolder(sessionID: s.id, fallback: s.folderKey), working: working,
+                                waits: waiting.contains(s.id), lastActivity: s.lastActivity.timeIntervalSince1970)
         }
-            .sorted { ($0.lastActivity, $1.id) > ($1.lastActivity, $0.id) }
-        return Candidates(cards: cards, sessions: sessions)
+        let ids = assemble(cards: boardCards, sessions: boardSessions, live: Set(live.keys), scope: scope)
+        let byCard = Dictionary(shown.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return Candidates(cards: ids.cards.compactMap { byCard[$0] }, sessions: ids.sessions.compactMap { live[$0] })
     }
 
     /// The checks call: its questions, in the order they are asked (`dismiss0…`, `stop0…`, `urgent`, `instead`).
@@ -265,14 +310,15 @@ enum RouterActionChecks {
 
     /// The answers of a checks call as a reading. Throws what the asker threw; nil answers count as 0.
     @MainActor
-    static func read(_ store: Store, message: String, tagged: String?, ask: JevAsker) async throws -> RouterActionReading {
-        let c = candidates(store)
+    static func read(_ store: Store, message: String, tagged: String?, scope: Scope = Scope(), ask: JevAsker) async throws -> RouterActionReading {
+        let c = candidates(store, scope: scope)
         let call = call(store, candidates: c)
         // The state is the route's own: the redacted message (what it tags goes with it).
         var state = ["message": RouterTools.redacted(message)]
         if let tagged { state["tagged in the message"] = RouterTools.redacted(tagged) }
         let answers = try await JevClient.$questionOrder.withValue(call.order) { try await ask(call.questions, state) }
         var reading = RouterActionReading(stoppable: c.sessions.map(\.id))
+        for s in c.sessions { if let turn = store.runningTurn(sessionID: s.id)?.id { reading.turns[s.id] = turn } }
         for key in call.order {
             if let card = call.card[key] {
                 reading.checks.append(.init(kind: .dismiss, card: card.id, session: card.sessionID, p: answers[key]?.yes ?? 0))
@@ -341,21 +387,50 @@ enum RouterActionChecks {
 
     // MARK: From the dispatcher's classification
 
+    /// Whether the checks were asked about `act`'s target: an action on anything else (out of the route's scope, a card or a
+    /// session the checks never saw) is never done.
+    static func allows(_ act: RouterAct, _ reading: RouterActionReading) -> Bool {
+        switch act {
+        case .archive(let card): reading.checks.contains { $0.kind == .dismiss && $0.card == card }
+        case .stop(let session), .interrupt(let session): reading.stoppable.contains(session)
+        default: true
+        }
+    }
+
+    /// Jev's raw top of the route: the highest probability; a tie goes to the option sent first (the options as the route
+    /// question listed them, then any other key by name). `route_top` of explore/actions_d3.py.
+    static func rawTop(_ trace: RouterTrace.Inputs?) -> String? {
+        guard let trace, !trace.route.isEmpty else { return nil }
+        var order = trace.options.map(\.target)
+        order += trace.route.keys.filter { !order.contains($0) }.sorted()
+        var best: String?, bestP = -Double.infinity
+        for target in order {
+            guard let p = trace.route[target], p > bestP else { continue }
+            best = target
+            bestP = p
+        }
+        return best
+    }
+
     /// What the decision reads, from the classification the route made (after the dispatcher's own adjustments) and the
     /// checks' reading. `found.sure` and `found.top` are today's outcome.
     @MainActor
     static func info(found: RouterDispatcher.Classification, reading: RouterActionReading, store: Store) -> RouterActionInfo {
-        let cards = store.routerShownOpenCards.map { (id: $0.id, session: $0.sessionID, kind: $0.kind) }
-        func canon(_ target: String) -> String {
+        info(found: found, reading: reading, cards: store.routerShownOpenCards.map { (id: $0.id, session: $0.sessionID, kind: $0.kind) }) { target in
             RouterDispatcher.session(of: target, store: store).map { "session:\($0)" } ?? target
         }
+    }
+
+    /// The same without a store (`assemble_info` of explore/actions_d3.py): `cards` the open cards, `canon` a target as its session's.
+    static func info(found: RouterDispatcher.Classification, reading: RouterActionReading,
+                     cards: [(id: String, session: String, kind: RouterCard.Kind)], canon: (String) -> String) -> RouterActionInfo {
         var info = RouterActionInfo(reading: reading)
         if let top = found.top {
             info.target = canon(top.target)
             info.targetP = top.p
             info.targetAct = RouterAct.routing(info.target, cards: cards)
         }
-        info.rawTop = found.trace?.route.max { $0.value < $1.value }?.key
+        info.rawTop = rawTop(found.trace)
         info.routeAsks = !(found.sure && found.top != nil)
         if !info.routeAsks, let top = found.top { info.routeAct = RouterAct.routing(canon(top.target), cards: cards) }
         var card: [RouterAct] = []

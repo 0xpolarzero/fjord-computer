@@ -50,6 +50,16 @@ import Testing
         var stopped: [String] = []
         var interruptOutcome: DeliveryOutcome = .delivered(ack: "ok interrupted turn-1", interrupted: "turn-1")
         var interrupted: [(session: String, text: String)] = []
+        /// The scope the checks were asked in, the turns a stop and an interrupt named, and the signed text an interrupt resent.
+        var checkScopes: [RouterActionChecks.Scope] = []
+        var stoppedTurns: [String?] = []
+        var interruptedTurns: [String?] = []
+        var resent: [String?] = []
+        /// Outcomes for the next interrupts, in order (then `interruptOutcome`).
+        var interruptOutcomes: [DeliveryOutcome] = []
+        /// A stop held until the test lets it go (to stop the run while it is being done).
+        var holdStop = false
+        var stopHeld: CheckedContinuation<Void, Never>?
 
         func install(_ d: RouterDispatcher) {
             d.onFinish = { [unowned self] in finished.append($0) }
@@ -103,17 +113,22 @@ import Testing
                                                      body: request.message, original: request.message, rephrased: false,
                                                      session: "local_fork", newSessionIn: "lookout")
                 },
-                checks: { [unowned self] _, message in
+                checks: { [unowned self] _, message, scope in
                     checked.append(message)
+                    checkScopes.append(scope)
                     return reading
                 },
-                stop: { [unowned self] _, session in
+                stop: { [unowned self] _, session, turn in
                     stopped.append(session)
+                    stoppedTurns.append(turn)
+                    if holdStop { await withCheckedContinuation { stopHeld = $0 } }
                     return stopOutcome
                 },
-                interrupt: { [unowned self] _, session, text in
+                interrupt: { [unowned self] _, session, text, turn, resend in
                     interrupted.append((session, text))
-                    return interruptOutcome
+                    interruptedTurns.append(turn)
+                    resent.append(resend)
+                    return interruptOutcomes.isEmpty ? interruptOutcome : interruptOutcomes.removeFirst()
                 },
                 answerPlan: { [unowned self] _, card, decision, snapshot in
                     guard snapshot.holds(store!) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
