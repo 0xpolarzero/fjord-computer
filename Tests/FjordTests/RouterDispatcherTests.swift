@@ -61,23 +61,24 @@ import Testing
         var holdStop = false
         var stopHeld: CheckedContinuation<Void, Never>?
 
+        /// Held by the dispatcher it is installed in (a run still going when its test ends finds it there).
         func install(_ d: RouterDispatcher) {
-            d.onFinish = { [unowned self] in finished.append($0) }
+            d.onFinish = { [self] in finished.append($0) }
             d.effects = RouterDispatcher.Effects(
-                rank: { [unowned self] _, _, projects in
+                rank: { [self] _, _, projects in
                     ranks += 1
                     rankProjects.append(projects)
                     if holdRank { await withCheckedContinuation { rankHeld = $0 } }
                     if let rankError { throw rankError }
                     return RouterDispatcher.Ranking(scored: ranked)
                 },
-                prepare: { [unowned self] _, session in
+                prepare: { [self] _, session in
                     prepared.append(session)
                     if holdOn.contains(session) { await withCheckedContinuation { hold[session] = $0 } }
                     return RouterDispatcher.Delivery(to: "peer-\(session)", text: "⟦signed⟧\nbody-\(session)", body: "body-\(session)",
                                                      original: "orig", rephrased: true, session: session, newSessionIn: nil)
                 },
-                start: { [unowned self] _, folder, title, settings in
+                start: { [self] _, folder, title, settings in
                     started.append((folder, title))
                     startSettings.append(settings)
                     if let heldStart { throw heldStart }
@@ -85,52 +86,52 @@ import Testing
                                                                rephrased: false, session: "local_new", newSessionIn: "x",
                                                                settings: settings, settingsSigned: settingsSigned))
                 },
-                send: { [unowned self] _, delivery in
+                send: { [self] _, delivery in
                     if let failSend { throw RouterTools.Failure(failSend) }
                     sent.append(delivery)
                     return ack
                 },
-                answer: { [unowned self] _, card, answers, snapshot in
+                answer: { [self] _, card, answers, snapshot in
                     guard snapshot.holds(store!) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
                     answered.append((card, answers))
                     return "answered"
                 },
-                run: { [unowned self] tools, intent, input in
+                run: { [self] tools, intent, input in
                     runs.append((intent, input))
                     await whileRunning?(tools)
                     return answer
                 },
-                finish: { [unowned self] _, held in
+                finish: { [self] _, held in
                     await withCheckedContinuation { finishHeld = $0 }
                     if let finishError { throw RouterTools.Failure(finishError) }
                     return RouterDispatcher.Delivery(to: "peer-late", text: "⟦signed⟧\nhello", body: "hello", original: "hello",
                                                      rephrased: false, session: held.waiting.sessionID, newSessionIn: held.project,
                                                      settings: held.settings, settingsSigned: settingsSigned)
                 },
-                fork: { [unowned self] _, request in
+                fork: { [self] _, request in
                     forked.append(request)
                     return RouterDispatcher.Delivery(to: "peer-fork", text: request.message.isEmpty ? "" : "⟦signed⟧\n" + request.message,
                                                      body: request.message, original: request.message, rephrased: false,
                                                      session: "local_fork", newSessionIn: "lookout")
                 },
-                checks: { [unowned self] _, message, scope in
+                checks: { [self] _, message, scope in
                     checked.append(message)
                     checkScopes.append(scope)
                     return reading
                 },
-                stop: { [unowned self] _, session, turn in
+                stop: { [self] _, session, turn in
                     stopped.append(session)
                     stoppedTurns.append(turn)
                     if holdStop { await withCheckedContinuation { stopHeld = $0 } }
                     return stopOutcome
                 },
-                interrupt: { [unowned self] _, session, text, turn, resend in
+                interrupt: { [self] _, session, text, turn, resend in
                     interrupted.append((session, text))
                     interruptedTurns.append(turn)
                     resent.append(resend)
                     return interruptOutcomes.isEmpty ? interruptOutcome : interruptOutcomes.removeFirst()
                 },
-                answerPlan: { [unowned self] _, card, decision, snapshot in
+                answerPlan: { [self] _, card, decision, snapshot in
                     guard snapshot.holds(store!) else { throw RouterTools.Failure(FormSnapshot.changedWords) }
                     planned.append((card, decision))
                     return "decided"
