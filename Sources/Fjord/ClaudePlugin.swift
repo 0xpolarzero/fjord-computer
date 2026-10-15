@@ -111,6 +111,36 @@ enum ClaudePlugin {
         /// What this copy of the plugin can do (`inbox-v1`: it takes signed messages from its inbox folder). Absent in an
         /// older plugin, which Fjord reaches over the peer channel instead.
         var capabilities: [String]?
+        /// The main turn under way, as the plugin saw it start; nil when idle (or when the plugin is too old to say).
+        var turn: Turn?
+        /// Whether the file says anything about the turn at all (`"turn": null` is an idle session; no key, an old plugin).
+        var hasTurnField = false
+
+        struct Turn: Decodable, Equatable, Sendable {
+            var id: String
+            /// Ms since 1970.
+            var startedAt: Int64?
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case state, sessionId, pid, startedAt, keyId, renewedAt, capabilities, turn
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            state = try c.decode(String.self, forKey: .state)
+            sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
+            pid = try c.decodeIfPresent(Int32.self, forKey: .pid)
+            startedAt = try c.decodeIfPresent(Int64.self, forKey: .startedAt)
+            keyId = try c.decodeIfPresent(String.self, forKey: .keyId)
+            renewedAt = try c.decodeIfPresent(Int64.self, forKey: .renewedAt)
+            capabilities = try c.decodeIfPresent([String].self, forKey: .capabilities)
+            hasTurnField = c.contains(.turn)
+            turn = try? c.decodeIfPresent(Turn.self, forKey: .turn)
+        }
+
+        /// Whether the plugin says it has `capability`.
+        func can(_ capability: String) -> Bool { capabilities?.contains(capability) == true }
     }
 
     /// The plugin takes signed messages from `relay/<session id>/` (see `RelayInbox`).
@@ -119,6 +149,10 @@ enum ClaudePlugin {
     static let settingsCapability = "settings-v1"
     /// The plugin takes back a delivery it was given, on a signed abort in its inbox (`RelaySigner.signAbort`).
     static let abortCapability = "abort-v1"
+    /// The plugin stops the turn under way, whoever started it, on a signed stop in its inbox (`RelaySigner.signStop`).
+    static let stopCapability = "stop-v1"
+    /// The plugin stops the turn under way and submits a message in one step, on a v3 message (`RelaySigner.sign(interrupt:)`).
+    static let interruptCapability = "interrupt-v1"
 
     /// How long a presence lasts without being renewed: the plugin renews it every 10 s.
     static let lease: TimeInterval = 30
@@ -206,14 +240,34 @@ import type { EngineInterface, Register } from 'claude-code'
 // Nothing an aborted turn already did is undone, and the words stay in the session's history: Claude Code has no way to
 // take a submitted prompt back out.
 //
+// `stop-v1`: Fjord can stop whatever turn the session is running, started by a delivery or not, with a control file in
+// the same inbox, signed the same way:
+//   ⟦fjord stop v1 <target> <nonce> <ms> <turn id|-> <hex HMAC-SHA256>⟧
+// with the MAC over "stop-v1\n<target>\n<nonce>\n<ms>\n<turn id|->\n". Its nonce is claimed as a delivery's is. With a turn
+// id, only that turn is stopped (a newer one is left alone): the ack is "ok not-running" when it isn't the running turn.
+// With `-`, whatever turn runs. No turn: "ok idle". Otherwise the tools the turn is running are answered at once, then
+// $.turn.abort, and a notice "Stopped from Fjord" is added to the session: "ok stopped <turn id>". Every main turn is
+// covered, not only a delivery's.
+//
+// `interrupt-v1`: a v3 message is a v2 one with a signed interrupt flag after the effort:
+//   ⟦fjord v3 <target> <nonce> <ms> <model|-> <effort|-> <0|1> <hex HMAC-SHA256>⟧\n<base64 body>
+// with the MAC over "v3\n<target>\n<nonce>\n<ms>\n<model|->\n<effort|->\n<0|1>\n" and the body. From the inbox, with the flag
+// set, the turn under way (if any) is stopped as above, then the settings are applied and the words submitted as the
+// person's own, in one step: the ack is "ok interrupted <turn id>" or "ok idle" (then it only submits), followed by what
+// the settings did. Plain v1 and v2 messages keep queueing behind a running turn. Over the peer channel (whose hook a turn
+// waits on) a v3 message is not taken at all.
+//
+// Presence files carry `turn`: `{ id, startedAt }` while a main turn runs, null when idle, rewritten as the turn starts and
+// as it completes.
+//
 // Fjord writes this file; edits are overwritten.
 
-const HEADER = /(?:^|\n)⟦fjord (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)) ([0-9a-f]{64})⟧\n/
+const HEADER = /(?:^|\n)⟦fjord (?:v1 (\S+) (\S+) (\d+)|v2 (\S+) (\S+) (\d+) (\S+) (\S+)|v3 (\S+) (\S+) (\d+) (\S+) (\S+) ([01])) ([0-9a-f]{64})⟧\n/
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 const CLOSE = '</cross-session-message>'
 const WINDOW_MS = 10 * 60 * 1000
 const NONCE = 'nonce.'
-export const CAPABILITIES = ['inbox-v1', 'settings-v1', 'abort-v1']
+export const CAPABILITIES = ['inbox-v1', 'settings-v1', 'abort-v1', 'stop-v1', 'interrupt-v1']
 const POLL_MS = 500
 const ACTIVATION = crypto.randomUUID()
 
@@ -251,17 +305,31 @@ export const parseAbort = (text: string) => {
   return m ? { target: m[1], nonce: m[2], ts: m[3], cancels: m[4], mac: m[5] } : undefined
 }
 
+const STOP = /^⟦fjord stop v1 (\S+) (\S+) (\d+) (\S+) ([0-9a-f]{64})⟧\n?/
+
+/** What a stop's MAC covers: its kind, the target, its nonce, its time and the turn it stops (`-`: whichever runs). */
+export const stopMacInput = (target: string, nonce: string, ts: string, turn: string) =>
+  enc.encode(`stop-v1\n${target}\n${nonce}\n${ts}\n${turn}\n`)
+
+/** A stop's fields; undefined for anything else. */
+export const parseStop = (text: string) => {
+  const m = STOP.exec(text)
+  return m ? { target: m[1], nonce: m[2], ts: m[3], turn: m[4], mac: m[5] } : undefined
+}
+
 /** The model and effort a v2 message asks for; `-` on the wire is none. */
 export type Settings = { model?: string; effort?: string }
 
 /** What the MAC covers: the version, the target, the nonce and the time, one per line (v2: also the model and the effort),
  * then the body's bytes. */
-export const macInput = (target: string, nonce: string, ts: string, body: Uint8Array, settings?: Settings) =>
+export const macInput = (target: string, nonce: string, ts: string, body: Uint8Array, settings?: Settings, interrupt?: boolean) =>
   join(
     enc.encode(
-      settings
-        ? `v2\n${target}\n${nonce}\n${ts}\n${settings.model ?? '-'}\n${settings.effort ?? '-'}\n`
-        : `v1\n${target}\n${nonce}\n${ts}\n`,
+      interrupt !== undefined
+        ? `v3\n${target}\n${nonce}\n${ts}\n${settings?.model ?? '-'}\n${settings?.effort ?? '-'}\n${interrupt ? 1 : 0}\n`
+        : settings
+          ? `v2\n${target}\n${nonce}\n${ts}\n${settings.model ?? '-'}\n${settings.effort ?? '-'}\n`
+          : `v1\n${target}\n${nonce}\n${ts}\n`,
     ),
     body,
   )
@@ -302,17 +370,19 @@ export const parse = (text: string) => {
   if (!m) return undefined
   const header = m[0]
   const v2 = m[4] !== undefined
-  const [target, nonce, ts] = v2 ? [m[4], m[5], m[6]] : [m[1], m[2], m[3]]
-  const mac = m[9]
-  const settings: Settings | undefined = v2
-    ? { model: m[7] === '-' ? undefined : m[7], effort: m[8] === '-' ? undefined : m[8] }
-    : undefined
+  const v3 = m[9] !== undefined
+  const [target, nonce, ts] = v3 ? [m[9], m[10], m[11]] : v2 ? [m[4], m[5], m[6]] : [m[1], m[2], m[3]]
+  const mac = m[15]
+  const [model, effort] = v3 ? [m[12], m[13]] : [m[7], m[8]]
+  const settings: Settings | undefined =
+    v2 || v3 ? { model: model === '-' ? undefined : model, effort: effort === '-' ? undefined : effort } : undefined
+  const interrupt = v3 ? m[14] === '1' : undefined
   let rest = text.slice(m.index + header.length)
   const close = rest.indexOf(CLOSE)
   if (close >= 0) rest = rest.slice(0, close)
   const body = fromBase64(rest.trim())
   if (!body) return undefined
-  return { target, nonce, ts, mac, body, settings }
+  return { target, nonce, ts, mac, body, settings, interrupt }
 }
 
 /** Compares two MACs in time that doesn't depend on where they differ. */
@@ -382,7 +452,8 @@ async function mark($: EngineInterface) {
     await $.fs.write(`${marked.presenceDir}/${marked.sessionId}`, `${JSON.stringify({ state: 'ended' })}\n`)
   }
   const renewedAt = await $.clock.now()
-  const presence = { state: 'live', sessionId, pid: own.pid, startedAt: own.startedAt, keyId: id, renewedAt, activation: ACTIVATION, capabilities: CAPABILITIES }
+  const turn = running === undefined ? null : { id: running, startedAt: runningSince }
+  const presence = { state: 'live', sessionId, pid: own.pid, startedAt: own.startedAt, keyId: id, renewedAt, activation: ACTIVATION, capabilities: CAPABILITIES, turn }
   await $.fs.write(`${presenceDir}/${sessionId}`, `${JSON.stringify(presence)}\n`)
   marked = { sessionId, presenceDir, keyId: id, pid: own.pid, startedAt: own.startedAt }
 }
@@ -415,9 +486,10 @@ const sent = new Map<string, Sent>()
 const SENT_KEPT = 50
 /** A body this long is told apart inside a turn that holds other words too; a shorter one only as the whole turn. */
 const DISTINCT = 24
-/** The main loop's turn under way, by `turn.start` and `turn.complete`. */
+/** The main loop's turn under way, by `turn.start` and `turn.complete`, and when it began (ms since 1970). */
 let running: string | undefined
-/** In a turn a delivery started: the tool calls under way, each with what cuts it short, the ids of every call made, and
+let runningSince = 0
+/** In a main turn: the tool calls under way, each with what cuts it short, the ids of every call made, and
  * the subagents it spawned. */
 const calls = new Map<string, { cuts: Set<() => void>; ids: Set<string>; agents: Set<string> }>()
 /** The tool calls of turns taken back, with when: a notification naming only them (a background command ending) is
@@ -431,6 +503,7 @@ export const forget = () => {
   calls.clear()
   quiet.clear()
   running = undefined
+  runningSince = 0
 }
 
 /** Stops what a turn's tools are doing, and keeps their notifications out from now on. */
@@ -513,22 +586,45 @@ export async function cancel($: EngineInterface, nonce: string, ts: number, now:
   return 'aborted'
 }
 
-/** Checks an abort the way a delivery is checked (its signature, its session, its time, its nonce never seen) and acts on
- * it: the ack's text. */
+/** Stops the main turn under way, whoever started it: its tools are answered at once and silenced, then the turn is aborted
+ * and a notice left in the session. `turnId` given: only that turn (`not-running` when another runs, or none). */
+export async function stopRunning($: EngineInterface, now: number, turnId?: string, notice = 'Stopped from Fjord') {
+  if (turnId !== undefined && running !== turnId) return 'not-running'
+  const id = running
+  if (id === undefined) return 'idle'
+  try {
+    await $.turn.abort({ turnId: id })
+  } catch {
+    return 'not-running'
+  }
+  silence(id, now)
+  for (const other of sent.values()) if (other.turnId === id) other.ended = true
+  await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: notice }] } }).catch(() => undefined)
+  return `stopped ${id}`
+}
+
+/** Checks a control message the way a delivery is checked (its signature, its session, its time, its nonce never seen) and
+ * acts on it, an abort of a delivery or a stop of the running turn: the ack's text. */
 export async function control($: EngineInterface, text: string) {
   const abort = parseAbort(text)
-  if (!abort) return 'refused: unsigned'
+  const stop = abort ? undefined : parseStop(text)
+  const signed = abort ?? stop
+  if (!signed) return 'refused: unsigned'
   const { keyPath } = await config($)
   if (!keyPath) return 'refused: no key configured'
   const key = (await $.fs.read(keyPath)).trim()
-  const expected = await hmac(enc.encode(key), abortMacInput(abort.target, abort.nonce, abort.ts, abort.cancels))
+  const expected = await hmac(
+    enc.encode(key),
+    abort ? abortMacInput(abort.target, abort.nonce, abort.ts, abort.cancels) : stopMacInput(stop!.target, stop!.nonce, stop!.ts, stop!.turn),
+  )
   const now = await $.clock.now()
-  const ts = Number(abort.ts)
-  if (!same(expected, abort.mac)) return 'refused: bad signature'
-  if (abort.target !== (await $.session.id())) return 'refused: addressed to another session'
+  const ts = Number(signed.ts)
+  if (!same(expected, signed.mac)) return 'refused: bad signature'
+  if (signed.target !== (await $.session.id())) return 'refused: addressed to another session'
   if (!(Math.abs(now - ts) < WINDOW_MS)) return 'refused: stale'
-  if (!(await claim($, abort.nonce, ts, now))) return 'refused: already delivered'
-  return `ok ${await cancel($, abort.cancels, ts, now)}`
+  if (!(await claim($, signed.nonce, ts, now))) return 'refused: already delivered'
+  if (abort) return `ok ${await cancel($, abort.cancels, ts, now)}`
+  return `ok ${await stopRunning($, now, stop!.turn === '-' ? undefined : stop!.turn)}`
 }
 
 /** Checks a signed text the way both ways in must, and submits it as the person's own words. `unsigned` means it isn't
@@ -537,18 +633,20 @@ export async function accept(
   $: EngineInterface,
   text: string,
   apply = false,
-): Promise<{ ok: true; applied?: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; applied?: string; interrupted?: string } | { ok: false; reason: string }> {
   const signed = parse(text)
   if (!signed) return { ok: false, reason: 'unsigned' }
   const { keyPath } = await config($)
   if (!keyPath) return { ok: false, reason: 'no key configured' }
   const key = (await $.fs.read(keyPath)).trim()
-  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body, signed.settings))
+  const expected = await hmac(enc.encode(key), macInput(signed.target, signed.nonce, signed.ts, signed.body, signed.settings, signed.interrupt))
   const now = await $.clock.now()
   const ts = Number(signed.ts)
   if (!same(expected, signed.mac)) return { ok: false, reason: 'bad signature' }
   if (signed.target !== (await $.session.id())) return { ok: false, reason: 'addressed to another session' }
   if (!(Math.abs(now - ts) < WINDOW_MS)) return { ok: false, reason: 'stale' }
+  // An interrupt acts from the inbox only: never from inside a hook a turn waits on.
+  if (signed.interrupt && !apply) return { ok: false, reason: 'an interrupt is taken from the inbox only' }
   const bad = signed.settings && invalid(signed.settings)
   if (bad) return { ok: false, reason: bad }
   // A leading byte-order mark is part of what was written: the decoder drops one, so exactly one is put back.
@@ -561,6 +659,8 @@ export async function accept(
   const bom = signed.body[0] === 0xef && signed.body[1] === 0xbb && signed.body[2] === 0xbf
   const body = bom ? `\uFEFF${decoded}` : decoded
   if (!(await claim($, signed.nonce, ts, now))) return { ok: false, reason: 'already delivered' }
+  // An interrupt stops the turn under way first (the person's words then start the next one at once).
+  const interrupted = apply && signed.interrupt ? await stopRunning($, now, undefined, 'Interrupted from Fjord') : undefined
   // The settings first, so the turn the text starts uses them: the model, then the effort (a model resets it). Each can fail
   // on its own; the person's words go either way. Only from the inbox (`apply`): never from inside a hook a turn waits on.
   const applied: string[] = []
@@ -578,13 +678,21 @@ export async function accept(
   }
   remember(signed.nonce, body, now)
   submit($, signed.nonce, body)
-  return applied.length ? { ok: true, applied: applied.join(' ') } : { ok: true }
+  return { ok: true, ...(applied.length ? { applied: applied.join(' ') } : {}), ...(interrupted ? { interrupted } : {}) }
 }
 
 /** When the look in progress began (0: none). A look that hangs is given up on after `POLL_STUCK_MS`, so one stuck call can't
  * silence the inbox for good; two looks at once never happen otherwise (each message gets exactly one ack). */
 let pollingSince = 0
 const POLL_STUCK_MS = 5000
+
+/** What follows "ok" in a delivery's ack: how an interrupt went ("interrupted <turn id>", or "idle" when nothing ran), then what
+ * the settings did. */
+const acked = (o: { applied?: string; interrupted?: string }) => {
+  const how = o.interrupted?.startsWith('stopped ') ? `interrupted ${o.interrupted.slice(8)}` : o.interrupted
+  const parts = [how, o.applied].filter((x) => x !== undefined)
+  return parts.length ? ` ${parts.join(' ')}` : ''
+}
 
 /** One look at this session's inbox: every message without an ack is checked, submitted or refused, and answered. */
 export async function poll($: EngineInterface) {
@@ -600,13 +708,13 @@ export async function poll($: EngineInterface) {
       if (!name.endsWith('.msg') || names.has(`${name.slice(0, -4)}.ack`)) continue
       const text = await $.fs.read(`${dir}/${name}`).catch(() => undefined)
       if (text === undefined) continue
-      if (parseAbort(text)) {
+      if (parseAbort(text) || parseStop(text)) {
         const reply = await control($, text).catch((error) => `refused: ${String(error?.message ?? error)}`)
         await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, `${reply}\n`)
         continue
       }
       const outcome = await accept($, text, true).catch((error) => ({ ok: false as const, reason: String(error?.message ?? error) }))
-      await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? `ok${outcome.applied ? ` ${outcome.applied}` : ''}\n` : `refused: ${outcome.reason}\n`)
+      await $.fs.write(`${dir}/${name.slice(0, -4)}.ack`, outcome.ok ? `ok${acked(outcome)}\n` : `refused: ${outcome.reason}\n`)
     }
   } catch {
     // No folder yet (nothing was ever sent here), or it can't be read: nothing to do until the next look.
@@ -635,9 +743,10 @@ export const register: Register = (on) => {
   on('turn.start', async ($, e, next) => {
     running = e.turnId
     const now = await $.clock.now()
+    runningSince = now
     const { mine, mixed } = startedBy(e.text, now)
     for (const s of mine) Object.assign(s, { turnId: e.turnId, mixed, starting: true })
-    if (mine.length) calls.set(e.turnId, { cuts: new Set(), ids: new Set(), agents: new Set() })
+    calls.set(e.turnId, { cuts: new Set(), ids: new Set(), agents: new Set() })
     try {
       await mark($).catch(() => undefined)
       return await next(e)
@@ -655,12 +764,14 @@ export const register: Register = (on) => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       for (const s of sent.values()) if (s.turnId === e.turnId) s.ended = true
-      if (running === e.turnId) running = undefined
+      const ended = running === e.turnId
+      if (ended) running = undefined
       calls.delete(e.turnId)
+      if (ended) await mark($).catch(() => undefined)
     }
     return next(e)
   })
-  // The subagents a delivery's turn spawns are its own: their tool calls are cut with its.
+  // The subagents a turn spawns are its own: their tool calls are cut with it.
   on('agent.spawn', async ($, e, next) => {
     const turn = running === undefined ? undefined : calls.get(running)
     const spawned = await next(e)
@@ -668,7 +779,7 @@ export const register: Register = (on) => {
     if (turn && typeof id === 'string') turn.agents.add(id)
     return spawned
   }).catch(($, e, next) => next(e))
-  // A tool call of a turn a delivery started (on the main loop, or in a subagent it spawned) can be cut short by a cancel:
+  // A tool call of a main turn (on the main loop, or in a subagent it spawned) can be cut short by a cancel or a stop:
   // answered before what runs beneath is done. Any other call (a background agent of an earlier turn's) passes straight
   // through.
   on('tool.call', async ($, e, next) => {
@@ -682,7 +793,7 @@ export const register: Register = (on) => {
     turn.cuts.add(cut)
     try {
       const done = await Promise.race([next(e), stopped])
-      return done === 'cut' ? { deny: 'Stopped: the person cancelled this message from Fjord.' } : done
+      return done === 'cut' ? { deny: 'Stopped: the person stopped this from Fjord.' } : done
     } finally {
       turn.cuts.delete(cut)
     }
@@ -747,10 +858,16 @@ enum RelaySigner {
     /// they can't be forged or changed on the way; only a plugin that says `settings-v1` knows that header, so it's the
     /// caller's to ask `Store.supportsSettings` first. Without either it is the v1 text, which every plugin reads.
     static func sign(body: String, target: String, key: String, nonce: UUID = UUID(), now: Date = Date(),
-                     model: String? = nil, effort: String? = nil) -> String {
+                     model: String? = nil, effort: String? = nil, interrupt: Bool = false) -> String {
         let ts = String(RouterFeed.Stamp.ms(now))
         let id = nonce.uuidString.lowercased()
         let bytes = Data(body.utf8)
+        if interrupt {
+            // v3: a v2 header with a signed interrupt flag; only a plugin that says `interrupt-v1` reads it.
+            let m = model ?? "-", e = effort ?? "-"
+            return "⟦fjord v3 \(target) \(id) \(ts) \(m) \(e) 1 \(mac(key: key, target: target, nonce: id, ts: ts, body: bytes, model: m, effort: e, interrupt: true))⟧\n"
+                + bytes.base64EncodedString()
+        }
         guard model != nil || effort != nil else {
             return "⟦fjord v1 \(target) \(id) \(ts) \(mac(key: key, target: target, nonce: id, ts: ts, body: bytes))⟧\n"
                 + bytes.base64EncodedString()
@@ -771,9 +888,25 @@ enum RelaySigner {
         return "⟦fjord abort v1 \(target) \(id) \(ts) \(cancels) \(code.map { String(format: "%02x", $0) }.joined())⟧\n"
     }
 
-    /// The v2 MAC: `v2\n<target>\n<nonce>\n<ts>\n<model|->\n<effort|->\n` and the body.
-    static func mac(key: String, target: String, nonce: String, ts: String, body: Data, model: String, effort: String) -> String {
-        let input = Data("v2\n\(target)\n\(nonce)\n\(ts)\n\(model)\n\(effort)\n".utf8) + body
+    /// A stop for the session `target`: a header line alone, `⟦fjord stop v1 <target> <nonce> <ms> <turn id|-> <hex HMAC-SHA256>⟧`,
+    /// its MAC over `stop-v1\n<target>\n<nonce>\n<ms>\n<turn id|->\n`. With a turn id only that turn is stopped (the plugin
+    /// answers `not-running` when another runs); `nil` stops whichever runs. Only a plugin that says `stop-v1` reads it, from
+    /// its inbox alone.
+    static func signStop(target: String, turn: String?, key: String, nonce: UUID = UUID(), now: Date = Date()) -> String {
+        let ts = String(RouterFeed.Stamp.ms(now))
+        let id = nonce.uuidString.lowercased()
+        let turn = turn ?? "-"
+        let input = Data("stop-v1\n\(target)\n\(id)\n\(ts)\n\(turn)\n".utf8)
+        let code = HMAC<SHA256>.authenticationCode(for: input, using: SymmetricKey(data: Data(key.utf8)))
+        return "⟦fjord stop v1 \(target) \(id) \(ts) \(turn) \(code.map { String(format: "%02x", $0) }.joined())⟧\n"
+    }
+
+    /// The v2 MAC: `v2\n<target>\n<nonce>\n<ts>\n<model|->\n<effort|->\n` and the body; with `interrupt` the v3 one, which
+    /// has the flag (`1`) on a line of its own after the effort.
+    static func mac(key: String, target: String, nonce: String, ts: String, body: Data, model: String, effort: String,
+                    interrupt: Bool? = nil) -> String {
+        let head = interrupt == nil ? "v2" : "v3", flag = interrupt.map { "\($0 ? 1 : 0)\n" } ?? ""
+        let input = Data("\(head)\n\(target)\n\(nonce)\n\(ts)\n\(model)\n\(effort)\n\(flag)".utf8) + body
         let code = HMAC<SHA256>.authenticationCode(for: input, using: SymmetricKey(data: Data(key.utf8)))
         return code.map { String(format: "%02x", $0) }.joined()
     }
@@ -1136,7 +1269,7 @@ struct RelayInbox: Sendable {
     static func header(of text: String) -> (target: String, nonce: String)? {
         guard let line = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first,
               line.hasSuffix("⟧") else { return nil }
-        for (prefix, count) in [("⟦fjord v1 ", 4), ("⟦fjord v2 ", 6), ("⟦fjord abort v1 ", 5)] where line.hasPrefix(prefix) {
+        for (prefix, count) in [("⟦fjord v1 ", 4), ("⟦fjord v2 ", 6), ("⟦fjord v3 ", 7), ("⟦fjord abort v1 ", 5), ("⟦fjord stop v1 ", 5)] where line.hasPrefix(prefix) {
             let fields = line.dropFirst(prefix.count).dropLast().split(separator: " ")
             guard fields.count == count else { return nil }
             return (String(fields[0]), String(fields[1]))

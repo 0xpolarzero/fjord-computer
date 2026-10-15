@@ -813,6 +813,71 @@ final class ClaudeFeed: @unchecked Sendable {
 
     init(activityReader: Claude.ActivityReader) { self.activityReader = activityReader }
 
+    // MARK: The plugin's word for it (presence files)
+
+    /// Where the plugin's presence files are read from (the Router's files); nil reads none, and sessions keep the guess.
+    private var presencePaths: RouterPaths?
+    private var presenceWatcher: FolderWatcher?
+    /// The live presence files as of the last read, by the CLI session id.
+    private var presenceRead: [String: ClaudePlugin.Presence] = [:]
+
+    /// Sets where presence is read from, on the next read, and calls `changed` (on the main thread) when a presence file
+    /// changes: a plugin rewrites its own as a turn starts and completes, so the running state follows the turn.
+    func readPresence(from paths: RouterPaths?, changed: @escaping @MainActor () -> Void) {
+        lock.lock()
+        let same = presencePaths == paths
+        presencePaths = paths
+        lock.unlock()
+        guard !same else { return }
+        presenceWatcher = paths.map { paths in
+            FolderWatcher([paths.pluginSessions], latency: 0.5) { MainActor.assumeIsolated { changed() } }
+        }
+    }
+
+    /// The presence files the last read found alive (key held now, process registered): what each plugin says it can do and
+    /// whether it runs a turn.
+    var presence: [String: ClaudePlugin.Presence] {
+        lock.lock()
+        defer { lock.unlock() }
+        return presenceRead
+    }
+
+    /// Replaces what the last read found (tests).
+    func seedPresence(_ presence: [String: ClaudePlugin.Presence]) {
+        lock.lock()
+        presenceRead = presence
+        lock.unlock()
+    }
+
+    /// The sessions with `running` taken from the plugin's presence where it is fresh and says anything about the turn
+    /// (`turn` present, even null): a session that runs one is running, and one that doesn't isn't, whatever the app's own
+    /// files guess. Where there is no plugin, or its file is old, the guess stands. Runs on `queue`.
+    private func applyingPresence(to sessions: [ClaudeSession]) -> [ClaudeSession] {
+        lock.lock()
+        let paths = presencePaths
+        lock.unlock()
+        guard let paths else {
+            return sessions
+        }
+        let found = ClaudePlugin.live(in: paths.pluginSessions,
+                                      registry: ClaudePeers.registry(dir: paths.claudeDir.appendingPathComponent("sessions", isDirectory: true)),
+                                      keyID: ClaudePlugin.currentKeyID(beside: paths.pluginSessions))
+        lock.lock()
+        presenceRead = found
+        lock.unlock()
+        return Self.applying(presence: found, to: sessions)
+    }
+
+    /// `applyingPresence(to:)` on a given set of presence files.
+    static func applying(presence: [String: ClaudePlugin.Presence], to sessions: [ClaudeSession]) -> [ClaudeSession] {
+        sessions.map { session in
+            guard !session.isArchived, let cli = session.cliID, let file = presence[cli], file.hasTurnField else { return session }
+            var session = session
+            session.running = file.turn != nil
+            return session
+        }
+    }
+
     /// Reads (everything, or just activity and tasks for the sessions seen last) and calls `apply` on the main thread.
     /// `unreadOnly` re-reads just the sidebar dots (the sessions are those of the last read).
     func request(full: Bool, unreadOnly: Bool = false, stamp: ClaudeStamp, apply: @escaping @MainActor (ClaudeSnapshot) -> Void) {
@@ -914,7 +979,8 @@ final class ClaudeFeed: @unchecked Sendable {
                 allSessions = nil
                 snapshot.link = .unreadable
                 return snapshot
-            case .success(let sessions):
+            case .success(let read):
+                let sessions = applyingPresence(to: read)
                 snapshot.link = .ok
                 snapshot.sessions = sessions
                 snapshot.appUnread = Claude.unreadIDs()

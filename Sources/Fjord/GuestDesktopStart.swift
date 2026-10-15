@@ -74,6 +74,9 @@ struct GuestSessionEvidence: Equatable, Sendable {
     /// Live by the Router hook's held form and the guest registry, with no plugin presence (so no relay): enough to
     /// match a start to its Desktop session and answer its form, not to deliver messages.
     var formBacked = false
+    /// The main turn the plugin says runs, when its presence file says anything about it (`hasTurnField`).
+    var turn: ClaudePlugin.Presence.Turn? = nil
+    var hasTurnField = false
 }
 
 /// Guest execution is authoritative for the session body; the local SSH mirror supplies only Desktop metadata.
@@ -175,7 +178,8 @@ struct GuestSessionObserver: Sendable {
             registryByPID[pid] = (host, session, (object["startedAt"] as? NSNumber)?.int64Value)
         }
         func evidenceFor(cli: String, host: String, pid: Int32, startedAt: Int64?, renewed: Int64, capabilities: [String],
-                         formBacked: Bool) async throws -> GuestSessionEvidence? {
+                         formBacked: Bool, turn: ClaudePlugin.Presence.Turn? = nil,
+                         hasTurnField: Bool = false) async throws -> GuestSessionEvidence? {
             let alive: Bool
             do {
                 let result = try await client.exec(GuestExecRequest(computer: computer, argv: ["/bin/kill", "-0", String(pid)],
@@ -192,7 +196,8 @@ struct GuestSessionObserver: Sendable {
             return GuestSessionEvidence(computer: computer, cliSessionID: cli, hostSessionID: host,
                                         pid: pid, startedAt: startedAt, renewedAt: renewed, capabilities: capabilities,
                                         transcriptMessages: messages, transcript: transcript,
-                                        tasks: taskResult.certain ? taskResult.tasks : nil, formBacked: formBacked)
+                                        tasks: taskResult.certain ? taskResult.tasks : nil, formBacked: formBacked,
+                                        turn: turn, hasTurnField: hasTurnField)
         }
         var found: [GuestSessionEvidence] = []
         for entry in presenceFiles where entry.type == .file && !entry.name.hasPrefix(".") {
@@ -205,7 +210,8 @@ struct GuestSessionObserver: Sendable {
                   registryByPID[pid]?.startedAt == value.startedAt else { continue }
             if let item = try await evidenceFor(cli: cli, host: registryByPID[pid]?.host ?? "", pid: pid,
                                                 startedAt: value.startedAt, renewed: renewed,
-                                                capabilities: value.capabilities ?? [], formBacked: false) {
+                                                capabilities: value.capabilities ?? [], formBacked: false,
+                                                turn: value.turn, hasTurnField: value.hasTurnField) {
                 found.append(item)
             }
         }

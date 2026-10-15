@@ -88,7 +88,9 @@ enum PluginFixture {
         s.relayKeyCache = RelayKeyCache.load(paths.relayKey)
     }
 
-    static func live(_ cli: String, support: URL, claude: URL, pid: Int32 = getpid(), startedAt: Int64 = 1) {
+    /// `extra` is merged into the presence file (capabilities, a `turn`).
+    static func live(_ cli: String, support: URL, claude: URL, pid: Int32 = getpid(), startedAt: Int64 = 1,
+                     extra: [String: Any] = [:]) {
         let fm = FileManager.default
         let registry = claude.appendingPathComponent("sessions", isDirectory: true)
         let presence = support.appendingPathComponent("plugin-sessions", isDirectory: true)
@@ -99,7 +101,8 @@ enum PluginFixture {
         let key = support.appendingPathComponent("relay.key")
         let keyID = ClaudePlugin.key(at: key).map(ClaudePlugin.keyID(of:)) ?? "none"
         write(["state": "live", "sessionId": cli, "pid": Int(pid), "startedAt": startedAt, "keyId": keyID,
-               "renewedAt": Int64(ClaudePlugin.leaseNow.timeIntervalSince1970 * 1000), "activation": "test"],
+               "renewedAt": Int64(ClaudePlugin.leaseNow.timeIntervalSince1970 * 1000), "activation": "test"]
+            .merging(extra) { _, new in new },
               presence.appendingPathComponent(cli))
         write(["sessionsDir": registry.path, "presenceDir": presence.path, "keyPath": key.path], plugin.appendingPathComponent("config.json"))
     }

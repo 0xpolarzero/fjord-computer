@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { abortMacInput, CAPABILITIES, forget, fromBase64, hmac, invalid, keyId, macInput, parse, parseAbort, type Settings } from '../hooks/register.ts'
+import { abortMacInput, CAPABILITIES, forget, fromBase64, hmac, invalid, keyId, macInput, parse, parseAbort, parseStop, stopMacInput, type Settings } from '../hooks/register.ts'
 
 // The vector Fjord's Swift tests check too (ClaudePluginTests): the same key, fields and body give the same MAC and
 // the same wire text.
@@ -26,12 +26,14 @@ const base64 = (bytes: Uint8Array) => {
   }
   return out
 }
-const sign = async (body: string, { target = TARGET, nonce = NONCE, ts = TS, key = KEY, settings }: { target?: string; nonce?: string; ts?: number; key?: string; settings?: Settings } = {}) => {
+const sign = async (body: string, { target = TARGET, nonce = NONCE, ts = TS, key = KEY, settings, interrupt }: { target?: string; nonce?: string; ts?: number; key?: string; settings?: Settings; interrupt?: boolean } = {}) => {
   const bytes = enc.encode(body)
-  const mac = await hmac(enc.encode(key), macInput(target, nonce, String(ts), bytes, settings))
-  const head = settings
-    ? `v2 ${target} ${nonce} ${ts} ${settings.model ?? '-'} ${settings.effort ?? '-'}`
-    : `v1 ${target} ${nonce} ${ts}`
+  const mac = await hmac(enc.encode(key), macInput(target, nonce, String(ts), bytes, settings, interrupt))
+  const head = interrupt !== undefined
+    ? `v3 ${target} ${nonce} ${ts} ${settings?.model ?? '-'} ${settings?.effort ?? '-'} ${interrupt ? 1 : 0}`
+    : settings
+      ? `v2 ${target} ${nonce} ${ts} ${settings.model ?? '-'} ${settings.effort ?? '-'}`
+      : `v1 ${target} ${nonce} ${ts}`
   return `⟦fjord ${head} ${mac}⟧\n${base64(bytes)}`
 }
 /** As the peer channel delivers it. */
@@ -53,6 +55,8 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
     order: [] as string[],
     aborted: [] as string[],
     abortFails: false,
+    /** The notices appended to the session. */
+    appended: [] as string[],
     /** Tool calls that reached the tool, and what lets each finish. */
     ran: [] as string[],
     finish: {} as Record<string, () => void>,
@@ -132,7 +136,13 @@ const world = (on: On, { store = {}, now = TS + 1000 }: { store?: Record<string,
   on('turn.abort', ($, e) => {
     if (w.abortFails) throw new Error(`${e.turnId} is not the running turn`)
     w.aborted.push(e.turnId)
+    w.order.push(`abort ${e.turnId}`)
     return { value: undefined }
+  })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on('session.append', ($, e: any, next: any) => {
+    w.appended.push(e.message.content[0].text)
+    return next(e)
   })
   return Object.assign(w, { clock })
 }
@@ -413,7 +423,7 @@ describe('the inbox', () => {
   })
 
   test('presence names the capability', () => {
-    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1', 'abort-v1'])
+    expect(CAPABILITIES).toEqual(['inbox-v1', 'settings-v1', 'abort-v1', 'stop-v1', 'interrupt-v1'])
   })
 
   const SETTINGS_NONCE = '223e4567-e89b-12d3-a456-426614174000'
@@ -771,7 +781,7 @@ describe('taking back a turn that runs tools', () => {
     await settle()
     expect(w.ran).toEqual(['toolu_1'])
     expect(await abort($, w)).toBe('ok aborted\n')
-    expect(await pending).toEqual({ deny: 'Stopped: the person cancelled this message from Fjord.' })
+    expect(await pending).toEqual({ deny: 'Stopped: the person stopped this from Fjord.' })
     expect(w.aborted).toEqual(['t1'])
   })
 
@@ -846,5 +856,250 @@ describe('taking back a turn that runs tools', () => {
     w.finish.toolu_1()
     expect((await pending).result).toBe('finished')
     expect(w.aborted).toEqual([])
+  })
+})
+
+describe('stopping a turn and interrupting it', () => {
+  const STOP_NONCE = '423e4567-e89b-12d3-a456-426614174000'
+  const INTERRUPT_NONCE = '523e4567-e89b-12d3-a456-426614174000'
+  // The vectors Fjord's Swift tests check too (SessionControlTests).
+  const STOP_MAC = 'e782a0a0eec1e2c602dfcb2085b8da83d7c47dfc505ce7aa93179f4a00ec831b'
+  const STOP_ANY_MAC = 'f8d40719bb6cd8b283e0415d5982f789446c8f35b39ea8a46334c611bc55835e'
+  const V3_MAC = '397d706bea305bc49650a5a83e5000bc850c791b9e3e06aa7769a0815afacd4c'
+  const V3_SETTINGS_MAC = '61a6003925d90fe9ddb2513a15952a918ae05e2d3b40f05a41aae4e11fa37742'
+  const V3_FLAG0_MAC = '0fe96e552c0da9b6bd0bf6c704e0c87a77c6ffcb1e6a9158f562bf7e14242692'
+
+  const signStop = async (turn = 't1', { target = TARGET, nonce = STOP_NONCE, ts = TS, key = KEY } = {}) => {
+    const mac = await hmac(enc.encode(key), stopMacInput(target, nonce, String(ts), turn))
+    return `⟦fjord stop v1 ${target} ${nonce} ${ts} ${turn} ${mac}⟧\n`
+  }
+  const started = new WeakSet<object>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const look = async ($: any, w: ReturnType<typeof world>) => {
+    if (!started.has(w)) {
+      started.add(w)
+      await $.session.start({ cwd: '/code/app', surface: null, isInteractive: false })
+    }
+    await w.clock.advance(500)
+    await settle()
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const put = async ($: any, w: ReturnType<typeof world>, nonce: string, text: string) => {
+    w.inbox[`${TARGET}/${nonce}.msg`] = text
+    await look($, w)
+    return w.written[`/inbox/${TARGET}/${nonce}.ack`]
+  }
+  const complete = { durationMs: 1, isAborted: false, reason: 'answer' as const, answer: 'done' }
+  const presence = (w: ReturnType<typeof world>) => JSON.parse(w.written[`/presence/${TARGET}`])
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const call = ($: any, id: string): Promise<any> => $.tool.call({ tool: 'Bash', command: 'sleep 90', tool_use_id: id })
+
+  test('the wire formats match the vectors Fjord signs with', async () => {
+    expect(await hmac(enc.encode(KEY), stopMacInput(TARGET, STOP_NONCE, String(TS), 't1'))).toBe(STOP_MAC)
+    expect(await hmac(enc.encode(KEY), stopMacInput(TARGET, STOP_NONCE, String(TS), '-'))).toBe(STOP_ANY_MAC)
+    const text = await signStop()
+    expect(text).toBe(`⟦fjord stop v1 ${TARGET} ${STOP_NONCE} ${TS} t1 ${STOP_MAC}⟧\n`)
+    expect(parseStop(text)).toEqual({ target: TARGET, nonce: STOP_NONCE, ts: String(TS), turn: 't1', mac: STOP_MAC })
+    // Not a delivery and not an abort.
+    expect(parse(text)).toBeUndefined()
+    expect(parseAbort(text)).toBeUndefined()
+    expect(await hmac(enc.encode(KEY), macInput(TARGET, NONCE, String(TS), enc.encode(BODY), {}, true))).toBe(V3_MAC)
+    const settings = { model: 'opus', effort: 'high' }
+    expect(await hmac(enc.encode(KEY), macInput(TARGET, NONCE, String(TS), enc.encode(BODY), settings, true))).toBe(V3_SETTINGS_MAC)
+    expect(await hmac(enc.encode(KEY), macInput(TARGET, NONCE, String(TS), enc.encode(BODY), {}, false))).toBe(V3_FLAG0_MAC)
+    const parsed = parse(envelope(await sign(BODY, { settings, interrupt: true })))
+    expect(parsed && { target: parsed.target, nonce: parsed.nonce, settings: parsed.settings, interrupt: parsed.interrupt, mac: parsed.mac }).toEqual({
+      target: TARGET, nonce: NONCE, settings, interrupt: true, mac: V3_SETTINGS_MAC,
+    })
+    expect(parse(envelope(WIRE))?.interrupt).toBeUndefined()
+  })
+
+  test('a stop aborts the turn running, one no delivery started, and its tools are cut first', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'what you typed yourself', turnId: 't1' })
+    const pending = call($, 'toolu_1')
+    await settle()
+    expect(await put($, w, STOP_NONCE, await signStop('t1'))).toBe('ok stopped t1\n')
+    expect(w.aborted).toEqual(['t1'])
+    expect((await pending).deny).toBeDefined()
+    expect(w.appended).toEqual(['Stopped from Fjord'])
+    // A notification from one of its tools afterwards is dropped, as for a taken-back delivery.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dropped = await ($ as any).prompt.submit({ text: '<task-notification><tool-use-id>toolu_1</tool-use-id></task-notification>', origin: { kind: 'task-notification' } })
+    expect(dropped.drop).toBeDefined()
+  })
+
+  test('a stop for a turn that is not the running one leaves the running one be', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'first', turnId: 't0' })
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    await $.turn.start({ text: 'second', turnId: 't1' })
+    expect(await put($, w, STOP_NONCE, await signStop('t0'))).toBe('ok not-running\n')
+    expect(w.aborted).toEqual([])
+    expect(w.appended).toEqual([])
+  })
+
+  test('a stop with no turn named stops whichever runs; with none running it is idle', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    expect(await put($, w, STOP_NONCE, await signStop('-'))).toBe('ok idle\n')
+    await $.turn.start({ text: 'second', turnId: 't1' })
+    expect(await put($, w, INTERRUPT_NONCE, await signStop('-', { nonce: INTERRUPT_NONCE }))).toBe('ok stopped t1\n')
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('a stop for a turn already over, or one that will not abort, is not-running and mutes nothing', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'first', turnId: 't0' })
+    await $.turn.complete({ ...complete, turnId: 't0' })
+    expect(await put($, w, STOP_NONCE, await signStop('t0'))).toBe('ok not-running\n')
+    await $.turn.start({ text: 'second', turnId: 't1' })
+    const pending = call($, 'toolu_1')
+    await settle()
+    w.abortFails = true
+    expect(await put($, w, INTERRUPT_NONCE, await signStop('t1', { nonce: INTERRUPT_NONCE }))).toBe('ok not-running\n')
+    w.finish.toolu_1()
+    expect((await pending).result).toBe('finished')
+    expect(w.appended).toEqual([])
+  })
+
+  test('a stop of a turn a delivery started also ends the delivery', async ($, on) => {
+    const w = world(on)
+    w.inbox[`${TARGET}/${NONCE}.msg`] = WIRE
+    await look($, w)
+    await $.turn.start({ text: BODY, turnId: 't1' })
+    expect(await put($, w, STOP_NONCE, await signStop('t1'))).toBe('ok stopped t1\n')
+    // Taking the delivery back afterwards finds its turn over.
+    const mac = await hmac(enc.encode(KEY), abortMacInput(TARGET, INTERRUPT_NONCE, String(TS), NONCE))
+    expect(await put($, w, INTERRUPT_NONCE, `⟦fjord abort v1 ${TARGET} ${INTERRUPT_NONCE} ${TS} ${NONCE} ${mac}⟧\n`)).toBe('ok too-late\n')
+  })
+
+  const refused: [string, () => Promise<string>, string, number?][] = [
+    ['a bad MAC', async () => (await signStop()).replace(/[0-9a-f]{64}⟧/, `${'0'.repeat(64)}⟧`), 'bad signature'],
+    ['another key', async () => signStop('t1', { key: '00'.repeat(32) }), 'bad signature'],
+    ['another turn named after signing', async () => (await signStop('t1')).replace(' t1 ', ' t2 '), 'bad signature'],
+    ['any turn put in after signing', async () => (await signStop('t1')).replace(' t1 ', ' - '), 'bad signature'],
+    ['another session', async () => signStop('t1', { target: 'cli-other' }), 'addressed to another session'],
+    ['a stale stop', async () => signStop(), 'stale', TS + 11 * 60 * 1000],
+  ]
+  for (const [name, make, reason, now] of refused) {
+    test(`refuses ${name}`, async ($, on) => {
+      const w = world(on, { now })
+      await look($, w)
+      await $.turn.start({ text: 'typed', turnId: 't1' })
+      expect(await put($, w, STOP_NONCE, await make())).toBe(`refused: ${reason}\n`)
+      expect(w.aborted).toEqual([])
+    })
+  }
+
+  test('a stop is taken once: a replay is refused and stops nothing', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'first', turnId: 't1' })
+    await put($, w, STOP_NONCE, await signStop('-'))
+    await $.turn.start({ text: 'second', turnId: 't2' })
+    delete w.inbox[`${TARGET}/${STOP_NONCE}.ack`]
+    expect(await put($, w, STOP_NONCE, await signStop('-'))).toBe('refused: already delivered\n')
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('over the peer channel a stop is nothing: it passes on as the peer message it is', async ($, on) => {
+    const w = world(on)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    const result = await receive($, envelope(await signStop()))
+    expect(result.consumed).toBeUndefined()
+    expect(w.aborted).toEqual([])
+  })
+
+  test('an interrupt stops the running turn, then submits the words as the person’s own, in that order', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    const pending = call($, 'toolu_1')
+    await settle()
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true }))).toBe('ok interrupted t1\n')
+    await settle()
+    expect((await pending).deny).toBeDefined()
+    expect(w.order).toEqual(['abort t1', 'submit'])
+    expect(w.submitted).toEqual([{ text: BODY, asUser: true }])
+    expect(w.appended).toEqual(['Interrupted from Fjord'])
+  })
+
+  test('an interrupt applies its settings after the stop and before the words', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true, settings: { model: 'opus', effort: 'high' } }))).toBe(
+      'ok interrupted t1 model=opus effort=high\n',
+    )
+    await settle()
+    expect(w.order).toEqual(['abort t1', 'model opus', 'effort high', 'submit'])
+  })
+
+  test('an interrupt of an idle session only submits', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true }))).toBe('ok idle\n')
+    await settle()
+    expect(w.aborted).toEqual([])
+    expect(w.submitted).toEqual([{ text: BODY, asUser: true }])
+  })
+
+  test('a v3 message without the flag set does not interrupt, and plain v1 and v2 keep queueing', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: false }))).toBe('ok\n')
+    expect(await put($, w, STOP_NONCE, await sign('plain', { nonce: STOP_NONCE }))).toBe('ok\n')
+    await settle()
+    expect(w.aborted).toEqual([])
+    expect(w.submitted.map((s) => s.text)).toEqual([BODY, 'plain'])
+  })
+
+  test('the interrupt flag is inside the signature: clearing it, or setting it, is refused', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    const flagged = await sign(BODY, { interrupt: true })
+    expect(await put($, w, NONCE, flagged.replace(/ 1 ([0-9a-f]{64})⟧/, ' 0 $1⟧'))).toBe('refused: bad signature\n')
+    const plain = await sign(BODY, { interrupt: false, nonce: STOP_NONCE })
+    expect(await put($, w, STOP_NONCE, plain.replace(/ 0 ([0-9a-f]{64})⟧/, ' 1 $1⟧'))).toBe('refused: bad signature\n')
+    // A v2 header cannot be dressed as a v3 one either.
+    const v2 = await sign(BODY, { settings: { model: 'opus' }, nonce: INTERRUPT_NONCE })
+    expect(await put($, w, INTERRUPT_NONCE, v2.replace('v2 ', 'v3 ').replace(/ opus - /, ' opus - 1 '))).toBe('refused: bad signature\n')
+    expect(w.aborted).toEqual([])
+    expect(w.submitted).toEqual([])
+  })
+
+  test('an interrupt is taken once, and not at all over the peer channel', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    const result = await receive($, envelope(await sign(BODY, { interrupt: true })))
+    expect(result.consumed).toBeUndefined()
+    await settle()
+    expect(w.aborted).toEqual([])
+    expect(w.submitted).toEqual([])
+    // The same message from the inbox still works: the peer channel claimed nothing.
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true }))).toBe('ok interrupted t1\n')
+    delete w.inbox[`${TARGET}/${NONCE}.ack`]
+    expect(await put($, w, NONCE, await sign(BODY, { interrupt: true }))).toBe('refused: already delivered\n')
+  })
+
+  test('the presence file says which turn runs, as it starts and as it completes', async ($, on) => {
+    const w = world(on)
+    await look($, w)
+    expect(presence(w).turn).toBeNull()
+    expect(presence(w).capabilities).toEqual(expect.arrayContaining(['stop-v1', 'interrupt-v1']))
+    await $.turn.start({ text: 'typed', turnId: 't1' })
+    expect(presence(w).turn).toEqual({ id: 't1', startedAt: TS + 1500 })
+    // A subagent's turn ending changes nothing; the main turn's does.
+    await $.turn.complete({ ...complete, turnId: 'sub', agentId: 'a1' })
+    expect(presence(w).turn).toEqual({ id: 't1', startedAt: TS + 1500 })
+    await $.turn.complete({ ...complete, turnId: 't1' })
+    expect(presence(w).turn).toBeNull()
   })
 })

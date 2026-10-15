@@ -465,6 +465,20 @@ import Foundation
         } == true
     }
 
+    /// What the plugin in the guest session `cliSessionID` says it can do and the turn it runs, as of the last read of its
+    /// computer; nil when the session isn't one Fjord started there, or isn't live.
+    func presence(forGuestSessionID cliSessionID: String) -> (capabilities: [String], turn: ClaudePlugin.Presence.Turn?, hasTurnField: Bool)? {
+        guard let pending = store?.router.pendingDesktopStarts.first(where: {
+            $0.guestSessionID == cliSessionID && $0.state == .matched
+        }), let desktopID = pending.desktopSessionID,
+              let found = evidence[pending.location.key]?.first(where: { $0.hostSessionID == desktopID && $0.cliSessionID == cliSessionID })
+        else { return nil }
+        return (found.capabilities, found.turn, found.hasTurnField)
+    }
+
+    /// Seeds what a read of the guest would have found (tests).
+    func seedEvidence(_ found: [GuestSessionEvidence], for computer: GuestReference) { evidence[computer.key] = found }
+
     func guestReference(for desktopSessionID: String) -> GuestReference? {
         guard case .computer(let deviceId, let computerId)? = location(for: desktopSessionID) else { return nil }
         return GuestReference(deviceId: deviceId, computerId: computerId)
@@ -563,7 +577,8 @@ import Foundation
                 continue
             }
             let activity = transcript.activity
-            let running = !Claude.transcriptEndedTurn(tail: transcript.tail)
+            // The plugin's own word for it when it gives one; else the transcript's tail.
+            let running = evidence.hasTurnField ? evidence.turn != nil : !Claude.transcriptEndedTurn(tail: transcript.tail)
             store.guestExecutionStates[desktopID] = GuestExecutionState(cliSessionID: cli,
                 availability: .live, isRunning: running, activity: activity)
             if var session = sessions[desktopID] {

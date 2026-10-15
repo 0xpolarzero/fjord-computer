@@ -1200,6 +1200,117 @@ private struct AccountPausingGuestClient: GuestClient {
         #expect(saved.allSatisfy { $0.nonce == nonceText })
     }
 
+    /// A guest session whose plugin runs turn `t9` and can stop and interrupt: set up as a read of its computer finds it.
+    @MainActor private func controllableGuest(_ store: Store, desktopID: String, cliID: String, guest: MockGuestClient,
+                                              capabilities: [String]) async throws -> GuestRouterPaths {
+        let opened = Date(timeIntervalSince1970: 1_800_000_000)
+        store.claudeSessions[desktopID] = ClaudeSession(id: desktopID, title: "Widget", folder: "/workspace/repo",
+            lastActivity: opened, running: false, cliID: "mirror-cli")
+        store.router.pendingDesktopStarts = [PendingDesktopStart(projectID: UUID(),
+            location: .computer(deviceId: computer.deviceId, computerId: computer.computerId),
+            alias: "ssh-computer-1", folder: "/workspace/repo", prompt: "Fix it", openedAt: opened,
+            state: .matched, desktopSessionID: desktopID, guestSessionID: cliID)]
+        let paths = try GuestRouterPaths(home: account.home)
+        let key = String(repeating: "ab", count: 32)
+        let start: Int64 = 1_800_000_000_000
+        try await guest.filesWrite(.init(computer: computer, path: paths.key, data: Data(key.utf8), mode: 0o600))
+        let presence = try JSONSerialization.data(withJSONObject: [
+            "state": "live", "sessionId": cliID, "pid": 42, "startedAt": 123, "keyId": ClaudePlugin.keyID(of: key),
+            "renewedAt": start, "capabilities": capabilities, "turn": ["id": "t9", "startedAt": start - 5000],
+        ] as [String: Any])
+        try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.presence, cliID), data: presence, mode: 0o600))
+        let registry = try JSONSerialization.data(withJSONObject: [
+            "hostSessionId": desktopID, "sessionId": cliID, "pid": 42, "startedAt": 123,
+        ])
+        try await guest.filesWrite(.init(computer: computer, path: GuestRouterPaths.join(paths.registry, "42.json"), data: registry, mode: 0o600))
+        // The transcript's tail looks like a finished turn: the plugin's word for it wins.
+        let final = try JSONSerialization.data(withJSONObject: [
+            "type": "assistant", "uuid": "final-1", "cwd": "/workspace/repo", "timestamp": "2026-12-15T16:00:10.000Z",
+            "message": ["role": "assistant", "content": [["type": "text", "text": "Done"]], "stop_reason": "end_turn"],
+        ], options: [.sortedKeys]) + Data("\n".utf8)
+        try await guest.filesWrite(.init(computer: computer,
+            path: GuestRouterPaths.join(GuestRouterPaths.join(paths.projects, "workspace-repo"), "\(cliID).jsonl"),
+            data: final, mode: 0o600))
+        let clockArgv = [account.nodeExecutable, "-e", "process.stdout.write(String(Date.now()))"]
+        await guest.setExecResult(GuestExecResult(exitCode: 0, stdout: Data(String(start + 1_000).utf8), stderr: Data()), argv: clockArgv)
+        try await GuestRouterRuntime.shared.startWatching(store: store, client: guest, computer: computer)
+        return paths
+    }
+
+    /// The guest's plugin: acks the first message it sees in the session's inbox with `answer`.
+    private func guestPlugin(_ guest: MockGuestClient, inbox: String, answer: String) -> Task<Void, Never> {
+        let computer = computer
+        return Task.detached {
+            var watchdog = Watchdog()
+            while !watchdog.expired() {
+                let files = await guest.filesSnapshot(for: computer)
+                if let message = files.keys.first(where: { $0.hasPrefix(inbox + "/") && $0.hasSuffix(".msg") }) {
+                    let ack = String(message.dropLast(4)) + ".ack"
+                    _ = try? await guest.filesWrite(.init(computer: computer, path: ack, data: Data(answer.utf8), mode: 0o600))
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+        }
+    }
+
+    @MainActor @Test func aGuestSessionRunsATurnWhenItsPluginSaysSoAndItCanBeStoppedAndInterrupted() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        store.agents.enabled = true
+        let desktopID = "local_desktop-control", cliID = "guest-cli-ctl"
+        let guest = client()
+        let paths = try await controllableGuest(store, desktopID: desktopID, cliID: cliID, guest: guest, capabilities: [
+            ClaudePlugin.inboxCapability, ClaudePlugin.stopCapability, ClaudePlugin.interruptCapability])
+        let inbox = GuestRouterPaths.join(paths.inbox, cliID)
+
+        // The transcript says the turn ended; the plugin's presence says one runs, and that wins.
+        #expect(store.claudeSessions[desktopID]?.running == true)
+        #expect(store.guestExecutionStates[desktopID]?.isRunning == true)
+        #expect(store.canStop(sessionID: desktopID))
+        #expect(store.runningTurn(sessionID: desktopID)?.id == "t9")
+
+        // A gate that refuses stops it before the write: nothing reaches the inbox.
+        let refused = await store.stopTurn(sessionID: desktopID) { "The card is gone" }
+        guard case .failed(let why) = refused, why.contains("The card is gone") else { Issue.record("\(refused)"); return }
+        let interrupted = await store.interrupt(sessionID: desktopID, text: "Never mind", gate: { "The card is gone" })
+        guard case .refused(let reason) = interrupted, reason == "The card is gone" else { Issue.record("\(interrupted)"); return }
+        #expect(await guest.writeRecords().filter { $0.path.hasPrefix(inbox) }.isEmpty)
+
+        // The stop names the turn presence shows, signed with the guest's key.
+        var fake = guestPlugin(guest, inbox: inbox, answer: "ok stopped t9")
+        #expect(await store.stopTurn(sessionID: desktopID) == .stopped("t9"))
+        await fake.value
+        let stop = try #require(await guest.writeRecords().first { $0.path.hasPrefix(inbox) && $0.path.hasSuffix(".msg") })
+        let stopText = String(decoding: stop.data, as: UTF8.self)
+        #expect(stopText.hasPrefix("⟦fjord stop v1 \(cliID) ") && stopText.contains(" t9 "))
+
+        // The interrupt is a v3 message with the flag.
+        fake = guestPlugin(guest, inbox: inbox, answer: "ok interrupted t9")
+        let done = await store.interrupt(sessionID: desktopID, text: "Do this instead")
+        #expect(done == .delivered(ack: "ok interrupted t9", interrupted: "t9"))
+        await fake.value
+        let sent = await guest.writeRecords().filter { $0.path.hasPrefix(inbox) && $0.path.hasSuffix(".msg") }
+        let text = String(decoding: try #require(sent.last).data, as: UTF8.self)
+        #expect(text.hasPrefix("⟦fjord v3 \(cliID) ") && text.split(separator: "\n")[0].contains(" - - 1 "))
+    }
+
+    @MainActor @Test func aGuestPluginWithoutStopIsUnsupportedAndNothingIsWritten() async throws {
+        defer { GuestRouterRuntime.shared.stopAll() }
+        let store = Store(engineClient: MockEngineClient())
+        store.persists = false
+        store.agents.enabled = true
+        let desktopID = "local_desktop-old", cliID = "guest-cli-old"
+        let guest = client()
+        let paths = try await controllableGuest(store, desktopID: desktopID, cliID: cliID, guest: guest,
+                                                capabilities: [ClaudePlugin.inboxCapability, ClaudePlugin.abortCapability])
+        #expect(!store.canStop(sessionID: desktopID))
+        guard case .unsupported = await store.stopTurn(sessionID: desktopID) else { Issue.record("stop"); return }
+        guard case .unsupported = await store.interrupt(sessionID: desktopID, text: "hi") else { Issue.record("interrupt"); return }
+        #expect(await guest.writeRecords().filter { $0.path.hasPrefix(GuestRouterPaths.join(paths.inbox, cliID)) }.isEmpty)
+    }
+
     @Test func guestRelayRetryReconcilesTheOriginalNonceAfterAdmissionReplyIsLost() async throws {
         let guest = client()
         let paths = try GuestRouterPaths(home: account.home)

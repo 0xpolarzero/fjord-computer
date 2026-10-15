@@ -423,6 +423,7 @@ extension Store {
         guard agents.enabled else { return }
         // The app's own reads (a store that doesn't persist, a test's, routes on what it was given).
         if persists { claudeReadAsked = true }
+        claudeFeed.readPresence(from: routerFiles) { [weak self] in self?.refreshClaude() }
         claudeFeed.request(full: true, stamp: claudeStamp) { [weak self] in self?.applyClaude($0) }
     }
 
