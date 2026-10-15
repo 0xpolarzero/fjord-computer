@@ -19,3 +19,14 @@ jobs:
       - name: Test
         timeout-minutes: 20
         run: ./scripts/test.sh
+
+      # A run that hits the timeout leaves no trace of what it was stuck on (its output stops where the last test finished):
+      # sample the test process's threads before the job ends, so the log names the hung test.
+      - name: Where the test process is stuck
+        if: cancelled() || failure()
+        run: |
+          for pid in $(pgrep -f swiftpm-testing || true); do
+            echo "::group::sample $pid"
+            sample "$pid" 5 -file /dev/stdout || true
+            echo "::endgroup::"
+          done
