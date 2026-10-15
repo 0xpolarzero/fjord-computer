@@ -278,29 +278,6 @@ import Testing
         #expect(lines.contains { $0.kind == .corrected && $0.from == "session:local_b" && $0.target == "session:local_a" })
     }
 
-    @Test func aSplitHalfSentElsewhereStaysAHalfAndIsNotSplitAgain() async throws {
-        let w = World()
-        w.fakes.ranked = [.init(target: "session:local_b", p: 0.95), .init(target: "session:local_a", p: 0.04)]
-        let id = try #require(w.dispatcher.submit("fix the login redirect"))
-        await w.finish(id)
-        let parent = UUID()
-        w.store.updateDecision(id) { $0.splitFrom = parent; $0.inherited = .init(projects: ["/code/docs"], mentions: []) }
-        w.fakes.finished = []
-        w.fakes.ranked = [.init(target: "compound", p: 0.95), .init(target: "session:local_a", p: 0.04)]
-        w.fakes.answer.leftover = ["and also tell CI"]
-        let count = w.store.router.decisions.count
-        w.dispatcher.sendElsewhere(id)
-        await w.finish(id)
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(w.store.router.decisions.count == count, "no new part was split from a part")
-        #expect(w.entry(id)?.splitFrom == parent)
-        // Asked again, a part is offered no run of the Router, and a pick of one is refused.
-        let ask = try #require(w.dispatcher.askBacks.first { $0.id == id })
-        #expect(!ask.options.isEmpty && ask.options.allSatisfy { RouterRun.Intent(rawValue: $0.target) == nil })
-        #expect(!w.dispatcher.pick(id, target: "compound") && !w.dispatcher.pick(id, target: "change_fjord"))
-        #expect(w.dispatcher.askBacks.contains { $0.id == id })
-    }
-
     @Test func anActionsMessageSentElsewhereIsStillAnActionsMessage() async throws {
         let w = World()
         w.store.codeFolders.scan = { _ in .init(repos: ["/code/lookout": ["o/lookout"], "/code/lookout-2": ["o/lookout"]]) }

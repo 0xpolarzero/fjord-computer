@@ -19,8 +19,6 @@ struct RouterRunContext: Equatable {
         var text: String
         /// "needs you", "worth a look" or "waiting": the zone the card is in on the Router page.
         var tier = "needs you"
-        /// Only a card worth a look can be marked seen; one that needs the user is answered.
-        var canMarkSeen = false
     }
 
     struct Working: Equatable {
@@ -47,7 +45,7 @@ struct RouterRunContext: Equatable {
         var lines: [String] = ["Open cards (each with its tier: needs you, worth a look or waiting):"]
         lines += cards.isEmpty ? ["- none"] : cards.map {
             "- [\($0.tier)] [\($0.kind)] “\(clean($0.title, 120))” (\(clean($0.project, 80))): \(clean($0.text, 160)) "
-                + "(card \(clean($0.id, 80)), \($0.canMarkSeen ? "can be marked seen" : "can't be marked seen"))"
+                + "(card \(clean($0.id, 80)))"
         }
         lines += ["", "Sessions working on their own:"]
         lines += working.isEmpty ? ["- none"] : working.map { "- “\(clean($0.title, 120))” (\(clean($0.project, 80))): \(clean($0.doing, 160))" }
@@ -63,14 +61,13 @@ struct RouterRunContext: Equatable {
 }
 
 extension Store {
-    /// Where an open card stands on the page: "needs you" (Needs you, and the sessions ready to go on), "worth a look" (the
-    /// only ones `mark_seen` takes) or "waiting" (the turn ended on something outside it). A card in no zone falls back to its
+    /// Where an open card stands on the page: "needs you" (Needs you, and the sessions ready to go on), "worth a look" or "waiting" (the turn ended on something outside it). A card in no zone falls back to its
     /// kind.
-    func routerTier(_ card: RouterCard, zones: RouterPage) -> (tier: String, canMarkSeen: Bool) {
-        if zones.notes.contains(where: { $0.id == card.id }) { return ("worth a look", true) }
-        if zones.waiting.contains(where: { $0.id == card.id }) { return ("waiting", false) }
-        if zones.needs.contains(where: { $0.id == card.id }) || zones.ready.contains(where: { $0.id == card.id }) { return ("needs you", false) }
-        return card.kind == .waiting ? ("waiting", false) : card.kind.needsYou ? ("needs you", false) : ("worth a look", false)
+    func routerTier(_ card: RouterCard, zones: RouterPage) -> String {
+        if zones.notes.contains(where: { $0.id == card.id }) { return "worth a look" }
+        if zones.waiting.contains(where: { $0.id == card.id }) { return "waiting" }
+        if zones.needs.contains(where: { $0.id == card.id }) || zones.ready.contains(where: { $0.id == card.id }) { return "needs you" }
+        return card.kind == .waiting ? "waiting" : card.kind.needsYou ? "needs you" : "worth a look"
     }
 
     /// The state a run starts from, as it is now.
@@ -79,9 +76,8 @@ extension Store {
         let zones = routerZones
         return RouterRunContext(
             cards: shownRouterCards.prefix(30).map {
-                let (tier, canMarkSeen) = routerTier($0, zones: zones)
-                return .init(id: $0.id, kind: $0.kind.modelName, title: $0.title, project: folderName($0.folder ?? ""), text: $0.text,
-                             tier: tier, canMarkSeen: canMarkSeen)
+                .init(id: $0.id, kind: $0.kind.modelName, title: $0.title, project: folderName($0.folder ?? ""), text: $0.text,
+                      tier: routerTier($0, zones: zones))
             },
             working: routerWorkingRows.prefix(30).map { row in
                 .init(title: row.session.title, project: row.projectName, doing: liveExplanation(row) ?? row.activity?.text ?? "Working")
@@ -100,7 +96,7 @@ enum RouterRun {
     enum Intent: String, Equatable, CaseIterable {
         case changeFjord = "change_fjord"
         case question
-        /// Several things in one message: the Fjord part is done here, the rest is said back.
+        /// Several things in one message: the Fjord part is done here, and the reply says the rest is for a session.
         case compound
     }
 
@@ -108,16 +104,13 @@ enum RouterRun {
     struct Answer: Equatable {
         var reply: String
         var done: String
-        /// The parts of a compound message meant for sessions, each as a message of its own; only a compound run returns any.
-        var leftover: [String] = []
     }
 
     static let model = "claude-haiku-5-5"
     static let timeout: TimeInterval = 90
 
-    /// The tools an intent may call. A question only reads. Every intent gets `board`, the one that lists the cards: without
-    /// it a change or a compound message ("I've seen the Stripe one") has no way to find a card for `mark_seen`. With Triage
-    /// off (`triage` false), none of Triage's: the Router reads and changes only the app's settings (and marks cards seen).
+    /// The tools an intent may call. A question only reads (the board among them); a change has the settings' and, with
+    /// Triage on (`triage`), Triage's.
     @MainActor static func toolNames(_ intent: Intent, triage: Bool) -> Set<String> {
         RouterCapability.toolNames(intent, triage: triage)
     }
@@ -145,15 +138,9 @@ enum RouterRun {
         }
     }
 
-    /// What `leftover` is, as the compound run's role and the schema both say it.
-    static let leftoverDescription = "list the parts meant for sessions, each a self-contained message written as the user would "
-        + "write it to that session, most important first, no repeats. Nothing in leftover is sent by itself: each part is shown to "
-        + "the user, who picks where it goes, so don't mention them in `reply`."
-
     static let schema: String = {
-        let leftover: [String: Any] = ["type": "array", "items": ["type": "string"], "description": "leftover: " + leftoverDescription]
         let object: [String: Any] = ["type": "object", "required": ["reply", "done"], "additionalProperties": false,
-                                     "properties": ["reply": ["type": "string"], "done": ["type": "string"], "leftover": leftover]]
+                                     "properties": ["reply": ["type": "string"], "done": ["type": "string"]] ]
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }()
@@ -177,13 +164,13 @@ enum RouterRun {
             throw RouterTools.Failure(errors ?? (obj["result"] as? String) ?? "The run failed")
         }
         if let typed = obj["structured_output"] as? [String: Any], let reply = typed["reply"] as? String {
-            return Answer(reply: reply, done: typed["done"] as? String ?? "", leftover: typed["leftover"] as? [String] ?? [])
+            return Answer(reply: reply, done: typed["done"] as? String ?? "")
         }
         if var text = (obj["result"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
             if let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end,
                let typed = (try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8))) as? [String: Any],
                let reply = typed["reply"] as? String {
-                return Answer(reply: reply, done: typed["done"] as? String ?? "", leftover: typed["leftover"] as? [String] ?? [])
+                return Answer(reply: reply, done: typed["done"] as? String ?? "")
             }
             text = String(text.prefix(2000))
             return Answer(reply: text, done: "")

@@ -11,9 +11,6 @@ struct RouterCapability: Equatable {
     var intent: RouterRun.Intent
     /// What it does, as the routing classifier is told (nil for a capability that only reads, which routing doesn't name).
     var outcome: String?
-    /// Whether the routing text names `outcome`. One that measured badly stays out of it (the run still has the tools, for a
-    /// message that reaches the Router another way).
-    var routed: Bool = true
     var tools: [String]
     /// What the run's role says about it, in the words its tools use.
     var roleSentence: String?
@@ -39,54 +36,26 @@ extension RouterCapability {
               roleSentence: nil, needsTriage: true, scope: "Triage's inbox categories and groups",
               guidance: "Before changing a category, read it (the category's JSON; list_known for repos and people). Add a category's "
                   + "actions only when asked, and never a GitHub comment on your own."),
+        // The next three are only words the routing classifier is told (measured as they are, `Fixtures/router-capabilities-parity.json`):
+        // a message like "I'll do the theme one myself" reaches the Router for its dispatcher to act on a card, so no tool of the
+        // run does it.
         .init(id: "mark-seen", intent: .changeFjord,
               outcome: "mark a Router card the user has seen or read as seen (a worth-a-look card: \"seen the docs\", \"got it\", \"I read the headlines\")",
-              tools: ["mark_seen", "board"],
-              roleSentence: "Router cards are what Fjord shows for Claude Code sessions that need the user or are worth a look: you mark one "
-                  + "seen with `mark_seen`, for a card worth a look (the `board` tool lists the cards with their tier and whether "
-                  + "`canMarkSeen`). The Brief is the short written summary of what needs the user, per project: you can read it "
-                  + "through `board`.",
-              scope: "which Router cards are marked seen"),
+              tools: [], roleSentence: nil),
         .init(id: "mark-inbox", intent: .changeFjord,
               outcome: "mark things in the inbox as done or seen",
               tools: ["mark_entries", "list_inbox", "explain_entry"],
               roleSentence: "Triage's inbox things are GitHub PRs, issues and workflows: you mark those with `mark_entries` (`archived` archives "
-                  + "them; also seen, unread, restore), never with `mark_seen`.",
+                  + "them; also seen, unread, restore).",
               needsTriage: true, scope: "Triage's inbox (what is archived or seen)"),
         .init(id: "archive-cards", intent: .changeFjord,
               outcome: "archive a Router card the user will handle themselves or doesn't need (\"I'll do the theme one myself\", \"archive the login card\")",
-              tools: ["archive_cards", "board"],
-              roleSentence: "You propose archiving any open Router card, one that needs the user too, with `archive_cards`, when the user says "
-                  + "they will handle it themselves or don't need it: the user applies it from a card in the history.",
-              scope: "which Router cards are archived"),
+              tools: [], roleSentence: nil),
         .init(id: "reopen-card", intent: .changeFjord,
               outcome: "reopen a Router card the user archived (\"reopen the docs card\")",
-              tools: ["reopen_card", "board"],
-              roleSentence: "You propose bringing a recently archived card back with `reopen_card`, which the user applies; the `board` tool lists "
-                  + "the latest archived cards.",
-              scope: "which archived Router cards are reopened"),
-        .init(id: "mute-project", intent: .changeFjord,
-              outcome: "mute or unmute a project's sessions in the Router (\"mute microsandbox\")",
-              // Left out of the routing text: "mute X" already reaches the Router through the notifications phrase, and this
-              // one added nothing (docs/design/router-research.md, "Router actions from words").
-              routed: false,
-              tools: ["mute_project", "board"],
-              roleSentence: "You propose muting or unmuting a whole project's sessions in the Router with `mute_project`, by the project name "
-                  + "the `board` tool shows; the user applies it.",
-              scope: "which projects are muted in the Router"),
-        .init(id: "stop-session", intent: .changeFjord,
-              outcome: "stop a running session's current turn (\"stop the CI session\")",
-              // Left out of the routing text: "stop the X session" mostly went to the session itself with it (1 of 6 reached the
-              // Router, as without it). The tool stays in a run that reaches the Router another way.
-              routed: false,
-              tools: ["stop_session", "board"],
-              roleSentence: "You propose stopping what a running session is working on now with `stop_session`, which the user applies and "
-                  + "can't undo; it works only for the running turn when a message sent through Fjord started it, in a session whose "
-                  + "plugin supports it, and says why when it can't.",
-              scope: "which running sessions are stopped",
-              guidance: "Archiving, reopening, muting and stopping are only proposed: nothing changes until the user clicks Apply on the card "
-                  + "in the history, so say in a line that it waits for them; if a tool refuses, say why in a line."),
-        .init(id: "question-board", intent: .question, outcome: nil, tools: ["board", "get_settings"], roleSentence: nil,
+              tools: [], roleSentence: nil),
+        .init(id: "question-board", intent: .question, outcome: nil, tools: ["board", "get_settings"],
+              roleSentence: "The Brief is the short written summary of what needs the user, per project: you can read it through `board`.",
               reads: "cards, working sessions, the Brief, settings"),
         .init(id: "question-triage", intent: .question, outcome: nil,
               tools: ["list_categories", "get_category", "list_groups", "list_inbox", "explain_entry", "list_known"],
@@ -140,13 +109,14 @@ extension RouterCapability {
     static func compoundRole(triage: Bool) -> String {
         let scopes = prose(available(.compound, triage: triage).compactMap(\.scope))
         return "The message asks for more than one thing. Do only what concerns Fjord itself (" + scopes + "), as asked, with your "
-            + "tools. Anything meant for a session, return in `leftover`: " + RouterRun.leftoverDescription
+            + "tools. The rest is meant for a session: don't do it and don't rewrite it. Say in `reply`, in a line, that the message "
+            + "also asks something of a session; the user is then asked where to send the whole message, or to split it."
     }
 
     /// What the routing classifier is told Fjord does itself. It is not told whether Triage is on (the routing questions are
     /// built before the run, and a Triage request with Triage off is refused in the run with a reason), so the full list.
     static var outcomes: String {
-        all.filter { $0.intent == .changeFjord && $0.routed }.compactMap(\.outcome).joined(separator: "; ")
+        all.filter { $0.intent == .changeFjord }.compactMap(\.outcome).joined(separator: "; ")
     }
 
     static let notThese = "Not asking a session to build or change code, and not a message for a session to act on (an instruction "

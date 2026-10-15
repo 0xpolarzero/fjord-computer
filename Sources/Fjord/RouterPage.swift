@@ -267,12 +267,22 @@ struct RouterPageView: View {
 
     var body: some View {
         // The canvas (a beta, RouterCanvas.swift) takes the whole page when it is picked, the history a panel over it.
-        if model.layout == .canvas {
-            CanvasPage(store: store, model: model)
-        } else if model.layout == .brief {
-            DigestPage(store: store, model: model)
-        } else {
-            columns
+        Group {
+            if model.layout == .canvas {
+                CanvasPage(store: store, model: model)
+            } else if model.layout == .brief {
+                DigestPage(store: store, model: model)
+            } else {
+                columns
+            }
+        }
+        // "Split…" on a compound message's ask: the message is back in the composer to write its parts.
+        .onChange(of: store.routerDispatcher.splitRequest) { _, request in
+            guard let request else { return }
+            model.replyTo = nil
+            model.draft = request.text
+            model.composerFocused = true
+            store.routerDispatcher.splitRequest = nil
         }
     }
 
@@ -2403,7 +2413,9 @@ struct WaitingCard: View, Equatable {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .contextMenu {
-            Button("Archive") { store.setCardAddressed(card.id, true) }
+            Button("Archive") {
+                store.act(.archive(card: card.id, title: UntrustedText.clean(card.title, limit: 60), project: UntrustedText.clean(store.routerProject(card).name, limit: 40)))
+            }
             CardSessionMenu(store: store, sessionID: card.sessionID)
         }
     }
@@ -2791,7 +2803,7 @@ struct AskBackCard: View, Equatable {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "questionmark.bubble").font(.system(size: 13, weight: .medium)).foregroundStyle(warm)
-                Text("Where should this go?").cdsText((14, 20), .semibold, CDS.Text.primary)
+                Text(ask.whole ? "Part of this is for a session" : "Where should this go?").cdsText((14, 20), .semibold, CDS.Text.primary)
                 Spacer(minLength: 4)
                 CardAge(date: ask.at)
             }
@@ -2806,9 +2818,9 @@ struct AskBackCard: View, Equatable {
                 let newest = ask.id == store.routerDispatcher.askBacks.last?.id
                 ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
                     ClaudeButton(option.title + (option.detail.isEmpty ? "" : " · \(option.detail)"), variant: .secondary, size: .sm) {
-                        if option.target == RouterAskBack.chooseFolder { chooseFolder() } else {
-                            store.routerDispatcher.pick(ask.id, target: option.target)
-                        }
+                        if option.target == RouterAskBack.chooseFolder { chooseFolder() }
+                        else if option.target == RouterAskBack.split { store.routerDispatcher.split(ask.id) }
+                        else { store.routerDispatcher.pick(ask.id, target: option.target) }
                     }
                     // RouterKeys: ⌘1–⌘4 on the newest ask.
                     .help(newest && index < RouterKeys.pickKeys.count ? "⌘\(index + 1)" : "")

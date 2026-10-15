@@ -793,8 +793,7 @@ final class RouterModel {
         guard let card = store.router.cards.first(where: { $0.id == id }), card.isOpen else { return }
         let open = cards(store).filter(\.isOpen).map(\.id)
         let next = open.firstIndex(of: id).map { i in open.indices.contains(i + 1) ? open[i + 1] : i > 0 ? open[i - 1] : nil } ?? nil
-        store.setCardAddressed(id, true)
-        store.logCardAction("Archived", card: id)
+        store.act(.archive(card: id, title: UntrustedText.clean(card.title, limit: 60), project: UntrustedText.clean(store.routerProject(card).name, limit: 40)))
         Announce.say("Archived")
         if selection == id { advance(from: id, to: next, store: store, reveal: true) }
     }
@@ -802,7 +801,7 @@ final class RouterModel {
     /// Reopen on a history line: the card is back in Needs you and the page goes to it.
     func reopen(_ id: String, store: Store) {
         guard let card = store.router.cards.first(where: { $0.id == id }), store.routerCanReopen(card) else { return }
-        store.setCardAddressed(id, false)
+        guard store.act(.reopen(card: id, title: UntrustedText.clean(card.title, limit: 60), project: UntrustedText.clean(store.routerProject(card).name, limit: 40))) != nil else { return }
         expanded.remove(id)
         Announce.say("Open again")
         select(id, store: store)

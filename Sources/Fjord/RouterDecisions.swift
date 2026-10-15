@@ -351,13 +351,6 @@ extension RouterState {
             }
             decisions[i].outcome = .done
         }
-        // A stop whose abort was written but not yet acknowledged when the app quit: it was sent, so it settles as applied
-        // (never resent), saying it wasn't confirmed.
-        for i in changes.indices where changes[i].applying != nil {
-            changes[i].applying = nil
-            changes[i].pending = nil
-            changes[i].revertNote = "The stop was sent, but Fjord quit before it was confirmed."
-        }
     }
 
     /// A change waiting for your Apply or Discard, or one an older file kept in its chat, is reached only through an

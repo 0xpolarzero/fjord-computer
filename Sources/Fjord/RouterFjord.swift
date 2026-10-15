@@ -84,7 +84,7 @@ enum FjordTools {
                       .init("limit", .int, "At most this many (default 50, at most 200).", fallback: .absent)], reads: true),
         Tool(name: "explain_entry", doc: "Says why an inbox thing is where it is: the category and rules that matched it and the facts, the other categories it would match but comes after, rules that are off until fixed, and the inbox thing's own state (status, author, labels, checks…) for working out why it isn't somewhere.",
              fields: [.init("entry", .string("thing id, owner/repo#n, or title words"), "The inbox thing: its id from list_inbox, `owner/repo#12`, or words of its title.")], reads: true),
-        Tool(name: "mark_entries", doc: "Triage inbox things (GitHub PRs, issues, workflows), not Router cards: for a Router card (a Claude Code session) use mark_seen. State `archived` archives them (it acknowledges their current facts; they come back only on a new fact); `seen` marks them read; `unread` marks seen ones unread again; `restore` puts archived ones back in the inbox. Give `entries` or a whole `category` (its open ones for archived, its unread for seen, its archived ones for restore). At most 100.\(changeNote)",
+        Tool(name: "mark_entries", doc: "Triage inbox things (GitHub PRs, issues, workflows), not Router cards. State `archived` archives them (it acknowledges their current facts; they come back only on a new fact); `seen` marks them read; `unread` marks seen ones unread again; `restore` puts archived ones back in the inbox. Give `entries` or a whole `category` (its open ones for archived, its unread for seen, its archived ones for restore). At most 100.\(changeNote)",
              fields: [.init("state", .choice(["archived", "seen", "unread", "restore"]), "archived = archive, seen = read, unread = unread again, restore = back from archived."),
                       .init("entries", .list(.string("thing id, owner/repo#n, or title words")), "Inbox things.", fallback: .absent),
                       .init("category", .string("id or name"), "Every matching inbox thing of this category.", fallback: .absent)]),
@@ -97,17 +97,6 @@ enum FjordTools {
                               "\(s.key): " + (String(data: (try? JSONSerialization.data(withJSONObject: s.schema, options: [.sortedKeys])) ?? Data(), encoding: .utf8) ?? "")
                           }.joined(separator: "; ")],
                       ]] as [String: Any]),
-        Tool(name: "mark_seen", doc: "Router cards (Claude Code sessions') worth a look, marked as seen when the user says they've seen or read them: they leave Now and the Brief. Not for inbox things (GitHub PRs, issues, workflows): use mark_entries for those. Name each by the `card` or `session` id the board tool gives, or words of its title; only cards the board says `canMarkSeen`: one that needs the user (a question, a plan, an OK) is answered, not marked seen.",
-             fields: [.init("cards", .list(.string("session id or title words")), "The cards worth a look the user has seen.")]),
-        Tool(name: "archive_cards", doc: "Archives Router cards (Claude Code sessions'), any open one, even one that needs the user: for when the user says they will handle it themselves or don't need it. It is the Archive button: the card goes to the history, where Reopen brings it back. Name each by the `card` or `session` id the board tool gives, or words of its title; It only proposes: the change waits for the user's Apply on a card in the history (Revert brings the card back), and nothing is archived until they click it, so say in your reply that it waits for them. Not for inbox things (GitHub PRs, issues, workflows): use mark_entries.",
-             fields: [.init("cards", .list(.string("session id or title words")), "The open cards the user named.")]),
-        Tool(name: "reopen_card", doc: "Reopens a Router card the user archived lately (the board tool lists the latest archived ones, with `card`, title and when): it is back in Needs you or Worth a look. Name it by its `card` id or words of its title. It only proposes: the change waits for the user's Apply (Revert archives it again). Refused when its session has another open card, which reopening would replace. Say in your reply that it waits for them.",
-             fields: [.init("card", .string("card id or title words"), "The archived card.")]),
-        Tool(name: "mute_project", doc: "Mutes or unmutes a project's sessions in the Router, so their cards, notifications and the Brief leave it or come back. Name the project as the board tool shows it, with its path above it when two share a name (`customer-a/app`). It only proposes: the change waits for the user's Apply (Revert undoes it), so say in your reply that it waits for them. If the name fits more than one project, nothing is proposed and the choices are listed.",
-             fields: [.init("project", .string("project name"), "The project, as the board's `projects` shows it."),
-                      .init("muted", .bool, "true to mute it, false to unmute it.")]),
-        Tool(name: "stop_session", doc: "Proposes stopping what a running session is working on now: the change waits for the user's Apply, and a stop can't be undone, so say in your reply that it waits for them. It works only for the running turn when a message sent through Fjord started it (not one queued behind it), in a session whose Fjord plugin supports it (the answer says why when it can't); what the turn already did stays as it was.",
-             fields: [.init("session", .string("session id or title words"), "The running session, by the `session` id the board tool gives or words of its title.")]),
         Tool(name: "list_known", doc: "The repos, people or teams Triage knows (from what it has fetched and what the user has), to fill a rule's values; also the special values and the groups of that kind.",
              fields: [.init("kind", .choice(["repos", "people", "teams"]), "What to list."),
                       .init("query", .string("text"), "Only those containing it.", fallback: .absent),
@@ -155,11 +144,6 @@ extension RouterTools {
             case "get_settings": text = try getSettings(store, args)
             case "set_setting": text = try setSetting(store, args)
             case "list_known": text = try listKnown(store, args)
-            case "mark_seen": text = try markSeen(store, args)
-            case "archive_cards": text = try archiveCards(store, args)
-            case "reopen_card": text = try reopenCard(store, args)
-            case "mute_project": text = try muteProject(store, args)
-            case "stop_session": text = try stopSession(store, args)
             default: return nil
             }
             return RouterRPC.ToolResult(text: text)
@@ -571,31 +555,6 @@ extension RouterTools {
         if !also.isEmpty { out["alsoMatchesButComesAfter"] = also }
         if !off.isEmpty { out["rulesOffUntilFixed"] = off }
         return Self.json(out)
-    }
-
-    /// The cards worth a look you said you've seen, marked so (addressed by you): they leave Now and the Brief.
-    func markSeen(_ store: Store, _ args: [String: Any]) throws -> String {
-        let asked = try Self.strings(checked("mark_seen", args), "cards")
-        guard !asked.isEmpty else { throw Failure("Name the cards worth a look the user has seen") }
-        let notes = store.routerZones.notes
-        var marked: [String] = [], unknown: [String] = []
-        for query in asked {
-            let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            let words = q.lowercased().split(whereSeparator: \.isWhitespace)
-            let hits = notes.filter { card in
-                card.sessionID == q || card.id == q
-                    || (!words.isEmpty && words.allSatisfy { card.title.lowercased().contains($0) })
-            }
-            guard let card = hits.first, hits.count == 1 || hits.allSatisfy({ $0.sessionID == card.sessionID }) else {
-                unknown.append(hits.isEmpty ? "“\(q)”: no card worth a look by that name" : "“\(q)”: more than one card matches")
-                continue
-            }
-            store.setCardAddressed(card.id, true)
-            store.logCardAction("Archived", card: card.id)
-            marked.append("“\(card.title)”")
-        }
-        if marked.isEmpty { throw Failure("Nothing marked: " + unknown.joined(separator: "; ")) }
-        return "Marked seen: " + marked.joined(separator: ", ") + (unknown.isEmpty ? "." : ". Not found: " + unknown.joined(separator: "; "))
     }
 
     func markEntries(_ store: Store, _ args: [String: Any]) throws -> String {

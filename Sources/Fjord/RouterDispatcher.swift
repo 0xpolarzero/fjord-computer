@@ -40,18 +40,9 @@ struct RouterContext: Equatable {
     /// Sent from the Router page's composer: its run shows as a pill over the composer, flying to where it went
     /// (`RouterFlights`), and an ask about it unfolds there rather than in Needs you.
     var flies = false
-    /// The decision this message was split from: the session half of a compound message (`RouterDispatcher.think`).
-    var splitFrom: UUID?
-    /// With `splitFrom`: the words were written by the Router's run, not typed by you. They are only ranked, within the
-    /// original's scope (projects, tagged sessions, `notTo`), and always asked about: nothing is sent until you pick, no
-    /// exemption for words you typed applies, and the Router's own runs are not offered.
-    var asksFirst = false
 
     init(replyTo: String? = nil, projects: [String] = [], target: String? = nil, notTo: String? = nil,
-         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = [],
-         splitFrom: UUID? = nil, asksFirst: Bool = false) {
-        self.splitFrom = splitFrom
-        self.asksFirst = asksFirst && splitFrom != nil
+         predicted: String? = nil, jev: RouterDispatcher.Classification? = nil, shown: String? = nil, pills: [Range<Int>] = []) {
         self.replyTo = replyTo
         self.projects = projects
         self.target = target
@@ -71,7 +62,10 @@ struct RouterAskBack: Identifiable, Equatable {
     /// notification's repo is known.
     static let chooseFolder = "choose_folder"
 
-    /// A target you can pick: `answer:<card>`, `session:<id>`, `new:<folder>`, `change_fjord`, `question` or `chooseFolder`.
+    /// "Split…" on a compound message's ask: the composer opens with the message to write its parts yourself.
+    static let split = "split"
+
+    /// A target you can pick: `answer:<card>`, `session:<id>`, `new:<folder>`, `change_fjord`, `question`, `chooseFolder` or `split`.
     struct Option: Identifiable, Equatable, Hashable {
         var target: String
         var title: String
@@ -90,6 +84,8 @@ struct RouterAskBack: Identifiable, Equatable {
     var at: Date
     /// Why it asks, when it isn't Jev's doubt ("No clone of owner/repo").
     var note: String? = nil
+    /// A compound message whose Fjord part the Router's run did: the buttons send the whole message to a session, or split it.
+    var whole = false
 }
 
 // MARK: - Dispatcher
@@ -217,12 +213,16 @@ struct RouterAskBack: Identifiable, Equatable {
         var answerPlan: @MainActor (RouterTools, _ card: String, PendingForm.PlanDecision, FormSnapshot) async throws -> String = { _, _, _, _ in
             throw RouterTools.Failure("The Router isn't ready")
         }
-        /// The parts of a compound message a run left for sessions (`RouterRun.Answer.leftover`).
-        var leftovers: (RouterRun.Answer) -> [String] = { $0.sessionHalves }
     }
 
     /// Asks waiting for a pick, oldest first.
     private(set) var askBacks: [RouterAskBack] = []
+    /// Set by "Split…" on a compound message's ask: the page puts `text` in the composer and clears it.
+    var splitRequest: SplitRequest?
+    struct SplitRequest: Equatable {
+        var id: UUID
+        var text: String
+    }
     /// The runs of messages sent from the composer (`RouterContext.flies`), oldest first: the composer's pills.
     private(set) var flying: [UUID] = []
     /// How far each run under way is, by its entry in the log ("classifying", "sending"…).
@@ -311,20 +311,14 @@ struct RouterAskBack: Identifiable, Equatable {
         let projects = context.projects.filter { seen.insert($0).inserted }
         var context = context
         context.projects = projects
-        context.asksFirst = context.asksFirst && context.splitFrom != nil
         // A pill is an "@name" where it was said; anything else given as one isn't.
         let chars = Array(text)
         context.pills = context.pills.filter { $0.lowerBound >= 0 && $0.upperBound <= chars.count && !$0.isEmpty && chars[$0.lowerBound] == "@" }
-        // A part inherits its original's pointers, which stand where they did in that message, not in these words.
-        if !context.asksFirst { context.mentions = Self.mentions(context.mentions, in: text) } else { context.pills = [] }
+        context.mentions = Self.mentions(context.mentions, in: text)
         var entry = RouterDecision(trigger: .you(text), decision: .init(intent: "message"),
                                    links: .init(cards: context.replyTo.map { [$0] } ?? []))
-        entry.mentions = context.asksFirst || context.mentions.isEmpty ? nil : context.mentions
+        entry.mentions = context.mentions.isEmpty ? nil : context.mentions
         entry.fromAction = context.action?.origin
-        entry.splitFrom = context.splitFrom
-        if context.asksFirst {
-            entry.inherited = .init(projects: context.projects, mentions: context.mentions)
-        }
         entry.actionStart = context.action.map { .init(title: $0.title, model: $0.model, effort: $0.effort) }
         let id = store.logDecision(entry)
         if context.flies, context.action == nil { flying.append(id) }
@@ -379,10 +373,10 @@ struct RouterAskBack: Identifiable, Equatable {
     func pick(_ id: UUID, target: String) -> Bool {
         guard let store, store.routerOn, let ask = askBacks.first(where: { $0.id == id }) else { return false }
         guard live(ask, store: store) else { return false }
-        // A part the Router's run wrote is never sent to the Router's own runs.
-        if ask.context.splitFrom != nil, RouterRun.Intent(rawValue: target) != nil { return false }
-        // "Choose folder…" picks with the folder you chose (`pick(_:folder:)`).
-        guard target != RouterAskBack.chooseFolder else { return false }
+        // The whole of a compound message goes to a session, never to the Router's own run that did its Fjord part.
+        if ask.whole, RouterRun.Intent(rawValue: target) != nil { return false }
+        // "Choose folder…" picks with the folder you chose (`pick(_:folder:)`); "Split…" is `split`.
+        guard target != RouterAskBack.chooseFolder, target != RouterAskBack.split else { return false }
         // An action's message goes only to a session, and only while Triage and the Router are both on.
         if ask.context.action != nil, RouterRun.Intent(rawValue: target) != nil || !store.toolsLinked { return false }
         // Offered when it was asked: a card the page has hidden since (or one addressed, a session archived) isn't sent to.
@@ -664,8 +658,6 @@ struct RouterAskBack: Identifiable, Equatable {
         // Wholly for the Router ("@router what needs me?"): asked of it, whatever reply is armed or target pinned (a session
         // would get nothing of it). An aside in a message for a session goes with that message, taken out.
         if !unattended, forRouter(text, pills: context.pills) { return .classify }
-        // A part the Router's run wrote is only ranked, in its original's scope: it asks, whatever its words say.
-        if context.asksFirst { return .classify }
         // "fork <session>…": of the session named, else of the one pinned ("fork this session"). Never while a card's reply
         // is armed: words for it are its answer ("branch" to "Should I create a branch or commit to main?").
         if !unattended, context.replyTo == nil,
@@ -920,16 +912,10 @@ struct RouterAskBack: Identifiable, Equatable {
               let sent = entry.delivered else { return }
         let wrong = entry.decision.targetID ?? "session:\(sent.session)"
         var context = RouterContext(notTo: wrong)
-        // A split half stays one: it keeps what it was split from and what it inherited, so it can't be split again.
-        if let from = entry.splitFrom {
-            context.splitFrom = from
-            context.asksFirst = true
-            context.projects = entry.inherited?.projects ?? []
-        }
         // What it tagged goes with it again; where it goes is asked anew, not taken from its pills. An action's message is
         // still one: only to a session, a new one called after its thing and on its model and effort, while Triage and the
         // Router are both on.
-        context.mentions = entry.splitFrom != nil ? entry.inherited?.mentions ?? [] : entry.mentions ?? []
+        context.mentions = entry.mentions ?? []
         context.action = entry.actionSource
         if context.action != nil, !store.toolsLinked { return }
         forgetLive()
@@ -1153,29 +1139,28 @@ struct RouterAskBack: Identifiable, Equatable {
             $0.reply = reply.isEmpty ? nil : reply
             $0.note = done.isEmpty ? nil : done
         }
-        // What the run left for sessions is never sent on its own: each part is a card asking where it should go.
-        // A part the Router's run wrote is never split again.
-        guard intent == .compound, job.context.splitFrom == nil else { return }
-        let parts = Self.distinct(effects.leftovers(answer))
-        func askPart(_ text: String) {
-            var context = RouterContext(projects: job.context.projects, notTo: job.context.notTo, splitFrom: job.id, asksFirst: true)
-            context.mentions = job.context.mentions
-            submit(text, context: context)
-        }
-        for text in parts.prefix(Self.maxParts) { askPart(text) }
-        // None is dropped: the rest are listed on one more card.
-        if parts.count > Self.maxParts { askPart(parts.dropFirst(Self.maxParts).joined(separator: "\n")) }
+        // The run did the Fjord part and its reply says the rest is for a session. The message itself is never rewritten
+        // or sent on its own: one card asks whether to send it whole to a session, or to split it yourself.
+        guard intent == .compound else { return }
+        var found = await classify(job, projects: job.context.projects)
+        try Task.checkCancellation()
+        found.sure = false
+        found.ranked = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) == nil }
+        found.card = found.card?.filter { RouterRun.Intent(rawValue: $0) == nil }
+        askBack(job, found, path: "compound", whole: true)
     }
-    /// Parts of one compound message that get a card each; the others are listed together on one more.
-    static let maxParts = 5
 
-    /// The parts trimmed, without the empty and the repeated ones (the same text exactly), in order.
-    static func distinct(_ parts: [String]) -> [String] {
-        var seen = Set<String>()
-        return parts.compactMap { part in
-            let text = part.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !text.isEmpty && seen.insert(text).inserted ? text : nil
+    /// "Split…" on a compound message's ask: nothing is sent; the composer opens with the message as written, to split.
+    func split(_ id: UUID) {
+        guard let store, let i = askBacks.firstIndex(where: { $0.id == id }), askBacks[i].whole else { return }
+        let ask = askBacks.remove(at: i)
+        forgetLive()
+        store.updateDecision(id) {
+            $0.reply = [$0.reply, "Split: the message is back in the composer."].compactMap { $0 }.joined(separator: " ")
+            $0.outcome = .done
         }
+        splitRequest = SplitRequest(id: id, text: ask.message)
+        follow(id)
     }
 
     /// Acts on a target: a card or session gets the message, a project a new session, an intent a run.
@@ -1228,19 +1213,12 @@ struct RouterAskBack: Identifiable, Equatable {
             liveCache[Self.liveKey(job.text, narrowed)] = nil
         }
         Self.keep(&found, world: world, unattended: unattended, store: store)
-        // A part the Router's run wrote is never sent on a guess, and never to its own runs: you pick, among the sessions
-        // and projects in its original's scope.
-        if job.context.asksFirst {
-            found.sure = false
-            found.ranked = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) == nil }
-            found.card = found.card?.filter { RouterRun.Intent(rawValue: $0) == nil }
-        }
         // Where your own words send it ("start a session in lookout …", "tell CI to …"), resolved here and not by Jev, is
         // where it goes: his pick of another doesn't send it elsewhere ("tell CI to update the docs" isn't for Docs). Not
         // where you waved it off, nor when it is gone.
         // The sessions you tagged (more than one: one alone was sent to, `plan`): only they, their cards and the Router's own
         // runs are gone to; when Jev's pick isn't among them, you pick among them. Not for a message wholly for the Router.
-        let scope = !job.context.asksFirst && Self.forRouter(job.text, pills: job.context.pills) ? []
+        let scope = Self.forRouter(job.text, pills: job.context.pills) ? []
             : Set(job.context.sessions.filter { store.claudeSessions[$0].map { !$0.isArchived } == true })
         let inScope = { (target: String) in
             scope.isEmpty || RouterRun.Intent(rawValue: target) != nil || Self.session(of: target, store: store).map(scope.contains) == true
@@ -1256,8 +1234,7 @@ struct RouterAskBack: Identifiable, Equatable {
         let unbounded = unattended && world == nil && job.context.projects.isEmpty && scope.isEmpty
         if unbounded { found.sure = false }
         let targets = job.tools.targets(store, projects: narrowed.isEmpty ? nil : Set(narrowed))
-        // What the Router's run wrote names no destination of its own: the exemptions for your typed words don't apply to it.
-        let named = unbounded || job.context.asksFirst || (!unattended && Self.forRouter(job.text, pills: job.context.pills))
+        let named = unbounded || (!unattended && Self.forRouter(job.text, pills: job.context.pills))
             ? nil : RouterTools.destination(job.text, targets, store: store, pills: job.context.pills)
         if let named, named != found.top?.target, named != job.context.notTo, inScope(named), inWorld(named),
            eligible(named, store: store) {
@@ -1266,7 +1243,7 @@ struct RouterAskBack: Identifiable, Equatable {
             return try await route(job, to: named)
         }
         // Wholly for the Router: one of its own runs, never a session or a project; you pick when Jev's pick isn't one.
-        if !unattended, !job.context.asksFirst, Self.forRouter(job.text, pills: job.context.pills) {
+        if !unattended, Self.forRouter(job.text, pills: job.context.pills) {
             let intents = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) != nil }
             if intents.first?.target != found.top?.target { found.sure = false }
             found.ranked = intents.isEmpty ? [Scored(target: "question", p: 0), Scored(target: "change_fjord", p: 0)] : intents
@@ -1418,25 +1395,23 @@ struct RouterAskBack: Identifiable, Equatable {
     /// `suggestion`: what a pick corrects, when it isn't Jev's top (a wrong send asked again); `path` for the trace likewise.
     /// `note`: why it asks, when it isn't Jev's doubt; `chooseFolder`: "Choose folder…" is offered last.
     private func askBack(_ job: Job, _ ranked: Classification, suggestion: String? = nil, path: String? = nil, note: String? = nil,
-                         chooseFolder: Bool = false) {
+                         chooseFolder: Bool = false, whole: Bool = false) {
         guard let store else { return }
-        // A part the Router's run wrote is never offered the Router's own runs, whichever path asks for it.
-        var found = ranked
-        if job.context.splitFrom != nil {
-            found.ranked = found.ranked.filter { RouterRun.Intent(rawValue: $0.target) == nil }
-            found.card = found.card?.filter { RouterRun.Intent(rawValue: $0) == nil }
-        }
+        let found = ranked
         var options: [RouterAskBack.Option] = []
         var seen = Set<String>()
         // Four: on real moments the fourth holds the answer 3–10% more often (evals/router/explore/selective.py).
-        let room = chooseFolder ? 3 : 4
+        let room = chooseFolder || whole ? 3 : 4
         for target in (found.card ?? []) + found.ranked.map(\.target) where target != "unclear" && options.count < room {
-            guard let option = option(target, store: store, tools: job.tools), seen.insert(option.id).inserted else { continue }
+            guard var option = option(target, store: store, tools: job.tools), seen.insert(option.id).inserted else { continue }
+            if whole { option.title = "Send the whole message to " + option.title }
             options.append(option)
         }
         if chooseFolder, let choose = option(RouterAskBack.chooseFolder, store: store) { options.append(choose) }
-        let ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
+        if whole, let split = option(RouterAskBack.split, store: store) { options.append(split) }
+        var ask = RouterAskBack(id: job.id, message: job.text, context: job.context, options: options,
                                 suggestion: suggestion ?? found.top?.target, at: Date(), note: note)
+        ask.whole = whole
         var inputs = found.trace
         inputs?.card = options.map(\.target)
         trace(job, path: path ?? (found.assisted ? "jev" : "words"), action: "ask", target: found.top?.target, inputs: inputs,
@@ -1468,6 +1443,7 @@ struct RouterAskBack: Identifiable, Equatable {
         }
         switch target {
         case RouterAskBack.chooseFolder: return .init(target: target, title: "Choose folder…", detail: "a new session there")
+        case RouterAskBack.split: return .init(target: target, title: "Split…", detail: "write each part yourself")
         case "change_fjord", "compound": return .init(target: target, title: "Change Fjord", detail: "Categories, groups, settings")
         case "question": return .init(target: target, title: "Answer from what Fjord knows", detail: "A question about now")
         default: return nil

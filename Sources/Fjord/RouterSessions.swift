@@ -222,9 +222,9 @@ struct SessionMenu: View {
         // A session found through search can be of a project muted already: muting it again would do nothing.
         let project = store.routerProjectGroupKey(sessionID: row.session.id, folder: row.session.folderKey)
         if store.isFolderMuted(project) {
-            Button("Unmute \(row.projectName)") { store.setFolderMuted(project, false) }
+            Button("Unmute \(row.projectName)") { store.act(.mute(project: project, name: row.projectName, muted: false)) }
         } else {
-            Button("Mute \(row.projectName)") { store.setFolderMuted(project, true) }
+            Button("Mute \(row.projectName)") { store.act(.mute(project: project, name: row.projectName, muted: true)) }
         }
     }
 }

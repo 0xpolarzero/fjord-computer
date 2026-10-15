@@ -19,25 +19,32 @@ struct RouterCapabilitiesTests {
         #expect(String(describing: RouterTools.gates["gate_setting"]).contains(shown))
     }
 
-    @Test func theRoutingTextNamesTheMeasuredActionsAndLeavesOutTheOnesThatFailed() {
+    /// The routing text keeps the card-action clauses it was measured with (the next stage decides about them); the run itself
+    /// has no tool for a card, a project or a session.
+    @Test func theRoutingTextKeepsTheMeasuredCardClausesWhileTheRunHasNoCardTools() {
         let text = RouterCapability.changeFjordCriteria
-        #expect(text.contains("archive a Router card") && text.contains("reopen a Router card"))
-        // Muting and stopping measured no better than without a phrase (research notes): their tools stay, their phrase doesn't.
+        #expect(text.contains("archive a Router card") && text.contains("reopen a Router card") && text.contains("as seen"))
         #expect(!text.contains("mute or unmute a project") && !text.contains("stop a running session"))
-        #expect(RouterCapability.all.filter { !$0.routed }.map(\.id) == ["mute-project", "stop-session"])
-        #expect(RouterCapability.toolNames(.changeFjord, triage: false).isSuperset(of: ["mute_project", "stop_session"]))
+        let tools = RouterCapability.toolNames(.changeFjord, triage: true)
+        for gone in ["mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session", "board"] { #expect(!tools.contains(gone), "\(gone)") }
+        let specs = Set(RouterTools.specs.compactMap { $0["name"] as? String })
+        for gone in ["mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session"] { #expect(!specs.contains(gone), "\(gone)") }
+        for intent in RouterRun.Intent.allCases {
+            let role = RouterRun.role(intent)
+            for gone in ["mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session", "canMarkSeen"] { #expect(!role.contains(gone), "\(gone)") }
+        }
     }
 
     @Test func theRolesAreMadeFromTheCapabilities() {
         for triage in [true, false] {
             let change = RouterRun.role(.changeFjord, triage: triage)
             for capability in RouterCapability.available(.changeFjord, triage: triage) {
-                #expect(capability.scope.map(change.contains) == true, "\(capability.id) is in the change role")
+                #expect(capability.scope.map(change.contains) ?? true, "\(capability.id) is in the change role")
                 #expect(capability.guidance.map(change.contains) ?? true)
             }
             #expect(change.contains("Triage's inbox categories") == triage)
             let compound = RouterRun.role(.compound, triage: triage)
-            #expect(RouterCapability.available(.compound, triage: triage).allSatisfy { $0.scope.map(compound.contains) == true })
+            #expect(RouterCapability.available(.compound, triage: triage).allSatisfy { $0.scope.map(compound.contains) ?? true })
             let question = RouterRun.role(.question, triage: triage)
             #expect(question.contains("cards, working sessions, the Brief, settings") && question.contains("the inbox, categories") == triage)
         }
@@ -47,7 +54,7 @@ struct RouterCapabilitiesTests {
     @Test func toolSetsAreTheCapabilitiesTools() {
         let readNames = Set(FjordTools.tools.filter(\.reads).map(\.name))
         for triage in [true, false] {
-            let all = FjordTools.names.union(["board"]).subtracting(triage ? [] : FjordTools.triageNames)
+            let all = FjordTools.names.subtracting(triage ? [] : FjordTools.triageNames)
             let reads = readNames.union(["board"]).subtracting(triage ? [] : FjordTools.triageNames)
             #expect(RouterRun.toolNames(.changeFjord, triage: triage) == all)
             #expect(RouterRun.toolNames(.compound, triage: triage) == all)
@@ -70,7 +77,7 @@ struct RouterCapabilitiesTests {
     @Test func roleNamesWhatTheRouterCanDo() {
         for intent in RouterRun.Intent.allCases {
             let on = RouterRun.role(intent, triage: true), off = RouterRun.role(intent, triage: false)
-            #expect(on.contains("`mark_seen`") && off.contains("`mark_seen`"))
+            #expect(on.contains("The Brief is the short written summary") && off.contains("The Brief is the short written summary"))
             #expect(on.contains("`mark_entries`") && !off.contains("`mark_entries`"))
         }
     }

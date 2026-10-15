@@ -979,9 +979,9 @@ import UserNotifications
         let after = store.routerPage
         #expect(!after.needs.contains { $0.id == card.id })
         #expect(after.history.contains { $0.id == card.id })
-        // The card, and the decision it logged.
+        // The card, and the applied change it recorded (with Revert).
         #expect(after.history.count == before.history.count + 2)
-        #expect(store.router.decisions.last?.trigger == .you("Archived"))
+        #expect(store.router.changes.last.map { $0.title.hasPrefix("Archive") && !$0.isPending } == true)
         // Its line sits at the time it was addressed, after the older entries.
         #expect(after.history.last { $0.id == card.id }?.date == store.router.cards.first { $0.id == card.id }?.addressedAt)
         model.reopen(card.id, store: store)

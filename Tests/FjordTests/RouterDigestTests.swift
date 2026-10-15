@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Fjord
 
-/// The Brief: its markup and diff, the writer's events, checks and recording, its persistence and the `mark_seen` tool.
+/// The Brief: its markup and diff, the writer's events, checks and recording, and its persistence.
 @MainActor
 @Suite(.serialized) struct RouterDigestTests {
     private typealias Writer = RouterDigestWriter
@@ -1034,33 +1034,5 @@ import Testing
         store.router.cards = [c]
         let session = Writer.Board.make(store).projects.flatMap(\.sessions).first { $0.id == "a" }
         #expect(session?.asks == ["Two?"])
-    }
-
-    // MARK: mark_seen
-
-    @Test func markSeenAddressesTheCardsWorthALookByIdOrTitle() async throws {
-        let store = InboxFixture.store([])
-        store.router.enabled = true
-        store.agents.enabled = true
-        store.router.cards = [card("a#1", title: "Fix notifications"), card("b#1", title: "Fix badges"), card("c#1", kind: .asks)]
-        let t = RouterTools(store: store)
-        t.beginTurn("I've seen those")
-        #expect(store.routerZones.notes.map(\.id).sorted() == ["a#1", "b#1"])
-        // Ambiguous words match two cards: nothing marked.
-        let both = await t.call("mark_seen", ["cards": ["fix"]])
-        #expect(both?.isError == true && both?.text.contains("more than one") == true)
-        #expect(store.router.cards.allSatisfy { $0.isOpen })
-        let byId = await t.call("mark_seen", ["cards": ["a#1"]])
-        #expect(byId?.isError == false)
-        #expect(store.router.cards.first { $0.id == "a#1" }?.isOpen == false)
-        #expect(store.router.cards.first { $0.id == "a#1" }?.addressedBy == .you)
-        // One that needs you isn't marked.
-        #expect(await t.call("mark_seen", ["cards": ["c#1"]])?.isError == true)
-        #expect(store.router.cards.first { $0.id == "c#1" }?.isOpen == true)
-        // By words of the title; the rest reported.
-        let words = await t.call("mark_seen", ["cards": ["badges", "zzz"]])
-        #expect(words?.isError == false && words?.text.contains("Not found") == true)
-        #expect(store.router.cards.first { $0.id == "b#1" }?.isOpen == false)
-        #expect(await t.call("mark_seen", ["cards": [String]()])?.isError == true)
     }
 }

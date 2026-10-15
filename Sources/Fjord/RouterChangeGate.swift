@@ -67,8 +67,8 @@ enum FjordGate {
         case .marks(_, let changes):
             if changes.count > manyMarks { return "It marks \(changes.count) things at once" }
             return said.contains(where: { word in markWords.contains { word.hasPrefix($0) } }) ? nil : "Your message didn't ask to mark anything"
-        case .cardAction(let action):
-            return action.waitingReason
+        case .cardAction:
+            return nil
         }
     }
 
@@ -210,14 +210,8 @@ extension Store {
     /// (not waiting, or no longer kept).
     @discardableResult
     func applyFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
-        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending,
-              router.changes[i].applying == nil else { return nil }
+        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
         var change = router.changes[i]
-        // A stop tells the session's plugin, which takes a moment: it is applied on its own, and the card follows.
-        if case .cardAction(.stop) = change.patch {
-            Task { @MainActor [weak self] in await self?.applyStopChange(id) }
-            return change
-        }
         // What its Details showed of the groups it uses is what it applies with: changed since, it waits again, saying how,
         // and its Details show them as they are now.
         if case .category(_, _, let after?) = change.patch {
@@ -248,8 +242,7 @@ extension Store {
     /// Lets a waiting change go: nothing of it was applied, and nothing is.
     @discardableResult
     func discardFjordChange(_ id: UUID, now: Date = Date()) -> FjordChange? {
-        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending,
-              router.changes[i].applying == nil else { return nil }
+        guard let i = router.changes.firstIndex(where: { $0.id == id }), router.changes[i].isPending else { return nil }
         var change = router.changes[i]
         change.revertedAt = now
         change.revertNote = "Discarded"

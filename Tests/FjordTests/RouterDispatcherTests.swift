@@ -1865,35 +1865,22 @@ import Testing
         .choice(.init(choice: label, confidence: 0.9, probabilities: [label: 0.9]))
     }
 
-    @Test func aWordOfApprovalApprovesAHeldPlanWithoutAskingJev() async {
+    @Test func noWordApprovesAHeldPlanOnItsOwnJevReadsEveryMessage() async {
         let (s, d, f) = setup()
         holdForm(s, plan: "1. Do it")
         var asked = 0
-        d.asker = { _, _ in asked += 1; return [:] }
-        for text in ["Go ahead!", "LGTM", "ship it", "approved."] {
+        d.asker = { _, _ in asked += 1; return ["approves": .noul(0.95)] }
+        for text in ["Go ahead!", "LGTM", "approved."] {
             let id = d.submit(text, context: RouterContext(replyTo: "local_a#w1"))
             await finish(d, f, id)
         }
-        #expect(f.planned.map(\.decision.approve) == [true, true, true, true] && asked == 0)
-        #expect(f.sent.isEmpty && f.answered.isEmpty && f.prepared.isEmpty)
-    }
-
-    @Test func onlyAnExplicitStatementOfApprovalApprovesByWord() async {
-        for yes in ["approve", "Approve.", "go ahead!", "  LGTM \n", "Looks good!!", "ship  it", "yes."] {
-            #expect(RouterDispatcher.approvesByWord(yes), "\(yes)")
-        }
-        for no in ["approve?", "go ahead?", "\"approve\"", "'yes'", "yes, but not the second step", "yes - after tests", "no, approve",
-                   "don't approve", "approve it...", "yes\nand delete the branch", "(approve)", "yes?!", "", "!"] {
-            #expect(!RouterDispatcher.approvesByWord(no), "\(no)")
-        }
-        // A question goes to Jev, who finds it isn't approval.
-        let (s, d, f) = setup()
-        holdForm(s, plan: "1. Do it")
-        var asked = 0
+        #expect(f.planned.map(\.decision.approve) == [true, true, true] && asked == 3)
+        // Jev down or unsure: sent back with the message, never approved by the word alone.
         d.asker = { _, _ in asked += 1; return ["approves": .noul(0.1)] }
         let id = d.submit("approve?", context: RouterContext(replyTo: "local_a#w1"))
         await finish(d, f, id)
-        #expect(asked == 1 && f.planned.map(\.decision) == [.init(approve: false, feedback: "approve?")])
+        #expect(asked == 4 && f.planned.last?.decision == .init(approve: false, feedback: "approve?"))
+        #expect(f.sent.isEmpty && f.answered.isEmpty && f.prepared.isEmpty)
     }
 
     @Test func aMessageJevFindsApprovingApprovesAndAnyOtherSendsTheMessageBack() async {
@@ -1967,114 +1954,123 @@ import Testing
         #expect(f.answered.count == 1)
     }
 
-    /// The ask-back card of the part of a compound message, once the run is done.
-    private func partAsk(_ s: Store, _ d: RouterDispatcher, _ f: Fakes, of id: UUID?, _ text: String? = nil) async -> RouterAskBack? {
-        await waitUntil { d.askBacks.contains { ask in
-            s.router.decisions.first { $0.id == ask.id }?.splitFrom == id && (text == nil || ask.message == text)
-        } }
-        return d.askBacks.first { ask in
-            s.router.decisions.first { $0.id == ask.id }?.splitFrom == id && (text == nil || ask.message == text)
-        }
+    /// The compound message's ask, once its run is done.
+    private func wholeAsk(_ d: RouterDispatcher, _ id: UUID?) async -> RouterAskBack? {
+        await waitUntil { d.askBacks.contains { $0.id == id } }
+        return d.askBacks.first { $0.id == id }
     }
 
-    @Test func aLeftoverPartAsksWhereItGoesAndNothingIsSent() async {
+    @Test func aCompoundMessageIsRunForItsFjordPartThenOneCardAsksToSendTheWholeOrSplit() async {
         let (s, d, f) = setup()
-        compound(f, ["tell CI to rerun the flaky job"])
+        compound(f)
         f.ranked = [.init(target: "compound", p: 0.9), .init(target: "change_fjord", p: 0.05), .init(target: "session:local_b", p: 0.03),
                     .init(target: "session:local_a", p: 0.02)]
-        let id = d.submit("update the category and tell CI to rerun the flaky job")
+        let text = "update the category and tell CI to rerun the flaky job"
+        let id = d.submit(text)
         await finish(d, f, id)
-        let ask = await partAsk(s, d, f, of: id)
-        #expect(ask?.message == "tell CI to rerun the flaky job")
-        #expect(ask?.options.map(\.target) == ["session:local_b", "session:local_a"], "ranked as any message, with no intent of the Router")
-        #expect(ask?.suggestion == "session:local_b")
-        #expect(f.ranks == 2, "the part is ranked like any message")
+        let ask = await wholeAsk(d, id)
+        #expect(ask?.whole == true && ask?.message == text && d.askBacks.count == 1)
+        #expect(ask?.options.map(\.target) == ["session:local_b", "session:local_a", RouterAskBack.split], "no run of the Router is offered")
+        #expect(ask?.options.dropLast().allSatisfy { $0.title.hasPrefix("Send the whole message to ") } == true)
+        #expect(ask?.options.last?.title == "Split…")
+        #expect(s.router.decisions.first { $0.id == id }?.reply != nil, "the run's reply stays")
         try? await Task.sleep(for: .milliseconds(100))
         #expect(f.sent.isEmpty && f.prepared.isEmpty && f.started.isEmpty && f.runs.count == 1, "nothing is sent until you pick")
-        let half = s.router.decisions.first { $0.splitFrom == id }
-        #expect(half?.trigger == .you("tell CI to rerun the flaky job") && half?.generated == nil)
+        #expect(!s.router.decisions.contains { $0.id != id && $0.trigger == .you(text) } && s.router.decisions.filter { $0.splitFrom != nil }.isEmpty)
     }
 
-    @Test func pickingAPartSendsItAsAMessageOfYoursLinkedToItsOriginal() async {
+    @Test func pickingASessionSendsTheMessageWholeAsYouWroteIt() async {
         let (s, d, f) = setup()
-        compound(f, ["tell CI to rerun the flaky job"])
+        compound(f)
         f.ranked = [.init(target: "compound", p: 0.9), .init(target: "session:local_b", p: 0.06), .init(target: "session:local_a", p: 0.04)]
-        let id = d.submit("update the category and tell CI to rerun the flaky job")
+        let text = "update the category and tell CI to rerun the flaky job"
+        let id = d.submit(text)
         await finish(d, f, id)
-        guard let ask = await partAsk(s, d, f, of: id) else {
+        guard await wholeAsk(d, id) != nil else {
             Issue.record("no ask")
             return
         }
-        #expect(d.pick(ask.id, target: "session:local_a"))
+        #expect(d.pick(id!, target: "session:local_a"))
         await waitUntil { f.sent.count == 1 }
         #expect(f.prepared == ["local_a"])
-        let half = s.router.decisions.first { $0.id == ask.id }
-        #expect(half?.splitFrom == id && half?.trigger == .you("tell CI to rerun the flaky job") && half?.generated == nil)
-        #expect(half?.decision.targetID == "session:local_a")
-        // The Brief counts it as a message of yours, with where it went.
-        #expect(RouterDigestWriter.events(from: RouterState(), to: {
-            var r = RouterState()
-            var sent = half!
-            sent.links.sessions = ["local_a"]
-            r.decisions = [sent]
-            return r
-        }()) == [.you("tell CI to rerun the flaky job", id: ask.id.uuidString, sessions: ["local_a"])])
+        #expect(s.router.decisions.first { $0.id == id }?.trigger == .you(text))
+        #expect(s.router.decisions.first { $0.id == id }?.decision.targetID == "session:local_a")
     }
 
-    @Test func aFailedJevStillAsksForEveryPartWhateverTheyNameOrAddress() async {
+    @Test func theRunOfTheRouterIsNeverAPickOfTheWholeMessage() async {
+        let (_, d, f) = setup()
+        compound(f)
+        let id = d.submit("update the category and tell CI to rerun")
+        await finish(d, f, id)
+        _ = await wholeAsk(d, id)
+        #expect(!d.pick(id!, target: "compound") && !d.pick(id!, target: "change_fjord") && !d.pick(id!, target: RouterAskBack.split))
+        #expect(d.askBacks.contains { $0.id == id })
+    }
+
+    @Test func splitGivesTheMessageBackToTheComposerAndSendsNothing() async {
         let (s, d, f) = setup()
-        s.claudeSessions["local_ci"] = ClaudeSession(id: "local_ci", title: "CI", folder: "/code/ci", lastActivity: Date(), running: true)
-        compound(f, ["tell CI to rerun the flaky job", "(@router change the theme to dark)"])
+        compound(f)
+        let text = "update the category and tell CI to rerun"
+        let id = d.submit(text)
+        await finish(d, f, id)
+        _ = await wholeAsk(d, id)
+        d.split(id!)
+        #expect(d.splitRequest == .init(id: id!, text: text) && !d.askBacks.contains { $0.id == id })
+        let entry = s.router.decisions.first { $0.id == id }
+        #expect(entry?.outcome == .done && entry?.reply?.contains("Split") == true)
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(f.sent.isEmpty && f.prepared.isEmpty && f.started.isEmpty)
+        // Only a compound message's ask splits.
+        f.ranked = [.init(target: "unclear", p: 1)]
+        let plain = d.submit("something unclear")
+        await finish(d, f, plain)
+        d.splitRequest = nil
+        d.split(plain!)
+        #expect(d.splitRequest == nil)
+    }
+
+    @Test func aFailedJevStillAsksOnACompoundMessage() async {
+        let (_, d, f) = setup()
+        compound(f)
         f.whileRunning = { _ in f.rankError = RouterTools.Failure("Jev is down") }
         let id = d.submit("update the category, rerun CI, and the theme")
         await finish(d, f, id)
-        let ci = await partAsk(s, d, f, of: id, "tell CI to rerun the flaky job")
-        let router = await partAsk(s, d, f, of: id, "(@router change the theme to dark)")
-        #expect(ci != nil && router != nil)
-        for ask in [ci, router].compactMap({ $0 }) {
-            #expect(ask.options.allSatisfy { RouterRun.Intent(rawValue: $0.target) == nil })
-        }
+        let ask = await wholeAsk(d, id)
+        #expect(ask != nil && ask?.options.allSatisfy { RouterRun.Intent(rawValue: $0.target) == nil } == true)
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(f.sent.isEmpty && f.prepared.isEmpty && f.started.isEmpty, "named or not, nothing goes without a pick")
-        #expect(f.runs.count == 1, "no run of the Router for a part")
+        #expect(f.sent.isEmpty && f.prepared.isEmpty && f.started.isEmpty && f.runs.count == 1)
     }
 
-    @Test func aParsedCompoundAnswerReachesTheDispatcher() async throws {
+    @Test func theWholeMessageIsRankedUnderTheProjectsItTagged() async {
+        let (_, d, f) = setup()
+        compound(f)
+        let id = d.submit("update the category and tell CI to rerun", context: RouterContext(projects: ["/code/docs"], notTo: "session:local_x"))
+        await finish(d, f, id)
+        let ask = await wholeAsk(d, id)
+        #expect(ask?.context.projects == ["/code/docs"] && ask?.context.notTo == "session:local_x")
+        #expect(f.rankProjects.last == ["/code/docs"])
+    }
+
+    @Test func stoppingWhileTheRunDrainsRecordsNothingAndAsksNothing() async {
         let (s, d, f) = setup()
-        let out = OneShot.Output(stdout: try JSONSerialization.data(withJSONObject: ["is_error": false, "result": "{}",
-            "structured_output": ["reply": "Done.", "done": "x", "leftover": ["tell the CI session to rerun", "  "]]]), stderr: Data(), status: 0)
-        f.answer = try RouterRun.parse(out)
-        f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
+        compound(f)
+        f.whileRunning = { tools in tools.endTurn() }
         let id = d.submit("update the category and tell CI to rerun")
         await finish(d, f, id)
-        await waitUntil { s.router.decisions.contains { $0.splitFrom == id } }
-        #expect(s.router.decisions.filter { $0.splitFrom == id }.map(\.trigger) == [.you("tell the CI session to rerun")])
-        // The stand-ins outlive the part's ranking.
-        await waitUntil { d.askBacks.count == 1 }
+        #expect(d.askBacks.isEmpty)
+        #expect(s.router.decisions.first { $0.id == id }?.reply == nil)
+        #expect(f.prepared.isEmpty && f.sent.isEmpty)
     }
 
-    @Test func aLeftoverFromAQuestionOrChangeRunIsIgnored() async {
+    @Test func aQuestionOrChangeRunAsksNothing() async {
         for target in ["question", "change_fjord"] {
-            let (s, d, f) = setup()
+            let (_, d, f) = setup()
             f.ranked = [.init(target: target, p: 0.9), .init(target: "unclear", p: 0.1)]
-            f.answer.leftover = ["tell CI to rerun"]
             let id = d.submit("something")
             await finish(d, f, id)
-            #expect(!s.router.decisions.contains { $0.splitFrom == id })
+            try? await Task.sleep(for: .milliseconds(100))
+            #expect(d.askBacks.isEmpty)
         }
-    }
-
-    @Test func aSplitHalfDoesNotSplitAgain() async {
-        let (s, d, f) = setup()
-        f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
-        f.answer.leftover = ["and also this"]
-        let id = d.submit("do two things")
-        await finish(d, f, id)
-        await waitUntil { s.router.decisions.contains { $0.splitFrom == id } }
-        let ask = await partAsk(s, d, f, of: id)
-        #expect(ask?.options.allSatisfy { RouterRun.Intent(rawValue: $0.target) == nil } == true, "a part can't become a Router run")
-        try? await Task.sleep(for: .milliseconds(100))
-        #expect(s.router.decisions.filter { $0.splitFrom != nil }.count == 1)
     }
 
     @Test func aPickWhoseDecisionIsGoneRemovesTheCardAndSendsNothing() async {
@@ -2093,20 +2089,7 @@ import Testing
         #expect(f.sent.isEmpty && f.prepared.isEmpty && f.started.isEmpty)
     }
 
-    @Test func aPartIsNeverPickedIntoARunOfTheRouter() async {
-        let (s, d, f) = setup()
-        compound(f, ["tell CI to rerun the flaky job"])
-        let id = d.submit("update the category and tell CI to rerun the flaky job")
-        await finish(d, f, id)
-        guard let ask = await partAsk(s, d, f, of: id) else {
-            Issue.record("no ask")
-            return
-        }
-        #expect(!d.pick(ask.id, target: "compound") && !d.pick(ask.id, target: "change_fjord"))
-        #expect(d.askBacks.contains { $0.id == ask.id } && f.runs.count == 1)
-    }
-
-    // MARK: Forms and plans read by Jev, and the parts of a compound message
+    // MARK: Forms and plans read by Jev
 
     private func formB() -> PendingForm {
         PendingForm(id: "g", cliSessionID: "cli-a", transcriptPath: "", questions: [db()], createdAt: Date(), pid: 1, toolUseID: "call-2")
@@ -2243,67 +2226,8 @@ import Testing
         #expect(f.answered.map(\.answers) == [["Which editor?": "Vim, Zed"]])
     }
 
-    private func compound(_ f: Fakes, _ leftover: [String]) {
+    private func compound(_ f: Fakes) {
         f.ranked = [.init(target: "compound", p: 0.9), .init(target: "unclear", p: 0.1)]
-        f.answer.leftover = leftover
-    }
-
-    @Test func aPartIsRankedInTheScopeOfItsOriginalAndAsksEvenWhereTypedWordsWouldSend() async {
-        let (s, d, f) = setup()
-        s.claudeSessions["local_ci"] = ClaudeSession(id: "local_ci", title: "CI", folder: "/code/ci", lastActivity: Date(), running: true)
-        // Typed, the name sends it there...
-        f.ranked = [.init(target: "session:local_b", p: 0.9), .init(target: "unclear", p: 0.1)]
-        let typed = d.submit("tell CI to rerun the flaky job")
-        await finish(d, f, typed)
-        #expect(f.prepared == ["local_ci"])
-        // ...written by the run, it only asks, in the original's scope.
-        f.prepared = []
-        compound(f, ["tell CI to rerun the flaky job"])
-        let id = d.submit("update the category and tell CI to rerun", context: RouterContext(projects: ["/code/docs"], notTo: "session:local_x"))
-        await finish(d, f, id)
-        let ask = await partAsk(s, d, f, of: id)
-        let half = s.router.decisions.first { $0.id == ask?.id }
-        #expect(half?.inherited?.projects == ["/code/docs"] && half?.generated == nil)
-        #expect(ask?.context.projects == ["/code/docs"] && ask?.context.notTo == "session:local_x")
-        #expect(f.rankProjects.last == ["/code/docs"], "ranked under the original's project scope")
-        try? await Task.sleep(for: .milliseconds(100))
-        #expect(f.prepared.isEmpty)
-    }
-
-    @Test func stoppingWhileTheRunDrainsRecordsNothingAndRoutesNoLeftover() async {
-        let (s, d, f) = setup()
-        compound(f, ["tell CI to rerun the flaky job"])
-        f.whileRunning = { tools in tools.endTurn() }
-        let id = d.submit("update the category and tell CI to rerun")
-        await finish(d, f, id)
-        #expect(!s.router.decisions.contains { $0.splitFrom == id })
-        #expect(s.router.decisions.first { $0.id == id }?.reply == nil)
-        #expect(f.prepared.isEmpty && f.sent.isEmpty)
-    }
-
-    @Test func onlyExactlyIdenticalLeftoversAreOneCard() async {
-        let (s, d, f) = setup()
-        compound(f, ["tell CI to rerun", "  Tell  CI to RERUN ", "tell CI to rerun\n", "tell CI to rerun  now"])
-        let id = d.submit("rerun it, rerun it, rerun it")
-        await finish(d, f, id)
-        await waitUntil { s.router.decisions.filter { $0.splitFrom == id }.count == 3 }
-        try? await Task.sleep(for: .milliseconds(100))
-        let parts = s.router.decisions.filter { $0.splitFrom == id }.map(\.trigger)
-        #expect(parts == [.you("tell CI to rerun"), .you("Tell  CI to RERUN"), .you("tell CI to rerun  now")], "bodies are unchanged")
-        #expect(RouterDispatcher.distinct(["a  b", "A B", " ", "c", "c\n"]) == ["a  b", "A B", "c"])
-    }
-
-    @Test func partsPastTheCapAreListedOnOneMoreCardNotDropped() async {
-        let (s, d, f) = setup()
-        compound(f, ["one thing", "two things", "three things", "four things", "five things", "six things", "seven things"])
-        let id = d.submit("do a lot")
-        await finish(d, f, id)
-        await waitUntil { s.router.decisions.filter { $0.splitFrom == id }.count == 6 }
-        try? await Task.sleep(for: .milliseconds(100))
-        let halves = s.router.decisions.filter { $0.splitFrom == id }
-        #expect(halves.count == 6 && halves.last?.trigger == .you("six things\nseven things"))
-        #expect(halves.allSatisfy { half in d.askBacks.contains { $0.id == half.id } }, "every one is asked, none is sent")
-        #expect(f.sent.isEmpty && f.prepared.isEmpty && RouterDispatcher.maxParts == 5)
     }
 
     @Test func aFailureIsInTheEntryAndNothingIsLeftPending() async {
@@ -2349,7 +2273,7 @@ import Testing
             working: [.init(title: "Docs", project: "docs", doing: "Editing README.md")],
             decisions: "2m ago · you: “ship” → sent to Docs", projects: ["api"], message: "what is going on")
         let text = context.text()
-        #expect(text.contains("- [needs you] [question] “Fix it” (lookout): Which database? (card c1, can't be marked seen)"))
+        #expect(text.contains("- [needs you] [question] “Fix it” (lookout): Which database? (card c1)"))
         #expect(text.contains("- “Docs” (docs): Editing README.md"))
         #expect(text.contains("The last decisions (oldest first):\n2m ago · you: “ship” → sent to Docs"))
         #expect(text.contains("Projects the user tagged: api"))
@@ -2404,14 +2328,14 @@ import Testing
             #expect(!read.contains(change), "a question can't \(change)")
         }
         let all = RouterRun.toolNames(.changeFjord, triage: true)
-        #expect(all == FjordTools.names.union(["board"]) && all.contains("set_setting") && all.contains("list_categories"))
+        #expect(all == FjordTools.names && all.contains("set_setting") && all.contains("list_categories"))
         #expect(RouterRun.toolNames(.compound, triage: true) == all)
         for intent in RouterRun.Intent.allCases {
             let served = RouterRun.specs(intent, triage: true).compactMap { $0["name"] as? String }
             #expect(Set(served) == RouterRun.toolNames(intent, triage: true), "\(intent) serves what it may call")
         }
         // With Triage off, none of its tools: only the settings (and the board, for a question).
-        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting", "mark_seen", "archive_cards", "reopen_card", "mute_project", "stop_session", "board"])
+        #expect(RouterRun.toolNames(.changeFjord, triage: false) == ["get_settings", "set_setting"])
         #expect(RouterRun.toolNames(.question, triage: false) == ["get_settings", "board"])
         // Nothing of the sessions: no way to send, start or answer from a run.
         for intent in RouterRun.Intent.allCases {
@@ -2432,7 +2356,7 @@ import Testing
         #expect((schema?["required"] as? [String])?.sorted() == ["done", "reply"])
         #expect(value(after: "--append-system-prompt") == RouterRun.role(.changeFjord))
         #expect(RouterRun.role(.question).contains("You change nothing"))
-        #expect(RouterRun.role(.compound).contains("return in `leftover`"))
+        #expect(RouterRun.role(.compound).contains("don't rewrite it") && !RouterRun.role(.compound).contains("leftover"))
     }
 
     @Test func theTypedResultIsReadFromStructuredOutputOrFromJsonText() throws {
@@ -2445,9 +2369,10 @@ import Testing
         #expect(text == RouterRun.Answer(reply: "ok", done: "x"))
         let plain = try RouterRun.parse(output(["is_error": false, "result": "All good"]))
         #expect(plain == RouterRun.Answer(reply: "All good", done: ""))
-        let halves = try RouterRun.parse(output(["is_error": false, "result": "{}", "structured_output": ["reply": "Done.", "done": "x", "leftover": ["tell CI to rerun"]]]))
-        #expect(halves.leftover == ["tell CI to rerun"] && typed.leftover.isEmpty && text.leftover.isEmpty)
-        #expect(RouterRun.schema.contains("\"leftover\"") && RouterRun.schema.contains("\"required\":[\"reply\",\"done\"]"))
+        // A run that still sends `leftover` is read without it: the user's words are never rewritten.
+        let extra = try RouterRun.parse(output(["is_error": false, "result": "{}", "structured_output": ["reply": "Done.", "done": "x", "leftover": ["tell CI to rerun"]]]))
+        #expect(extra == RouterRun.Answer(reply: "Done.", done: "x"))
+        #expect(!RouterRun.schema.contains("leftover") && RouterRun.schema.contains("\"required\":[\"reply\",\"done\"]"))
         #expect(throws: (any Error).self) { try RouterRun.parse(output(["is_error": true, "result": "overloaded"])) }
         #expect(throws: (any Error).self) { try RouterRun.parse(OneShot.Output(stdout: Data("nope".utf8), stderr: Data("boom\n".utf8), status: 1)) }
     }

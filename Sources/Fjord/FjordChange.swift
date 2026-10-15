@@ -35,9 +35,6 @@ struct FjordChange: Codable, Hashable, Identifiable {
     /// A waiting category change: the groups its rules name, as they were when it was made (or last refused). Its Details
     /// show them whole, and Apply refuses when they have changed since.
     var groups: [InboxGroup]?
-    /// A waiting stop whose abort is being written or awaited: what the card says meanwhile ("Stopping…"). Set, it can't be
-    /// discarded; the plugin's acknowledgement settles the change.
-    var applying: String?
 
     enum Patch: Codable, Hashable {
         /// `before` nil: made; `after` nil: deleted. `index`: where it was (or is).
@@ -46,7 +43,7 @@ struct FjordChange: Codable, Hashable, Identifiable {
         case order(before: [UUID], after: [UUID])
         case setting(key: String, before: SettingValue, after: SettingValue)
         case marks(state: String, [EntryChange])
-        /// An action on the Router page the Router proposed (archive, reopen, mute, stop): it waits for your Apply.
+        /// An action on the Router page (archive, reopen, mute), done at once and taken back by Revert.
         case cardAction(CardAction)
     }
 
@@ -426,7 +423,6 @@ extension Store {
                 marks[item.thing] = item.before
             }
         case .cardAction(let action):
-            guard action.isRevertible else { return nil }
             do { try revertCardAction(action) } catch {
                 change.revertNote = "Couldn't put it back: \(error.localizedDescription)"
                 router.changes[message] = change
@@ -495,7 +491,6 @@ extension FjordChange {
             guard let first = changes.first?.thing, let entry = store.entries.first(where: { $0.id == first }) else { return .categories }
             return .entry(thing: first, category: entry.categoryID, done: entry.isDone)
         case .cardAction(let action):
-            if case .stop(let session, _, _, _, _, _, _) = action { return .session(session) }
             return action.isMute ? .settings(section: SettingsView.routerID) : .router
         }
     }

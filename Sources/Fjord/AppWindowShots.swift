@@ -294,16 +294,13 @@ enum AppWindowShots {
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let d = store.router.decisions.first(where: { !$0.links.changes.isEmpty }) { model.expanded.insert(d.id.uuidString) }
         }),
-        // The Router's four card actions waiting for Apply, made by the tools themselves; then archive and stop applied.
-        Shot(name: "router-proposals", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
-            routerProposals(store, model: model, applied: false)
-        }, appearance: .aqua, standalone: proposalCards),
-        Shot(name: "router-proposals-applied", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
-            routerProposals(store, model: model, applied: true)
-        }, appearance: .aqua, standalone: proposalCards),
-        Shot(name: "router-proposals-dark", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
-            routerProposals(store, model: model, applied: false)
-        }, appearance: .darkAqua, standalone: proposalCards),
+        // The Router page's card actions (archive, reopen, mute), done at once with Revert on their history cards.
+        Shot(name: "router-actions", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
+            routerActions(store, model: model)
+        }, appearance: .aqua, standalone: actionCards),
+        Shot(name: "router-actions-dark", destination: { _ in .router }, size: CGSize(width: 820, height: 560), compose: { model, store in
+            routerActions(store, model: model)
+        }, appearance: .darkAqua, standalone: actionCards),
         Shot(name: "router-summary-history", destination: { _ in .router }, size: CGSize(width: 1280, height: 1000), compose: { model, store in
             store.router.cards = store.router.cards.map { var c = $0; if c.isOpen { c.addressedAt = Date(); c.addressedBy = .you }; return c }
             if let summary = store.router.summaries.last { model.expanded.insert(RouterPage.Entry.summary(summary).id) }
@@ -754,8 +751,8 @@ enum AppWindowShots {
         }
     }
 
-    /// The four card-action changes as the history's run details draw them (`ChangeCard`, one under the other).
-    private static func proposalCards(_ store: Store, _ model: RouterModel) -> AnyView {
+    /// The card-action changes as the history's run details draw them (`ChangeCard`, one under the other).
+    private static func actionCards(_ store: Store, _ model: RouterModel) -> AnyView {
         let changes = store.router.changes.filter { if case .cardAction = $0.patch { true } else { false } }
         return AnyView(VStack(alignment: .leading, spacing: 10) {
             ForEach(changes) { ChangeCard(change: $0, store: store) }
@@ -767,9 +764,8 @@ enum AppWindowShots {
         .background(CDS.Surface.s1))
     }
 
-    /// Four proposals as the Router's tools record them (archive a card, reopen an archived one, mute a project, stop a
-    /// running session's turn), waiting in one run's details; `applied` applies the archive and the stop.
-    private static func routerProposals(_ store: Store, model: RouterModel, applied: Bool) {
+    /// An archive, a reopen and a mute as the page's buttons do them: applied, in the history with Revert.
+    private static func routerActions(_ store: Store, model: RouterModel) {
         Demo.routerBusyDay(store)
         store.router.enabled = true
         // A card archived a few minutes ago, to reopen.
@@ -778,39 +774,16 @@ enum AppWindowShots {
             store.router.cards[i].addressedAt = Date().addingTimeInterval(-300)
             store.router.cards[i].addressedBy = .you
         }
-        // A message Fjord sent that started the running turn of a session.
-        let running = store.claudeSessions["local_demo-silo-ckpt"]
-        var sent = RouterDecision(at: Date().addingTimeInterval(-90), trigger: .you("run the checkpoint tests"), outcome: .done)
-        sent.delivered = .init(session: "local_demo-silo-ckpt", cli: "cli-ckpt", nonce: "shot-nonce", at: Date().addingTimeInterval(-60),
-                               turns: running?.completedTurns ?? 0, busy: false, abortable: true)
-        store.router.decisions.append(sent)
-        let tools = RouterTools(store: store)
-        tools.beginTurn("I'll do the zig test myself, reopen the release card, mute dotfiles and stop the checkpoint session")
-        let run = RouterDecision(at: Date(), trigger: .you(tools.turnText ?? ""), outcome: .done)
-        store.router.decisions.append(run)
-        tools.decision = run.id
-        var failures: [String] = []
-        func attempt(_ f: () throws -> String) { do { _ = try f() } catch { failures.append("\(error)") } }
-        attempt { try tools.archiveCards(store, ["cards": ["std.fs"]]) }
-        attempt { try tools.reopenCard(store, ["card": "Release v0.9"]) }
-        attempt { try tools.muteProject(store, ["project": "dotfiles", "muted": true]) }
-        attempt { try tools.stopSession(store, ["session": "Checkpoint restore"]) }
-        if !failures.isEmpty { print("router-proposals: refused:", failures) }
-        if applied {
-            for change in store.router.changes where change.isPending {
-                guard case .cardAction(let action) = change.patch else { continue }
-                switch action {
-                case .archive:
-                    store.applyFjordChange(change.id)
-                case .stop:
-                    // What `applyStopChange` leaves once the plugin acknowledged the abort.
-                    if let i = store.router.changes.firstIndex(where: { $0.id == change.id }) { store.router.changes[i].pending = nil }
-                    store.updateDecision(sent.id) { $0.delivered?.cancelled = .aborted; $0.add(.cancelled(.aborted)) }
-                default: break
-                }
-            }
+        if let card = store.shownRouterCards.first(where: { $0.title.contains("std.fs") }) {
+            store.act(.archive(card: card.id, title: card.title, project: store.routerProject(card).name))
         }
-        model.expanded.insert(run.id.uuidString)
+        if let card = store.router.cards.first(where: { $0.id == archived }) {
+            store.act(.reopen(card: card.id, title: card.title, project: store.routerProject(card).name))
+        }
+        if let project = store.routerProjects().first(where: { $0.name == "dotfiles" }) {
+            store.act(.mute(project: project.key, name: project.name, muted: true))
+        }
+        if let run = store.router.decisions.last(where: { !$0.links.changes.isEmpty }) { model.expanded.insert(run.id.uuidString) }
         // The list layout draws no page body in shots; the canvas layout's history panel shows the same history.
         model.layout = .canvas
         model.pane = .history
