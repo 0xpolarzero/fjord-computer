@@ -2,15 +2,15 @@
 
 This is the orchestration tracker, kept by the coordinating agent. The spec is this folder (README → 95 → 05 → 10–70 → 80). Every implementer reads [the implementer brief](#implementer-brief) first.
 
-## Status (2026-10-14, evening)
+## Status (2026-10-15)
 
-All planned engine and Fjord work is merged: Silo main is at f501d99e and Fjord main has it all. Live checks: macOS mostly pass (probes/live-macos-2.md); the end-to-end engine side passes (probes/e2e.md).
+All planned engine and Fjord work is merged. Silo main (3b08abb6) is pushed to GitHub and `scripts/silod.commit` pins it. Live checks pass: macOS (probes/live-final.md), the end-to-end engine and GUI (probes/e2e.md, e2e-gui.md), and Router "Runs on" in a real Claude Desktop SSH session (probes/e2e-router.md).
+
+Being fixed: Router cards overflow with long guest project labels; guest folders offered as Mac projects; guest delivery needs the Computers page opened once after launch.
 
 What's left needs the owner:
-1. A stable signing identity (`scripts/make-signing-cert.sh`), then the final macOS live run: secret substitution and revocation, the import with SecureToken, a handoff to a newer silod. This needs a template rebuild, because agent tools are now in setup.
-2. The end-to-end GUI rerun: the owner clicks Allow on the computer-use approval panel.
-3. GitHub sign-in over SSH (B-25): needs the owner's GitHub sign-in and a second Mac.
-4. Push Silo main to GitHub, once the above is done.
+1. B-17: a real `claude setup-token` passed as a secret, to prove bearer substitution for Triage.
+2. B-25: GitHub sign-in over SSH, which needs the owner's GitHub sign-in and a second Mac.
 
 ## Phases and tracks
 
