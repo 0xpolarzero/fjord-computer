@@ -285,7 +285,9 @@ import Testing
         let id = try #require(w.dispatcher.submit("update the category and tell the docs one to add a changelog entry"))
         await w.finish(id)
         #expect(w.fakes.runs.count == 1 && w.entry(id)?.fjordPartDone == true)
+        w.fakes.finished = []
         #expect(w.dispatcher.pick(id, target: "session:local_b"))
+        await w.finish(id)
         await waitUntil { w.fakes.sent.count == 1 && w.entry(id)?.delivered != nil }
         w.fakes.finished = []
         w.dispatcher.sendElsewhere(id)
