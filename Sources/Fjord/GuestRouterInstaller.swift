@@ -51,7 +51,7 @@ struct GuestRouterInstaller: Sendable {
         guard account.nodeExecutable.hasPrefix("/") else { throw Failure.invalidAccount }
         try await check(account.nodeExecutable, minimumNodeMajor: 18, computer: computer, cwd: account.home)
         let paths = try GuestRouterPaths(home: account.home)
-        let version = ClaudePlugin.version(app: "fjord-guest-1")
+        let version = ClaudePlugin.version(app: "fjord-guest-2")
         let previous = try? await client.filesRead(computer: computer, path: GuestRouterPaths.join(paths.root, "install-version"), offset: nil, length: nil)
         let alreadyInstalled = String(data: previous?.data ?? Data(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == version
 
@@ -62,8 +62,8 @@ struct GuestRouterInstaller: Sendable {
             "keyPath": paths.key, "presenceDir": paths.presence, "sessionsDir": paths.registry, "inboxDir": paths.inbox,
         ], options: [.sortedKeys, .withoutEscapingSlashes]) + Data("\n".utf8)
         let pluginFiles: [(String, Data, UInt16)] = [
-            (".claude-plugin/plugin.json", Data(ClaudePlugin.pluginJSON(version: version).utf8), 0o644),
-            (".claude-plugin/marketplace.json", Data(ClaudePlugin.marketplaceJSON.utf8), 0o644),
+            (".claude-plugin/plugin.json", Data(ClaudePlugin.pluginJSON(version: version, name: ClaudePlugin.guestName).utf8), 0o644),
+            (".claude-plugin/marketplace.json", Data(ClaudePlugin.guestMarketplaceJSON.utf8), 0o644),
             ("hooks/hooks.json", Data(ClaudePlugin.hooksJSON.utf8), 0o644),
             ("hooks/register.ts", Data(ClaudePlugin.register.utf8), 0o644),
             ("config.json", pluginConfig, 0o600),
@@ -76,22 +76,23 @@ struct GuestRouterInstaller: Sendable {
         try await write(Data(GuestRouterArtifacts.formModule.utf8), computer: computer, path: paths.formModule, mode: 0o644)
 
         if !alreadyInstalled {
+            try await removeLegacyInstall(account: account, computer: computer)
             let marketplace = try await client.exec(GuestExecRequest(computer: computer,
                 argv: [account.claudeExecutable, "plugin", "marketplace", "add", paths.plugin, "--scope", "user"],
                 cwd: account.home, timeoutSeconds: 120))
             try requireSuccess(marketplace, command: "claude plugin marketplace add")
             let plugin = try await client.exec(GuestExecRequest(computer: computer,
-                argv: [account.claudeExecutable, "plugin", "install", ClaudePlugin.id, "--scope", "user"],
+                argv: [account.claudeExecutable, "plugin", "install", ClaudePlugin.guestID, "--scope", "user"],
                 cwd: account.home, timeoutSeconds: 120))
             try requireSuccess(plugin, command: "claude plugin install")
         } else {
             let update = try await client.exec(GuestExecRequest(computer: computer,
-                argv: [account.claudeExecutable, "plugin", "update", ClaudePlugin.id, "--scope", "user"],
+                argv: [account.claudeExecutable, "plugin", "update", ClaudePlugin.guestID, "--scope", "user"],
                 cwd: account.home, timeoutSeconds: 120))
             // An install version file survives an uninstall. Reinstall if the CLI says update has no installed copy.
             if !update.succeeded {
                 let install = try await client.exec(GuestExecRequest(computer: computer,
-                    argv: [account.claudeExecutable, "plugin", "install", ClaudePlugin.id, "--scope", "user"],
+                    argv: [account.claudeExecutable, "plugin", "install", ClaudePlugin.guestID, "--scope", "user"],
                     cwd: account.home, timeoutSeconds: 120))
                 try requireSuccess(install, command: "claude plugin install")
             }
@@ -109,6 +110,16 @@ struct GuestRouterInstaller: Sendable {
             throw Failure.routerTurnedOff
         }
         return Installed(paths: paths, version: version, keyID: ClaudePlugin.keyID(of: key))
+    }
+
+    /// An earlier Fjord installed the guest plugin as `fjord@fjord`, which Claude Desktop's hookless copy of the Mac's
+    /// `fjord` plugin shadows. Best effort: either may be absent.
+    private func removeLegacyInstall(account: GuestAccount, computer: GuestReference) async throws {
+        for argv in [["plugin", "uninstall", ClaudePlugin.legacyGuestID, "--scope", "user"],
+                     ["plugin", "marketplace", "remove", ClaudePlugin.legacyGuestMarketplace]] {
+            _ = try? await client.exec(GuestExecRequest(computer: computer, argv: [account.claudeExecutable] + argv,
+                                                        cwd: account.home, timeoutSeconds: 120))
+        }
     }
 
     func disable(computer: GuestReference) async throws {

@@ -22,7 +22,16 @@ enum ClaudePlugin {
         return app + (app.contains("-") ? "." : "-") + "r" + short
     }
 
-    static func pluginJSON(version: String) -> String {
+    /// The guest's copy has a name of its own. Claude Desktop copies the Mac's local `fjord` plugin into an SSH session as
+    /// a `--plugin-dir` without its hooks, and a `--plugin-dir` plugin overrides an installed one of the same name: a guest
+    /// plugin called `fjord` would never run its module (live check, probes/guest-plugin.md).
+    static let guestName = "fjord-guest"
+    static let guestID = "fjord-guest@fjord-guest"
+    /// What the guest installer used to install (same name as the Mac's plugin); it is uninstalled when found.
+    static let legacyGuestID = "fjord@fjord"
+    static let legacyGuestMarketplace = "fjord"
+
+    static func pluginJSON(version: String, name: String = ClaudePlugin.name) -> String {
         let manifest: [String: Any] = ["name": name, "version": version, "description": description, "author": ["name": "Fjord"]]
         let data = (try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self) + "\n"
@@ -696,6 +705,10 @@ export const register: Register = (on) => {
 { "modules": ["./register.ts"] }
 
 """#
+
+    static var guestMarketplaceJSON: String {
+        marketplaceJSON.replacingOccurrences(of: #""name": "fjord""#, with: #""name": "\#(guestName)""#)
+    }
 
     static let marketplaceJSON = #"""
 {
