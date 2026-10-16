@@ -540,13 +540,14 @@ final class RouterModel {
     /// What the canvas keeps while the window lives: its camera and folds (RouterCanvas.swift).
     let canvas: RouterCanvasState
     /// What the Brief keeps (RouterDigest.swift).
-    let digest = RouterDigestState()
+    let digest: RouterDigestState
 
     init(defaults: UserDefaults? = nil) {
         self.defaults = defaults
         folded = RouterZone.folds(in: defaults)
         layout = defaults?.string(forKey: RouterLayout.key).flatMap(RouterLayout.init(rawValue:)) ?? .brief
         canvas = RouterCanvasState(defaults: defaults)
+        digest = RouterDigestState(defaults: defaults)
     }
     /// A fold of yours, or while a search is on, of the search's (`shownFolds`).
     func setFolded(_ zone: RouterZone, _ on: Bool) {

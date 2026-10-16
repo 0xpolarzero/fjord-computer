@@ -35,11 +35,12 @@ final class SidebarState {
     func toggle() { set(collapsed: !collapsed) }
 }
 
-/// View ▸ Collapse Sidebar, ⌘B.
+/// View ▸ Collapse Sidebar, ⌘B, and on the Router's Brief, View ▸ Hide History, ⌥⌘B (the history beside it).
 @MainActor
 final class SidebarMenu: NSObject, NSMenuItemValidation {
     static let shared = SidebarMenu()
     private let item = NSMenuItem(title: "Collapse Sidebar", action: #selector(toggle), keyEquivalent: "b")
+    private let history = NSMenuItem(title: "Show History", action: #selector(toggleHistory), keyEquivalent: "b")
 
     func makeItem() -> NSMenuItem {
         let top = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
@@ -47,15 +48,26 @@ final class SidebarMenu: NSObject, NSMenuItemValidation {
         item.target = self
         item.keyEquivalentModifierMask = [.command]
         menu.addItem(item)
+        history.target = self
+        history.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(history)
         top.submenu = menu
         return top
     }
 
     @objc private func toggle() { SidebarState.shared.toggle() }
 
+    @objc private func toggleHistory() { AppWindowController.active?.routerModel.digest.toggleHistory() }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let window = AppWindowController.active
+        let usable = window?.isOpen == true && window?.paletteIsOpen != true
+        if menuItem === history {
+            menuItem.title = window?.routerModel.digest.historyOpen == true ? "Hide History" : "Show History"
+            return usable && window?.navigator.selection == .router && window?.routerModel.layout == .brief
+        }
         menuItem.title = SidebarState.shared.collapsed ? "Expand Sidebar" : "Collapse Sidebar"
-        return AppWindowController.active?.isOpen == true && AppWindowController.active?.paletteIsOpen != true
+        return usable
     }
 }
 
