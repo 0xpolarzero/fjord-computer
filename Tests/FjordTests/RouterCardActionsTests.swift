@@ -161,6 +161,22 @@ struct RouterCardActionsTests {
         #expect(model.digestAction(store.shortcut(.discard), store: store) == nil)
     }
 
+    @Test func closingTheBriefsOpenCardTakesItsReplyUnlessItIsBeingWritten() {
+        let a = card("a#1", kind: .question, title: "Fix login redirect")
+        let store = world(cards: [a], sessions: [session("a", a.title)])
+        let model = RouterModel()
+        model.layout = .brief
+        model.digest.open = "lead-you#a"
+        model.select("a#1", store: store, reveal: false)
+        model.closeDigestCard(store: store)
+        #expect(model.digest.open == nil && model.replyTo == nil)
+        model.digest.open = "lead-you#a"
+        model.select("a#1", store: store, reveal: false)
+        model.draft = "yes, go"
+        model.closeDigestCard(store: store)
+        #expect(model.digest.open == nil && model.replyTo == "a#1")
+    }
+
     @Test func aChangeSavedAsAProposedStopIsDroppedOnReading() throws {
         let stop = """
         {"id":"\(UUID().uuidString)","date":0,"title":"Stop","patch":{"cardAction":{"_0":{"stop":{"session":"a","title":"t","project":"p","place":"x","since":0,"decision":"\(UUID().uuidString)","nonce":"n"}}}},"pending":"Stopping can't be undone"}

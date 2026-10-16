@@ -378,6 +378,17 @@ struct DigestHint: Hashable {
 }
 
 extension RouterModel {
+    /// The card opened under a paragraph closes, and the reply it armed goes with it, unless you have started writing it.
+    func closeDigestCard(store: Store) {
+        guard let session = RouterDigestState.session(digest.open) else { return }
+        digest.open = nil
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let reply = replyTo,
+           store.router.cards.first(where: { $0.id == reply })?.sessionID == session {
+            replyTo = nil
+            selection = nil
+        }
+    }
+
     /// The action `shortcut` is on the Brief's highlight under the pointer, if it is one there.
     func digestAction(_ shortcut: Shortcut, store: Store) -> DigestAction? {
         guard let session = digest.hoveredSession else { return nil }
@@ -599,13 +610,15 @@ private struct DigestParagraph<Title: View>: View {
                     }
                 }
             }
+            // A highlight's peek floats over the card opened under the text, not under it.
+            .zIndex(state.hovered?.hasPrefix(key + "#") == true ? 1 : 0)
             if let opened, let item = items[opened] {
                 HStack(alignment: .top, spacing: 8) {
                     CanvasNode(item: item, store: store, model: model, page: page)
-                        .frame(maxWidth: 560, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     VStack(spacing: 6) {
                         Button {
-                            withAnimation(Motion.spatial.resolved(reduce: false)) { state.open = nil }
+                            withAnimation(Motion.spatial.resolved(reduce: false)) { model.closeDigestCard(store: store) }
                         } label: {
                             Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(CDS.Text.muted)
                                 .frame(width: 22, height: 22)
@@ -887,7 +900,7 @@ private struct DigestSpan: View {
         let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
         Button {
             withAnimation(Motion.spatial.resolved(reduce: false)) {
-                state.open = open ? nil : id
+                if open { model.closeDigestCard(store: store) } else { state.open = id }
                 state.hovered = nil
             }
             if !open, let item {
