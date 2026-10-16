@@ -295,16 +295,43 @@ enum DigestMarkup {
     }
 }
 
-/// What the Brief keeps while the window lives: the highlight under the pointer and the card opened.
+/// What the Brief keeps while the window lives: the highlight under the pointer and the card opened; and, across launches
+/// with the window's other preferences, whether its history is beside it and how wide.
 @Observable final class RouterDigestState {
     /// "paragraph#session" under the pointer.
     var hovered: String?
     /// "paragraph#session" opened under its paragraph.
     var open: String?
     /// The brief's history beside it.
-    var historyOpen = false
+    var historyOpen: Bool {
+        didSet { if historyOpen != oldValue { defaults?.set(historyOpen, forKey: Self.openKey) } }
+    }
+    /// The history's width, as its edge was last dragged to (kept when the drag ends, `keepWidth`).
+    var historyWidth: CGFloat
     /// The rewrites opened to their diff.
     var expanded: Set<String> = []
+    /// Where the history's place is kept: the app's preferences for the window's model, none for shots and tests.
+    @ObservationIgnored private let defaults: UserDefaults?
+
+    static let openKey = "routerBriefHistoryOpen"
+    static let widthKey = "routerBriefHistoryWidth"
+    static let widths: ClosedRange<CGFloat> = 280...640
+
+    init(defaults: UserDefaults? = nil) {
+        self.defaults = defaults
+        historyOpen = defaults?.bool(forKey: Self.openKey) ?? false
+        let kept = defaults?.double(forKey: Self.widthKey) ?? 0
+        historyWidth = kept > 0 ? Self.clamp(kept) : DigestHistory.width
+    }
+
+    static func clamp(_ width: CGFloat) -> CGFloat { min(max(width, widths.lowerBound), widths.upperBound) }
+
+    /// Shows or hides the history, with the panels' spring.
+    func toggleHistory() {
+        withAnimation(Motion.spatial.resolved(reduce: Motion.systemReduce)) { historyOpen.toggle() }
+    }
+
+    func keepWidth() { defaults?.set(Double(historyWidth), forKey: Self.widthKey) }
 
     /// The session of the highlight under the pointer.
     var hoveredSession: String? { Self.session(hovered) }
@@ -405,6 +432,9 @@ struct DigestPage: View {
     static let column: CGFloat = 720
     /// The room under the text for the composer floating over it.
     static let bottom: CGFloat = 150
+    /// What the history leaves the text at least, however wide it was dragged.
+    static let textRoom: CGFloat = 360
+    @State private var pageWidth: CGFloat = 0
 
     var body: some View {
         let page = model.zones(store)
@@ -444,14 +474,17 @@ struct DigestPage: View {
             .padding(.bottom, DigestPage.bottom)
             .frame(maxWidth: .infinity)
         }
-        // The history, a column on the right, beside the text rather than over it.
+        // The history, a column on the right, beside the text rather than over it: as wide as it was dragged to, leaving
+        // the text room in a narrow window.
         .safeAreaInset(edge: .trailing, spacing: 0) {
-            if model.digest.historyOpen, let digest = store.routerDigest {
-                DigestHistory(store: store, model: model, digest: digest, folders: folders)
-                    .frame(width: DigestHistory.width)
+            if model.digest.historyOpen {
+                DigestHistory(store: store, model: model, history: store.routerDigest?.history ?? [],
+                              seenAt: store.routerDigest?.seenAt, folders: folders)
+                    .frame(width: historyWidth)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
         // Working sessions are kept current while it is on screen; left, what changes from now on is new when you come back.
         .onAppear { store.routerDigester.setVisible(true, store: store) }
         .onDisappear {
@@ -465,6 +498,13 @@ struct DigestPage: View {
         guard var digest = store.routerDigest, !digest.changedSinceSeen.isEmpty || digest.seenAt == nil else { return }
         digest.seenAt = now
         store.routerDigest = digest
+    }
+
+    /// The history's width as dragged, narrower if the page would leave the text less than `textRoom`.
+    private var historyWidth: CGFloat {
+        let width = model.digest.historyWidth
+        guard pageWidth > 0 else { return width }
+        return min(width, max(RouterDigestState.widths.lowerBound, pageWidth - Self.textRoom))
     }
 
     /// No brief yet: the Router off, the first one being written, or nothing going on.
@@ -488,27 +528,6 @@ struct DigestPage: View {
     /// The lead: what's for you, then what's worth a look, each under its name in its colour.
     private func lead(_ digest: RouterDigest, items: [String: CanvasItem], page: RouterPage, fresh: Set<String>) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 10) {
-                Spacer()
-                if store.routerDigester.writing {
-                    ProgressView().controlSize(.mini)
-                }
-                Text("updated " + agoPhrase(digest.at)).font(CDS.sans(12)).foregroundStyle(CDS.Text.muted)
-                if !digest.history.isEmpty {
-                    let on = model.digest.historyOpen
-                    Button {
-                        withAnimation(Motion.spatial.resolved(reduce: false)) { model.digest.historyOpen.toggle() }
-                    } label: {
-                        Label("History \(digest.history.count)", systemImage: "clock.arrow.circlepath")
-                            .font(CDS.sans(12, .medium))
-                            .foregroundStyle(on ? CDS.Text.primary : CDS.Text.secondary)
-                            .padding(.horizontal, 8).frame(height: 24)
-                            .background(Capsule().fill(on ? CDS.alpha(0.10) : CDS.alpha(0.05)))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(on ? "Hide the brief's history" : "Show the brief's history")
-                }
-            }
             DigestParagraph(store: store, model: model, page: page, items: items, key: RouterDigest.Revision.forYouKey,
                             markup: digest.forYou, size: 16) {
                 HStack(spacing: 7) {
@@ -681,33 +700,50 @@ private struct DigestParagraph<Title: View>: View {
 
 /// The brief's history: each rewrite, newest first, in a line: who set it off (a session's icon, or you), what changed, and
 /// when. Opened, why, then each paragraph it changed as a unified diff.
-private struct DigestHistory: View {
+struct DigestHistory: View {
     let store: Store
     let model: RouterModel
-    let digest: RouterDigest
+    let history: [RouterDigest.Revision]
+    let seenAt: Date?
     let folders: [CanvasFolder]
 
+    /// Its width until its edge is dragged.
     static let width: CGFloat = 380
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(spacing: 6) {
                 Text("History").font(CDS.sans(12, .semibold)).foregroundStyle(CDS.Text.primary)
-                Spacer()
-                Text("\(digest.history.count) rewrites").font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
-            }
-            .padding(.horizontal, 12).frame(height: 34)
-            Rectangle().fill(CDS.border).frame(height: CDS.hairline)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(digest.history) { revision in entry(revision) }
+                if !history.isEmpty {
+                    Text(history.count == 1 ? "1 rewrite" : "\(history.count) rewrites").font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
                 }
-                .padding(.vertical, 4)
-                .padding(.bottom, DigestPage.bottom)
+                Spacer(minLength: 0)
+                IconButton(symbol: "sidebar.right", help: "Hide history", detail: BriefHistoryToggle.key,
+                           size: IconButton.Size.header) { model.digest.toggleHistory() }
+            }
+            .padding(.leading, 12).padding(.trailing, 6).frame(height: 34)
+            Rectangle().fill(CDS.border).frame(height: CDS.hairline)
+            if history.isEmpty {
+                Text("Each time the Router rewrites the brief, what changed and why will be here.")
+                    .font(CDS.sans(12)).foregroundStyle(CDS.Text.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                Spacer(minLength: 0)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(history) { revision in entry(revision) }
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.bottom, DigestPage.bottom)
+                }
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(CDS.Surface.s2)
         .overlay(alignment: .leading) { Rectangle().fill(CDS.border).frame(width: CDS.hairline) }
+        // Its edge drags it wider or narrower; the width is kept once you let go.
+        .overlay(alignment: .leading) { DigestHistoryEdge(state: model.digest).offset(x: -DigestHistoryEdge.reach / 2) }
     }
 
     private func entry(_ revision: RouterDigest.Revision) -> some View {
@@ -722,7 +758,7 @@ private struct DigestHistory: View {
                     Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
                         .foregroundStyle(CDS.Text.muted).rotationEffect(.degrees(open ? 90 : 0)).frame(width: 8)
                     trigger(revision.triggers.first ?? .you("")).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                    if revision.at > (digest.seenAt ?? .distantPast) {
+                    if revision.at > (seenAt ?? .distantPast) {
                         Circle().fill(CDS.Text.accent).frame(width: 6, height: 6)
                             .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                             .accessibilityLabel("New")
@@ -1134,5 +1170,94 @@ struct DigestFlow: Layout {
             lines[lines.count - 1] = line
         }
         return lines
+    }
+}
+
+/// The Brief history's leading edge: nothing drawn, the resize cursor on it, dragged to make the history wider or
+/// narrower. The width follows the drag and is kept when you let go.
+private struct DigestHistoryEdge: View {
+    let state: RouterDigestState
+    @State private var start: CGFloat?
+    @State private var pushed = false
+    @State private var inside = false
+
+    /// How wide the edge reacts, centred on the history's border.
+    static let reach: CGFloat = 8
+
+    var body: some View {
+        Color.clear
+            .frame(width: Self.reach)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onHover { over in
+                inside = over
+                if over, !pushed { NSCursor.resizeLeftRight.push(); pushed = true }
+                // Left mid-drag, the cursor stays until the drag ends.
+                if !over, pushed, start == nil { NSCursor.pop(); pushed = false }
+            }
+            .onDisappear { if pushed { NSCursor.pop(); pushed = false } }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { drag in
+                        let from = start ?? state.historyWidth
+                        if start == nil { start = from }
+                        // The edge is on the history's left: dragging left widens it.
+                        state.historyWidth = RouterDigestState.clamp(from - drag.translation.width)
+                    }
+                    .onEnded { _ in
+                        start = nil
+                        state.keepWidth()
+                        if !inside, pushed { NSCursor.pop(); pushed = false }
+                    }
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+/// When the brief was last written, beside the Router's title as the other pages' subtitles, and that it is being
+/// rewritten while it is.
+struct BriefUpdated: View {
+    let store: Store
+
+    var body: some View {
+        if store.routerDigester.writing {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                subtitle("Updating the brief…")
+            }
+        } else if let digest = store.routerDigest {
+            // Kept current while it shows: "updated 2m ago" moves on with the minute.
+            TimelineView(.everyMinute) { context in
+                subtitle("Updated " + agoPhrase(digest.at, now: context.date))
+            }
+        }
+    }
+
+    private func subtitle(_ text: String) -> some View {
+        Text(text).font(CDS.sans(CDS.Density.compact.footnote.0)).foregroundStyle(CDS.Text.muted).lineLimit(1)
+    }
+}
+
+/// The Brief's history beside it, shown and hidden from the Router's header (⌥⌘B), as the window's sidebar is from its
+/// own button (⌘B); a dot on it while a rewrite you haven't seen is in the history.
+struct BriefHistoryToggle: View {
+    let store: Store
+    let model: RouterModel
+
+    static let key = "⌥⌘B"
+
+    var body: some View {
+        let open = model.digest.historyOpen
+        let digest = store.routerDigest
+        let unseen = digest.map { d in d.history.contains { $0.at > (d.seenAt ?? .distantPast) } } ?? false
+        IconButton(symbol: "sidebar.right", help: open ? "Hide history" : "Show history", detail: Self.key,
+                   size: IconButton.Size.header, active: open) { model.digest.toggleHistory() }
+            .overlay(alignment: .topTrailing) {
+                if unseen && !open {
+                    Circle().fill(CDS.Text.accent).frame(width: 6, height: 6).offset(x: -3, y: 3)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
     }
 }

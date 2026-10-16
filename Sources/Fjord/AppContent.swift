@@ -38,13 +38,14 @@ struct InboxListView: View {
             if case .category(let id) = tab, store.rulesOff(id) > 0 {
                 RulesOffMark(count: store.rulesOff(id), size: 12) { store.editCategory(id, go: openApp) }
             }
-            PaletteTrigger()
             if unread > 0 {
                 IconButton(symbol: "envelope.open", help: "Mark all as read", detail: store.shortcut(.markAllRead).display,
                            size: IconButton.Size.header) {
                     withAnimation(Motion.fade.resolved(reduce: reduce)) { entries.filter(\.isUnread).forEach(store.markSeen) }
                 }
             }
+            // Last, so what comes and goes before it never moves it.
+            PaletteTrigger()
         } content: {
             if entries.isEmpty {
                 empty
@@ -224,8 +225,9 @@ struct AppPage<Trailing: View, Content: View>: View {
 }
 
 /// A page header's line, inset from the width it is given to the page's content column (`AppPage.columnInset`), its
-/// leading inset at least `leadingInset + 14`: as wide as it is offered.
-private struct HeaderInsets: Layout {
+/// leading inset at least `leadingInset + 14`: as wide as it is offered. The Router's header uses it too, on the inbox's
+/// column, so its title and the palette's trigger are where the inbox's are.
+struct HeaderInsets: Layout {
     let column: (width: CGFloat, padding: CGFloat)
     let leadingInset: CGFloat
 

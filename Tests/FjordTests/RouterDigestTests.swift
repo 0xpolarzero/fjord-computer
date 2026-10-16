@@ -1035,4 +1035,20 @@ import Testing
         let session = Writer.Board.make(store).projects.flatMap(\.sessions).first { $0.id == "a" }
         #expect(session?.asks == ["Two?"])
     }
+
+    @Test func theHistoryBesideTheBriefKeepsWhetherItShowsAndItsWidthInTheWindowsPreferences() throws {
+        let defaults = try #require(UserDefaults(suiteName: "RouterDigestTests-\(UUID().uuidString)"))
+        let state = RouterDigestState(defaults: defaults)
+        #expect(!state.historyOpen)
+        #expect(state.historyWidth == DigestHistory.width)
+        state.toggleHistory()
+        state.historyWidth = RouterDigestState.clamp(2_000)
+        state.keepWidth()
+        let again = RouterModel(defaults: defaults).digest
+        #expect(again.historyOpen)
+        #expect(again.historyWidth == RouterDigestState.widths.upperBound)
+        #expect(RouterDigestState.clamp(10) == RouterDigestState.widths.lowerBound)
+        // Shots and tests keep nothing.
+        #expect(!RouterModel().digest.historyOpen)
+    }
 }

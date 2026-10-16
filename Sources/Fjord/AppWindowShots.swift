@@ -408,6 +408,13 @@ enum AppWindowShots {
                  model.digest.historyOpen = true
                  if let history = store.routerDigest?.history { model.digest.expanded = [history[1].id] }
              }, appearance: .darkAqua),
+        // The history dragged wider, nothing opened in it.
+        Shot(name: "router-brief-history-wide", destination: { _ in .router }, sidebarHidden: true,
+             size: CGSize(width: 1600, height: 1420), compose: { model, store in
+                 Demo.routerDigest(store); model.pickBrief()
+                 model.digest.historyOpen = true
+                 model.digest.historyWidth = 560
+             }, appearance: .aqua),
         // Handled since the text was written: the release approved and the docs marked seen, checks before the rewrite.
         Shot(name: "router-brief-handled", destination: { _ in .router }, sidebarHidden: true,
              size: CGSize(width: 1600, height: 1420), compose: { model, store in

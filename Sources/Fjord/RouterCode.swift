@@ -105,25 +105,30 @@ struct RouterMain: View {
             .padding(.bottom, 16)
     }
 
-    /// §3: a 48pt header holding the 32pt session bar: the title (13pt, wght 460, primary).
+    /// §3: a 48pt header holding the 32pt session bar: the title (13pt, wght 460, primary), and on the Brief when it was
+    /// written, muted, as the other pages' subtitles. On the inbox's column, as the inbox's header is, so the title and the
+    /// palette's trigger don't move going from one to the other; the page under it keeps the window's width.
     private var topBar: some View {
-        HStack(spacing: 0) {
-            Text("Router")
-                .font(CDS.sans(CDS.Density.compact.body.0, .medium))
-                .foregroundStyle(CDS.Text.primary)
-                .lineLimit(1)
-                // Its place, or 14 past the window's buttons when they are in the header, as the other pages' titles.
-                .padding(.leading, max(CDS.TitleBar.glyphLeading, leadingInset + 14))
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 24)
-            // Brief, Canvas or List (RouterCanvasBeta.swift).
-            RouterLayoutSwitch(model: model).padding(.trailing, 12)
-            // The palette's trigger, where the Router's own search field was.
-            PaletteTrigger()
+        HeaderInsets(column: AppPage<EmptyView, EmptyView>.inboxColumn, leadingInset: leadingInset) {
+            HStack(spacing: 8) {
+                Text("Router")
+                    .font(CDS.sans(CDS.Density.compact.body.0, .medium))
+                    .foregroundStyle(CDS.Text.primary)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                if model.layout == .brief { BriefUpdated(store: store) }
+                Spacer(minLength: 24)
+                // What shows only on some layouts goes first, so the switch and the trigger after it never move.
+                if model.layout == .brief { BriefHistoryToggle(store: store, model: model) }
+                // Brief, Canvas or List (RouterCanvasBeta.swift).
+                RouterLayoutSwitch(model: model).padding(.trailing, 4)
+                // The palette's trigger, where the Router's own search field was.
+                PaletteTrigger()
+            }
         }
-        .padding(.trailing, CDS.TitleBar.endInset)
         .frame(height: CDS.TitleBar.bar)
         .frame(height: CDS.TitleBar.header)
+        .frame(maxWidth: .infinity)
         .onChange(of: model.search.query) { model.searchChanged(store: store) }
         // The page's ground behind its title line, so nothing scrolled under it shows through the title.
         .background(CDS.Surface.s1)
