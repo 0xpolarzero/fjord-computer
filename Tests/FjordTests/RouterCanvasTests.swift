@@ -80,7 +80,7 @@ import Testing
     @Test func escWithAPlanOpenGoesIntoReviseThenBackThenFoldsIt() throws {
         let store = demo()
         let model = canvas(store)
-        let keys = RouterKeys(store: store, model: model) {}
+        let keys = RouterKeys(store: store, model: model)
         let plan = try #require(model.zones(store).needs.first { store.pendingForm(for: $0)?.isPlan == true })
         let form = try #require(store.pendingForm(for: plan))
         model.select(plan.id, store: store)
@@ -113,28 +113,27 @@ import Testing
         #expect(model.expandedNeed == nil && model.replyTo == note.id)
     }
 
-    @Test func escFoldsTheOpenNodeThenClearsTheFilterThenCloses() throws {
+    @Test func escFoldsTheOpenNodeThenClearsTheFilterThenGoesOnWithoutClosing() throws {
         let store = demo()
         let model = canvas(store)
-        var closed = false
-        let keys = RouterKeys(store: store, model: model) { closed = true }
+        let keys = RouterKeys(store: store, model: model)
         let need = try #require(model.zones(store).needs.first { store.pendingForm(for: $0)?.isPlan != true })
         model.select(need.id, store: store)
         model.filter.solo = [.needs]
         #expect(keys.key(key(kVK_Escape), responder: nil) && model.replyTo == nil && model.expandedNeed == need.id)
         #expect(keys.key(key(kVK_Escape), responder: nil) && model.expandedNeed == nil && model.filter.solo == [.needs])
-        #expect(keys.key(key(kVK_Escape), responder: nil) && model.filter.isClear && !closed)
-        #expect(keys.key(key(kVK_Escape), responder: nil) && closed)
+        #expect(keys.key(key(kVK_Escape), responder: nil) && model.filter.isClear)
+        // Nothing left to step out of: Esc is the window's controls', never a close.
+        #expect(!keys.key(key(kVK_Escape), responder: nil))
     }
 
     @Test func escWithNothingOpenNeverPutsAPlanInReviseMode() {
         let store = demo()
         let model = canvas(store)
-        var closed = false
-        let keys = RouterKeys(store: store, model: model) { closed = true }
+        let keys = RouterKeys(store: store, model: model)
         // The list shows the first card of Needs you in full; the canvas shows none, so no plan is there to revise.
         #expect(model.expandedPlan(store) == nil)
-        #expect(keys.key(key(kVK_Escape), responder: nil) && closed && model.revisingPlan == nil)
+        #expect(!keys.key(key(kVK_Escape), responder: nil) && model.revisingPlan == nil)
     }
 
     @Test func aChipShowsOnlyItsGroupInPlaceAndASecondClickShowsAllAgain() throws {

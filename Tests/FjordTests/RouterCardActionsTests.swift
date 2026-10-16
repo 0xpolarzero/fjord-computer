@@ -1,3 +1,5 @@
+import AppKit
+import Carbon
 import Foundation
 import Testing
 @testable import Fjord
@@ -127,6 +129,36 @@ struct RouterCardActionsTests {
         #expect(archived.title == "Archive “Docs pass” (lookout)" && !archived.isPending)
         model.reopen("a#1", store: store)
         #expect(open(store, "a#1") == true && store.router.changes.last?.title == "Reopen “Docs pass” (lookout)")
+    }
+
+    @Test func onTheBriefTheInboxShortcutsActOnTheHighlightUnderThePointer() throws {
+        let a = card("a#1", kind: .question, title: "Fix login redirect")
+        let store = world(cards: [a], sessions: [session("a", a.title)])
+        final class Opened { var count = 0 }
+        let opened = Opened()
+        store.interceptOpen = { _ in opened.count += 1 }
+        let model = RouterModel()
+        model.layout = .brief
+        let keys = RouterKeys(store: store, model: model)
+        func key(_ code: Int, _ chars: String = "") -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                             characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: UInt16(code))!
+        }
+        model.digest.hovered = "/code/lookout#a"
+        #expect(DigestAction.available(session: "a", store: store) == [.archive(card: "a#1"), .open(session: "a")])
+        // Archive (⌫), then Mark as read or unread (Space) opens it again, and Open (Return) opens its session.
+        #expect(keys.key(key(kVK_Delete), responder: nil) && open(store, "a#1") == false)
+        #expect(DigestAction.available(session: "a", store: store) == [.reopen(card: "a#1"), .open(session: "a")])
+        #expect(keys.key(key(kVK_Space, " "), responder: nil) && open(store, "a#1") == true)
+        #expect(keys.key(key(kVK_Return, "\r"), responder: nil) && opened.count == 1)
+        // Words in the composer keep their keys.
+        model.composerFocused = true
+        model.draft = "hi"
+        #expect(!keys.key(key(kVK_Space, " "), responder: NSTextView()) && open(store, "a#1") == true)
+        // Off the highlight, nothing of it.
+        model.composerFocused = false
+        model.digest.hovered = nil
+        #expect(model.digestAction(store.shortcut(.discard), store: store) == nil)
     }
 
     @Test func aChangeSavedAsAProposedStopIsDroppedOnReading() throws {

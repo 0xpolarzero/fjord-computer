@@ -14,10 +14,8 @@ import Testing
         let search: InboxSearch
         let keys: AppWindowKeys
         let category: UUID
-        var closed: Closed
         /// What the keys asked the palette to open with: nil for no key, else the key to type into it.
         let opened: Opened
-        final class Closed { var count = 0 }
         final class Opened { var requests: [NSEvent?] = [] }
     }
 
@@ -33,12 +31,11 @@ import Testing
         let navigator = AppNavigator(fallback: .category(category), defaults: nil)
         let hub = HubState()
         let search = InboxSearch()
-        let closed = Rig.Closed()
-        let keys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search) { closed.count += 1 }
+        let keys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search)
         keys.isDeadKey = { _ in false }
         let opened = Rig.Opened()
         keys.openPalette = { opened.requests.append($0) }
-        return Rig(store: store, navigator: navigator, hub: hub, search: search, keys: keys, category: category, closed: closed,
+        return Rig(store: store, navigator: navigator, hub: hub, search: search, keys: keys, category: category,
                    opened: opened)
     }
 
@@ -324,18 +321,18 @@ import Testing
 
     // MARK: Esc
 
-    @Test func escapeStepsOutOneLevelAtATimeThenClosesTheWindow() {
+    @Test func escapeStepsOutOneLevelAtATimeAndNeverClosesTheWindow() {
         let r = rig()
         r.search.query = "beta"
         r.search.focused = true
         r.hub.selection = ids(r)[0]
         #expect(r.keys.key(key(kVK_Escape), responder: NSTextView()))
         #expect(r.search.query.isEmpty && !r.search.focused)
-        #expect(r.hub.selection != nil && r.closed.count == 0)
+        #expect(r.hub.selection != nil)
         #expect(r.keys.key(key(kVK_Escape)))
-        #expect(r.hub.selection == nil && r.closed.count == 0)
-        #expect(r.keys.key(key(kVK_Escape)))
-        #expect(r.closed.count == 1)
+        #expect(r.hub.selection == nil)
+        // Nothing left to step out of: it goes on to the window's controls.
+        #expect(!r.keys.key(key(kVK_Escape)))
     }
 
     @Test func otherDestinationsKeepTheirOwnKeys() {
@@ -345,7 +342,6 @@ import Testing
             #expect(!r.keys.key(key(kVK_Escape)))
             #expect(!r.keys.key(key(kVK_DownArrow)))
         }
-        #expect(r.closed.count == 0)
     }
 
     @Test func aKeyInAnInputMethodsCompositionIsItsOwn() {
@@ -354,7 +350,6 @@ import Testing
         field.string = ""
         field.setMarkedText("a", selectedRange: NSRange(location: 0, length: 1), replacementRange: NSRange(location: 0, length: 0))
         #expect(!r.keys.key(key(kVK_Escape), responder: field))
-        #expect(r.closed.count == 0)
     }
 }
 

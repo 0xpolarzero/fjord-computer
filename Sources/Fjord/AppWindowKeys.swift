@@ -3,7 +3,7 @@ import Carbon
 import SwiftUI
 
 // The inbox's keys in the app window: the arrows pick a row, the configured shortcuts act on it, typing searches, ⌘Z takes
-// back an archive (or, on Inbox categories, a category edit), Esc steps out.
+// back an archive (or, on Inbox categories, a category edit), Esc steps out (never closing the window).
 
 /// The search of the window's inbox: a query over every category and the archive, and the field's focus handshake with the keys.
 @Observable
@@ -69,20 +69,17 @@ final class AppWindowKeys {
     let navigator: AppNavigator
     let hub: HubState
     let search: InboxSearch
-    /// Closes the window (Esc with nothing left to step out of).
-    let close: () -> Void
     /// "Open in Router" on a thing (its id): the window on the Router, the thing tagged in its composer. Done only while
     /// the Router is on.
     var openInRouter: (String) -> Void = { _ in }
     /// Opens the palette (⌘F, or typing: the key that started it is typed into the palette's field).
     var openPalette: (NSEvent?) -> Void = { _ in }
 
-    init(store: Store, navigator: AppNavigator, hub: HubState, search: InboxSearch, close: @escaping () -> Void) {
+    init(store: Store, navigator: AppNavigator, hub: HubState, search: InboxSearch) {
         self.store = store
         self.navigator = navigator
         self.hub = hub
         self.search = search
-        self.close = close
     }
 
     /// The rows the arrows walk, top to bottom, as ids ("i:<entry id>").
@@ -145,7 +142,8 @@ final class AppWindowKeys {
         return false
     }
 
-    /// Esc steps out one level: the search field's focus, the search, the pick, then the window.
+    /// Esc steps out one level: the search field's focus, the search, then the pick. With nothing to step out of it isn't
+    /// the inbox's: it goes on to what has the keyboard, and never closes the window.
     private func escape(window: NSWindow?, editing: Bool) -> Bool {
         if editing { window?.makeFirstResponder(nil) }
         if search.isSearching || !search.query.isEmpty || search.focused {
@@ -153,8 +151,8 @@ final class AppWindowKeys {
         } else if hub.selection != nil, !editing {
             hub.selection = nil
             hub.keyboardSelection = nil
-        } else if !editing {
-            close()
+        } else {
+            return editing
         }
         return true
     }

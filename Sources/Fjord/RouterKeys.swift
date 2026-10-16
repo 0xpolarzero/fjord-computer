@@ -9,22 +9,22 @@ import Foundation
 /// first the Back of a plan in revise mode (its feedback field showing), then dismisses the suggestions, then Jev's pick of a
 /// target, then the pinned target, then the search, then the reply chip, then (on the canvas) closes the history's panel,
 /// then is the Revise… of the plan shown in full (on the canvas, not again once Back left it), then (on the canvas) folds
-/// the card open on it and clears its filter, then closes the window. ⌘F puts the keyboard in the search field (RouterSearch.swift), where ↑↓ walk what it lists, Return
+/// the card open on it and clears its filter. It never closes the window: with nothing left to step out of, it goes on to
+/// what has the keyboard. On the Brief, the pointer on a highlight, the inbox's shortcuts act on its session
+/// (`DigestAction`). ⌘F puts the keyboard in the search field (RouterSearch.swift), where ↑↓ walk what it lists, Return
 /// replies to the pick and Esc ends the search first; typing elsewhere still goes to the composer.
 @MainActor
 final class RouterKeys {
     let store: Store
     let model: RouterModel
-    let close: () -> Void
     /// Opens the palette (⌘F).
     var openPalette: () -> Void = {}
 
     static let pickKeys = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4]
 
-    init(store: Store, model: RouterModel, close: @escaping () -> Void) {
+    init(store: Store, model: RouterModel) {
         self.store = store
         self.model = model
-        self.close = close
     }
 
     /// Whether the key was handled. `responder`: what has the keyboard (the window's first responder), for tests.
@@ -70,14 +70,23 @@ final class RouterKeys {
             // On the canvas, the history's panel over it closes.
             else if model.layout == .canvas, model.pane == .history { model.show(.now) }
             else if let plan, model.layout != .canvas || model.canvas.backedOutOf != plan.id { model.revisingPlan = plan.id }
-            // On the canvas: the card open on it folds; then the solos and mutes go, before the window closes.
+            // On the canvas: the card open on it folds; then the solos and mutes go.
             else if model.layout == .canvas, model.foldCanvasNode(store) {}
             else if !model.filter.isClear { model.filter.clear() }
-            else { close() }
+            // Nothing to step out of: a field keeps it (an NSTextView's own Esc would offer completions), anything else
+            // gets it.
+            else { return responder is NSText }
             return true
         }
         let editing = responder is NSText
         let isReturn = code == kVK_Return || code == kVK_ANSI_KeypadEnter
+        // The Brief: the highlight under the pointer takes the inbox's shortcuts, unless a field has words to type them
+        // into (an empty composer gives them up) or a control the Tab ring is on has the keyboard.
+        if model.layout == .brief, !(responder is NSControl), !editing || (model.composerFocused && model.draft.isEmpty),
+           let action = model.digestAction(Shortcut(event), store: store) {
+            action.perform(model: model, store: store)
+            return true
+        }
         if editing {
             // The search field: ↑↓ walk what it lists, Return replies to the pick; the rest is the field's own.
             if model.search.focused {

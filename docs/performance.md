@@ -7,7 +7,7 @@ pass (branch `perf/snappy`); update the numbers when they move.
 
 | What the user does | Budget | How it's measured |
 | --- | --- | --- |
-| Close the window (Esc, shortcut) | first moving frame ≤ 1 frame after the request (`Close to first flush` ≤ 16 ms p95) | `scripts/morph-timings.sh` |
+| Close the window (shortcut, close button) | first moving frame ≤ 1 frame after the request (`Close to first flush` ≤ 16 ms p95) | `scripts/morph-timings.sh` |
 | Open the window | first moving frame ≤ 1 frame (`Open to first flush`); window live when the spring settles | same |
 | Any capture | never on the critical path of an open, a close, or input | `Capture*` signposts must not sit inside `Open`/`Close` before the handoff |
 | Typing (composer, rule editor) | no store write, sort or full relayout per keystroke | code review; `RouterMentionField` coordinator caches |

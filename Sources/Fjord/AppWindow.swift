@@ -192,14 +192,14 @@ final class AppWindowController: NSObject, NSWindowDelegate {
     /// The rows' picked state, Settings' scroll requests and the category editor's step back, shared by the destinations.
     let hub = HubState()
     private lazy var keys: RouterKeys = {
-        let keys = RouterKeys(store: store, model: routerModel) { [weak self] in self?.close() }
+        let keys = RouterKeys(store: store, model: routerModel)
         keys.openPalette = { [weak self] in self?.palette.open() }
         return keys
     }()
     /// The inbox's search, and the keys of the inbox destinations (see `AppWindowKeys`).
     let search = InboxSearch()
     private(set) lazy var inboxKeys: AppWindowKeys = {
-        let keys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search) { [weak self] in self?.close() }
+        let keys = AppWindowKeys(store: store, navigator: navigator, hub: hub, search: search)
         keys.openPalette = { [weak self] event in self?.palette.open(replaying: event) }
         keys.openInRouter = { [weak self] thing in
             guard let self else { return }

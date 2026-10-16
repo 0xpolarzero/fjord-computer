@@ -3,8 +3,9 @@ import SwiftUI
 // The Brief: Now written as prose. On top, what's for you and what's worth a look, in a few plain sentences; under it a
 // paragraph per project saying where it stands. The parts that point at a session are tags the writer puts in the text,
 // `<need s="…">`, `<look s="…">` and `<run s="…">`; the page draws them as highlights, marked with what their session is
-// at now (read from its card, not from the words). Hovering one shows its card's gist, clicking opens the card under the
-// paragraph and points the composer at it, so you answer as you do a card's. Whenever something comes in from a session,
+// at now (read from its card, not from the words). Hovering one shows its card's gist and the keys that act on it there
+// (`DigestAction`: the inbox's Mark as read, Archive and Open), clicking opens the card under the paragraph and points the
+// composer at it, so you answer as you do a card's. Whenever something comes in from a session,
 // or from you, the writer (RouterDigestWriter.swift) rewrites the paragraphs it touches, and each rewrite is kept in the
 // brief's history with what set it off, why, and a diff of what changed.
 
@@ -304,6 +305,84 @@ enum DigestMarkup {
     var historyOpen = false
     /// The rewrites opened to their diff.
     var expanded: Set<String> = []
+
+    /// The session of the highlight under the pointer.
+    var hoveredSession: String? { Self.session(hovered) }
+
+    /// The session of a "paragraph#session" key (a folder may have a # in it, a session's id doesn't).
+    static func session(_ key: String?) -> String? {
+        guard let key, let mark = key.lastIndex(of: "#") else { return nil }
+        return String(key[key.index(after: mark)...])
+    }
+}
+
+/// What a key does to the highlight under the pointer: the inbox's own shortcuts (Settings), so they are the same keys
+/// everywhere. Mark as read or unread marks what's worth a look seen, or opens again what was handled; Archive takes what
+/// waits on you out; Open opens the session in Claude. Read from the session's cards, not the words.
+enum DigestAction: Equatable {
+    case seen(card: String)
+    case reopen(card: String)
+    case archive(card: String)
+    case open(session: String)
+
+    var shortcut: ShortcutAction {
+        switch self {
+        case .seen, .reopen: .toggleRead
+        case .archive: .discard
+        case .open: .openItem
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .seen: "Mark seen"
+        case .reopen: "Open again"
+        case .archive: "Archive"
+        case .open: "Open in Claude"
+        }
+    }
+
+    /// What can be done to a session's highlight now: its open card seen or archived, else (it stopped) its last card
+    /// opened again; and the session opened.
+    @MainActor static func available(session: String, store: Store) -> [DigestAction] {
+        var out: [DigestAction] = []
+        if let card = store.router.cards.last(where: { $0.sessionID == session && $0.isOpen }) {
+            out.append(card.tier == .note ? .seen(card: card.id) : .archive(card: card.id))
+        } else if store.claudeSessions[session]?.running != true,
+                  let card = store.router.cards.last(where: { $0.sessionID == session }), store.routerCanReopen(card) {
+            out.append(.reopen(card: card.id))
+        }
+        out.append(.open(session: session))
+        return out
+    }
+
+    @MainActor func perform(model: RouterModel, store: Store) {
+        withAnimation(Motion.spatial.resolved(reduce: Motion.systemReduce)) {
+            switch self {
+            case .seen(let card), .archive(let card):
+                // Its card open under the paragraph closes with it, as the card's own Mark seen does.
+                let session = store.router.cards.first { $0.id == card }?.sessionID
+                if session != nil, RouterDigestState.session(model.digest.open) == session { model.digest.open = nil }
+                model.address(card, store: store)
+            case .reopen(let card): model.reopen(card, store: store)
+            case .open(let session): store.openAgent(session)
+            }
+        }
+    }
+}
+
+/// A key that acts on a highlight, and what it does, under its peek.
+struct DigestHint: Hashable {
+    let key: String
+    let label: String
+}
+
+extension RouterModel {
+    /// The action `shortcut` is on the Brief's highlight under the pointer, if it is one there.
+    func digestAction(_ shortcut: Shortcut, store: Store) -> DigestAction? {
+        guard let session = digest.hoveredSession else { return nil }
+        return DigestAction.available(session: session, store: store).first { store.shortcut($0.shortcut) == shortcut }
+    }
 }
 
 // MARK: - Page
@@ -845,8 +924,8 @@ private struct DigestSpan: View {
             if inside { state.hovered = id } else if state.hovered == id { state.hovered = nil }
         }
         .overlay(alignment: .topLeading) {
-            if hovered, !open, let item {
-                DigestPeek(item: item, page: page)
+            if hovered, !open, item != nil || handled {
+                DigestPeek(item: item, fallback: store.router.cards.last { $0.sessionID == session }, page: page, hints: hints)
                     .frame(width: 400, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .offset(y: size + 14)
@@ -869,6 +948,14 @@ private struct DigestSpan: View {
         }
         .accessibilityLabel(status.label.isEmpty ? text : "\(text), \(status.label)")
         .accessibilityHint(item == nil ? "" : "Opens its card")
+    }
+
+    /// The keys that act on it while the pointer is on it, as they are bound now.
+    private var hints: [DigestHint] {
+        DigestAction.available(session: session, store: store).compactMap { action in
+            let shortcut = store.shortcut(action.shortcut)
+            return shortcut.isUnassigned ? nil : DigestHint(key: shortcut.display, label: action.label)
+        }
     }
 }
 
@@ -902,8 +989,12 @@ private struct SessionMark: View {
 /// What a highlight points at, floating over the text while hovered: the session, what kind of thing it is, what it says
 /// and what it asks. Click to open the card itself.
 private struct DigestPeek: View {
-    let item: CanvasItem
+    /// Nil: its session is on no board any more, and its last card (`fallback`) is shown.
+    let item: CanvasItem?
+    var fallback: RouterCard?
     let page: RouterPage
+    /// The keys that act on it, each with what it does.
+    var hints: [DigestHint] = []
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -929,7 +1020,18 @@ private struct DigestPeek: View {
                     }
                 }
             }
-            Text("Click to open and answer").font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
+            HStack(spacing: 10) {
+                if item != nil { Text("Click to open") }
+                ForEach(hints, id: \.label) { hint in
+                    HStack(spacing: 4) {
+                        Text(hint.key).font(CDS.sans(10.5, .medium)).foregroundStyle(CDS.Text.secondary)
+                            .padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
+                            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(CDS.alpha(0.07)))
+                        Text(hint.label)
+                    }
+                }
+            }
+            .font(CDS.sans(11)).foregroundStyle(CDS.Text.muted)
         }
         .padding(12)
         .background(shape.fill(CDS.Surface.s3))
@@ -941,6 +1043,7 @@ private struct DigestPeek: View {
         switch item {
         case .need(let c), .ready(let c), .note(let c), .waiting(let c), .done(let c): c
         case .working: nil
+        case nil: fallback
         }
     }
 

@@ -295,15 +295,15 @@ import Testing
         model.draft = "ask @fix it please"
         #expect(model.mention == "fix it please" && names().isEmpty)
         #expect(!store.snippets(matching: "fix it please").isEmpty)
-        var closed = false
-        let keys = RouterKeys(store: store, model: model) { closed = true }
+        let keys = RouterKeys(store: store, model: model)
         model.composerFocused = true
         let editor = NSTextView()
         editor.string = model.draft
         editor.setSelectedRange(NSRange(location: (model.draft as NSString).length, length: 0))
         let esc = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
                                    characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 53)!
-        #expect(keys.key(esc, responder: editor) && closed)
+        // With nothing to step out of, the field keeps it: no completions, and the window stays.
+        #expect(keys.key(esc, responder: editor))
         // Esc on a list: words typed on past a space don't bring it back.
         model.draft = "ask @claude"
         #expect(!names().isEmpty)

@@ -227,7 +227,7 @@ struct SettingsView: View {
 
     private var shortcuts: some View {
         SettingsSection("Shortcuts",
-                        info: ("Shortcuts", "Click one, then press the new keys (Esc cancels, Delete clears). Ones that work from any app also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on.")) {
+                        info: ("Shortcuts", "Click one, then press the new keys (Esc cancels, Delete clears). Ones that work from any app also accept a single modifier tapped alone, like right ⌘. In the inbox, ↑↓ or hovering picks the row they act on; on the Router’s Brief, hovering a highlight does.")) {
             let actions = ShortcutAction.allCases.filter(store.offers)
             ForEach(actions) { action in
                 if action != actions.first { SettingsDivider() }
